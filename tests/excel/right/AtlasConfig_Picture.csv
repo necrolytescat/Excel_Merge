@@ -1,0 +1,35 @@
+﻿流水ID,类型,绘本插画,Key_描述,插画描述,解锁条件,Key_解锁条件文本,解锁条件文本,全屏插图
+Id,Type,Picture,Key_Describe,Describe,Unlock,Key_description,description,PicDetail
+uint32,uint32,string,string,string,uint32,string,string,string
+All,Client,Client,Client,None,All,Client,None,Client
+ ,,,,,,,,
+请注意合理分配ID段,,,,,关联condition表流水id,,,
+阿宁,阿宁,阿宁,阿宁,阿宁,阿宁,阿宁,阿宁,阿宁
+1,1,UI/Sprite/PicBook/picbook_img1_1,At_Pi_Describe_1,露可喜欢奥莉薇尔姐姐。她会在冬天给露可唱好听的歌，手也很温暖，所以就算只有两个人也不害怕。,20003010,At_Pi_description_1,通关主线[3-7]解锁,UI/Sprite/PicBook/picbook_img_b_1_1
+2,1,UI/Sprite/PicBook/picbook_img1_2,At_Pi_Describe_2,父亲大人又送来了好多蛋糕。露可想把它们分给奥莉薇尔姐姐，但姐姐却推开了。,20003010,At_Pi_description_2,通关主线[3-7]解锁,UI/Sprite/PicBook/picbook_img_b_1_2
+3,1,UI/Sprite/PicBook/picbook_img1_3,At_Pi_Describe_3,姐姐哭了。露可想要去抱住她，但不管怎么努力，姐姐都离露可越来越远。,20003010,At_Pi_description_3,通关主线[3-7]解锁,UI/Sprite/PicBook/picbook_img_b_1_3
+4,1,UI/Sprite/PicBook/picbook_img1_4,At_Pi_Describe_4,姐姐读的童话里说，王子会顺着公主长长的头发去高塔上救她。如果露可能更厉害一点，能和姐姐永远在一起吗？,20003010,At_Pi_description_4,通关主线[3-7]解锁,UI/Sprite/PicBook/picbook_img_b_1_4
+5,2,UI/Sprite/PicBook/picbook_img2_1,At_Pi_Describe_5,我叫爱丽丝，我的爸爸叫安托万，妈妈叫格莉妮。我最喜欢爸爸妈妈了。,20006010,At_Pi_description_5,通关主线[6-8]解锁,UI/Sprite/PicBook/picbook_img_b_2_1
+6,2,UI/Sprite/PicBook/picbook_img2_2,At_Pi_Describe_6,可是有一天，爱丽丝得了很严重的病，爸爸和妈妈都很伤心。,20006010,At_Pi_description_6,通关主线[6-8]解锁,UI/Sprite/PicBook/picbook_img_b_2_2
+7,2,UI/Sprite/PicBook/picbook_img2_3,At_Pi_Describe_7,爸爸说给爱丽丝治病要花好多好多钱，他找了好多奇怪的人，样子也变得很可怕。妈妈只能抱着爱丽丝祈祷和哭泣。,20006010,At_Pi_description_7,通关主线[6-8]解锁,UI/Sprite/PicBook/picbook_img_b_2_3
+8,2,UI/Sprite/PicBook/picbook_img2_4,At_Pi_Describe_8,后来，妈妈也变了。爱丽丝……不想妈妈再因为我痛苦了。,20006010,At_Pi_description_8,通关主线[6-8]解锁,UI/Sprite/PicBook/picbook_img_b_2_4
+9,4,UI/Sprite/PicBook/picbook_img4_1,At_Pi_Describe_9,族群北迁，被视作污秽的那个年幼的混血雪精灵被留在了原地。她乘上自己破旧的小船，孤零零地驶向南方……,20018012,At_Pi_description_9,通关主线[18-10]解锁,UI/Sprite/PicBook/picbook_img_b_4_1
+10,4,UI/Sprite/PicBook/picbook_img4_2,At_Pi_Describe_10,多年过去，小雪精灵已经有了自己的生活，曾经的朋友小火龙却托梦于她，告诉她，雪精灵族群需要她的拯救。,20018012,At_Pi_description_10,通关主线[18-10]解锁,UI/Sprite/PicBook/picbook_img_b_4_2
+11,4,UI/Sprite/PicBook/picbook_img4_3,At_Pi_Describe_11,小雪精灵很矛盾，她不知道是否该帮助曾经伤害过自己的人。这时，身边的伙伴告诉她，抛开恩怨去做自己认为正确的事吧。,20018012,At_Pi_description_11,通关主线[18-10]解锁,UI/Sprite/PicBook/picbook_img_b_4_3
+12,4,UI/Sprite/PicBook/picbook_img4_4,At_Pi_Describe_12,一场素洁的雪浇熄了恶魔的火焰，雪精灵族群得救了，在大家的称颂和感谢中，小雪精灵和伙伴们远去，她久逢阴雨的心终于放晴。,20018012,At_Pi_description_12,通关主线[18-10]解锁,UI/Sprite/PicBook/picbook_img_b_4_4
+13,5,UI/Sprite/PicBook/picbook_img5_1,At_Pi_Describe_13,布罗菲是众星捧月的天才，嘟嘟是人人嘲笑的笨蛋，但他们是朋友，他们总是一起迎接清晨的第一缕阳光。,20020015,At_Pi_description_13,通关主线[20-12]解锁,UI/Sprite/PicBook/picbook_img_b_5_1
+14,5,UI/Sprite/PicBook/picbook_img5_2,At_Pi_Describe_14,布罗菲和嘟嘟一起旅行，日升月落，道路一直延伸，延伸……,20020015,At_Pi_description_14,通关主线[20-12]解锁,UI/Sprite/PicBook/picbook_img_b_5_2
+15,5,UI/Sprite/PicBook/picbook_img5_3,At_Pi_Describe_15,告别之日总会来临，嘟嘟总会需要独自面对风雨。而布罗菲相信，彼时勇敢的嘟嘟一定会坚强向前走，不回头。,20020015,At_Pi_description_15,通关主线[20-12]解锁,UI/Sprite/PicBook/picbook_img_b_5_3
+16,5,UI/Sprite/PicBook/picbook_img5_4,At_Pi_Describe_16,而布罗菲会在自己的终点祝福着远行的嘟嘟，向日葵啊请对她微笑，天空啊请为她放晴， 好心的神灵啊请将她温柔相拥。,20020015,At_Pi_description_16,通关主线[20-12]解锁,UI/Sprite/PicBook/picbook_img_b_5_4
+17,6,UI/Sprite/PicBook/picbook_img6_1,At_Pi_Describe_17,依露希尔女神织起一轮明月，照亮了寂暗夜空。,99110808,At_Pi_description_17,通关活动[夕月寻仙记]解锁,UI/Sprite/PicBook/picbook_img_b_6_1
+18,6,UI/Sprite/PicBook/picbook_img6_2,At_Pi_Describe_18,遵循神旨，被选召的少女只身奔月成为月神，地上的母亲牵挂不已。,99110808,At_Pi_description_18,通关活动[夕月寻仙记]解锁,UI/Sprite/PicBook/picbook_img_b_6_2
+19,6,UI/Sprite/PicBook/picbook_img6_3,At_Pi_Describe_19,女神怜月神思乡之苦，派遣月精牵一缕传音的丝线，使得月神与母亲得以在月圆之日互诉衷肠。,99110808,At_Pi_description_19,通关活动[夕月寻仙记]解锁,UI/Sprite/PicBook/picbook_img_b_6_3
+20,6,UI/Sprite/PicBook/picbook_img6_4,At_Pi_Describe_20,东国后人为了纪念这对母女设立了夕月节，每逢夕月节，吃月饼，放花灯，千家万户庆团圆。,99110808,At_Pi_description_20,通关活动[夕月寻仙记]解锁,UI/Sprite/PicBook/picbook_img_b_6_4
+21,3,UI/Sprite/PicBook/picbook_img3_1,At_Pi_Describe_21,误入森林的小女孩照顾了受伤的火鸟，临别时火鸟将羽毛送给了小女孩。“你可以用它召唤我”，火鸟说。女孩很开心，孤独的她终于拥有了第一个朋友。,20035012,At_Pi_description_21,通关主线[35-10]解锁,UI/Sprite/PicBook/picbook_img_b_3_1
+22,3,UI/Sprite/PicBook/picbook_img3_2,At_Pi_Describe_22,女孩欣喜地回到村庄，却发现原本平静的村庄现在狂风肆虐，风暴魔王来了。魔王勒令村民们七天之内奉上火鸟的心脏，否则就摧毁村庄，村民们都陷入了恐惧和不安之中……,20035012,At_Pi_description_22,通关主线[35-10]解锁,UI/Sprite/PicBook/picbook_img_b_3_2
+23,3,UI/Sprite/PicBook/picbook_img3_3,At_Pi_Describe_23,“要召唤火鸟吗？”女孩躲在角落手捧着发出温暖光芒的羽毛，那美丽而神秘的火鸟是小女孩唯一的朋友，是她的希望，她的光。,20035012,At_Pi_description_23,通关主线[35-10]解锁,UI/Sprite/PicBook/picbook_img_b_3_3
+24,3,UI/Sprite/PicBook/picbook_img3_4,At_Pi_Describe_24,“不，火鸟选择了我，我必须捍卫它！”挣扎许久，女孩终于做出了她的选择。温暖的羽毛化作了锋利的镰刀，即使双肩颤抖，瘦弱的女孩依然向魔王的城堡走去。,20035012,At_Pi_description_24,通关主线[35-10]解锁,UI/Sprite/PicBook/picbook_img_b_3_4
+25,3,UI/Sprite/PicBook/picbook_img3_5,At_Pi_Describe_25,魔王太强大了，女孩很快就伤痕满身，可她依旧紧握着巨镰，“要战斗，要战斗，要战斗！只有我能保护她！”，女孩默念着。,20035012,At_Pi_description_25,通关主线[35-10]解锁,UI/Sprite/PicBook/picbook_img_b_3_5
+26,3,UI/Sprite/PicBook/picbook_img3_6,At_Pi_Describe_26,危急之时，火鸟出现了，像是感受到了女孩赤忱的意志一般，火鸟煽动翅膀掀起一道道烈焰袭向魔王。,20035012,At_Pi_description_26,通关主线[35-10]解锁,UI/Sprite/PicBook/picbook_img_b_3_6
+27,3,UI/Sprite/PicBook/picbook_img3_7,At_Pi_Describe_27,终于，魔王被打倒了，遍体鳞伤的女孩儿再也无法支撑，她不断地下坠……下坠……,20035012,At_Pi_description_27,通关主线[35-10]解锁,UI/Sprite/PicBook/picbook_img_b_3_7
+28,3,UI/Sprite/PicBook/picbook_img3_8,At_Pi_Describe_28,直到火鸟将她轻轻驼起，直到温柔的火光将她团团包裹。女孩换上了华服，长出了翅膀，她仿佛变成了另一只火鸟……“挣脱了尘世的桎梏，越过了彷徨的迷雾，勇气就是你的翅膀，飞翔吧，女孩。”，火鸟微笑着扇动翅膀向天空飞去……,20035012,At_Pi_description_28,通关主线[35-10]解锁,UI/Sprite/PicBook/picbook_img_b_3_8

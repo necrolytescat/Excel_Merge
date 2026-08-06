@@ -1,0 +1,17 @@
+﻿流水ID,怪物id,语音资源,Key_描述,语音文本,Key_描述,语音文本
+Id,MonsterId,Resource,Key_Describe,Describe,Key_Text,Text
+uint32,uint32,string,string,string,string,string
+Client,Client,Client,Client,Client,Client,Client
+ ,,,,,,
+请注意合理分配ID段,配置怪物页签流水id,,,,,
+阿宁,阿宁,阿宁,阿宁,阿宁,阿宁,阿宁
+1,37,Vo_Boss_Greeny_Battle_Damage_Picture,At_Vo_Describe_1,受到攻击,At_Vo_Text_1,这是我和爱丽丝的乐园，你们休想破坏！
+2,37,Vo_Boss_Greeny_Battle_Skill1_Picture,At_Vo_Describe_2,技能语音1,At_Vo_Text_2,区区降格者，玩什么英雄游戏。
+3,37,Vo_Boss_Greeny_Battle_Skill2_Picture,At_Vo_Describe_3,技能语音2,At_Vo_Text_3,惨叫吧，嚎哭吧，为我的花园奏响噩梦的礼赞。
+4,37,Vo_Boss_Greeny_Battle_Skill3_Picture,At_Vo_Describe_4,技能语音3,At_Vo_Text_4,鲜活的生命力，强大的灵魂，是最好的养料。
+5,37,Vo_Boss_Greeny_Battle_Start_Picture,At_Vo_Describe_5,战斗开始,At_Vo_Text_5,就让你们的灵魂成为这花园的养分吧。
+6,36,Vo_Boss_Rooco_Battle_Damage_Picture,At_Vo_Describe_6,受到攻击,At_Vo_Text_6,不是这样的，我不想……
+7,36,Vo_Boss_Rooco_Battle_Skill1_Picture,At_Vo_Describe_7,战中语音1,At_Vo_Text_7,是你吗？抢走姐姐的害虫。
+8,36,Vo_Boss_Rooco_Battle_Skill2_Picture,At_Vo_Describe_8,战中语音2,At_Vo_Text_8,不会让你逃走的。
+9,36,Vo_Boss_Rooco_Battle_Skill3_Picture,At_Vo_Describe_9,技能语音1,At_Vo_Text_9,你们也尝尝我的痛苦吧。
+10,36,Vo_Boss_Rooco_Battle_Start_Picture,At_Vo_Describe_10,技能语音2,At_Vo_Text_10,这是姐姐为我创造的乐园，你们休想破坏。

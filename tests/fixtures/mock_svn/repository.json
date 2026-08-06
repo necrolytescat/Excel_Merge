@@ -1,0 +1,29 @@
+{
+  "info": {
+    "repository_root": "https://mock.local/repo",
+    "repository_uuid": "fixture-repository-uuid",
+    "revision": "105",
+    "last_changed_revision": "105",
+    "last_changed_author": "测试策划",
+    "last_changed_date": "2026-08-04T09:00:00Z"
+  },
+  "tree": [
+    {"path": "table/Test.csv", "kind": "file", "size": 29, "revision": "105", "author": "测试策划", "date": "2026-08-04T09:00:00Z"},
+    {"path": "table", "kind": "dir", "revision": "105", "author": "测试策划", "date": "2026-08-04T09:00:00Z"}
+  ],
+  "logs": [
+    {
+      "revision": 105,
+      "author": "测试策划",
+      "date": "2026-08-04T09:00:00Z",
+      "message": "测试提交",
+      "changed_paths": [{"path": "/repo/table/Test.csv", "action": "M"}]
+    }
+  ],
+  "content": {
+    "table/Test.csv": {
+      "100": "Id,Value\n1,old\n",
+      "105": "Id,Value\n1,new\n"
+    }
+  }
+}

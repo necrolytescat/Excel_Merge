@@ -1,0 +1,15 @@
+﻿流水ID,Key_名称,道具名称,排序,道具图标,道具模型,道具展示场景id,道具id,Key_描述,道具描述,解锁条件
+Id,Key_Name,Name,Order,MainItemPic,MainItemModel,SceneId,MainItemId,Key_Describe,Describe,Unlock
+uint32,string,string,uint32,string,string,uint32,uint32,string,string,uint32
+All,Client,Client,Client,Client,Client,Client,Client,Client,Client,All
+ ,,,,,,,,,,
+请注意合理分配ID段,,,数字越小越靠前,,,关联CharacterConfig_Toon的流水id中的首位,关联CharacterConfig_Toon的流水id中的后6位,,,关联condition表流水id
+阿宁,阿宁,阿宁,阿宁,阿宁,阿宁,阿宁,阿宁,阿宁,阿宁,阿宁
+1,At_Ma_Name_1,灿晶星盘,1,UI/Sprite/PicBook/world_tools_1,Monster/Npc_2_1_Weapon_Story,8,1,At_Ma_Describe_1,每一位降格者都能在剧团内获得专属自己的灿晶星盘，而制作它是灿灵协约的独门绝技，此后灿晶星盘还会被打造成符合使用者能力的专属武器。\n究竟如何使降格者无法使用的黯晶，转变为激发他们潜在力量的灿晶呢？就连老团长留下的诸多手记中也没有答案。有传言说灿晶星盘内寄宿着灵魂，或许……这并非空穴来风。,10002
+2,At_Ma_Name_2,露可的绘本,2,UI/Sprite/PicBook/world_tools_2,Monster/Prop_Book,8,2,At_Ma_Describe_2,露可一直带在身边，视若珍宝的手绘绘本。它并非正式出版物，而是一本精装绘图本，最初由奥莉薇尔编绘赠与露可，后续露可也增添了很多思念姐姐的内容。可以说这本绘本充满了她的童年回忆，是维系着姐妹感情的纽带 ，总能带领露可前往姐姐身边。\n而现在，绘本似乎在乐园中激发出了新的能力——那些空白的页面，想必也会慢慢被大家的故事和回忆填满吧。,10002
+3,At_Ma_Name_3,乐园筹码,3,UI/Sprite/PicBook/world_tools_6,Monster/Scene_Desire_Chip,8,3,At_Ma_Describe_3,贪婪乐园中人类对“物欲”贪欲的具象化表现。\n在洛兰娜被城主引进的”娱乐“侵蚀之后，不少人在赌场中倾家荡产，这些人的灵魂进入乐园后，贪欲被扭曲放大，最终化为这显而易见的一枚筹码。,10002
+4,At_Ma_Name_4,家徽戒指,4,UI/Sprite/PicBook/world_tools_5,Monster/Story_3000X_Ring,8,4,At_Ma_Describe_4,贪婪乐园中人类对“权力”贪欲的具象化表现。\n即使城主安托万的初衷只是为了拯救女儿，可在支配洛兰娜的过程中，谁也没法保证手握权力的不会膨胀，更别提在放大贪婪之罪的乐园中了。,10002
+5,At_Ma_Name_5,爱丽丝的眼泪,5,UI/Sprite/PicBook/world_tools_4,Monster/Story_3000X_Bottle,8,5,At_Ma_Describe_5,贪婪乐园中城主的”真正宝物“。\n是他残留的人性中最纯净的部分，被小心的收藏在水晶瓶中，藏在心中。只有女儿的眼泪分量足够开启通往生命花园的道路。,10002
+6,At_Ma_Name_6,乐园之果,6,UI/Sprite/BagGoodsIcon/tools_00016,Monster/Scene_Apple,8,6,At_Ma_Describe_6,乐园中最为珍贵的果实，圣子灵魂和力量的结晶，是解放拥有罪名之乐园的关键所在。在贪婪圣子寄来的信中，它被称为“灿晶之核”，似乎还蕴含着打破依露希尔女神枷锁的力量……总之，关于乐园之果的诸多秘密，远未浮出水面。,10002
+7,At_Ma_Name_7,曾为纯白之花,7,UI/Sprite/PicBook/world_tools_3,Monster/Boss_1_2_Flower_Crystal,8,7,At_Ma_Describe_7,击败取回全部记忆的“嫉妒之圣子”后，得到的蕴含乐园力量的物件。原本似乎是一朵白色的纸玫瑰。\n少女曾对世界怀有温柔的爱意，因此更无法原谅犯下恶行的自己。正如象征心意的花朵被黯晶侵染，她在黑紫色的噩梦中看见乐园的嗤笑，是自己无法抵达的另一个未来的泡影。,10002
+8,At_Ma_Name_8,协同装置,8,UI/Sprite/PicBook/world_tools_exp_t2,Monster/Normal_14_1_Battle,8,8,At_Ma_Describe_8,乐园中的奥莉薇尔送给我们的装置，会协助我方攻击敌人。带有一丝属于乐园的不详气息，但经检查没有危险。,10002

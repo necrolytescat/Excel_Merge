@@ -1,0 +1,13 @@
+﻿流水ID,Key_名称,绘本名称,排序
+Id,Key_Name,Name,Order
+uint32,string,string,uint32
+All,Client,None,Client
+ ,,,
+请注意合理分配ID段,,,
+阿宁,阿宁,阿宁,Chann
+1,At_Pi_Name_1,光夜童话,1
+2,At_Pi_Name_2,致爱丽丝,2
+3,At_Pi_Name_3,新编火鸟,7
+4,At_Pi_Name_4,炎冬的故事,4
+5,At_Pi_Name_5,旅途之名,5
+6,At_Pi_Name_6,千里婵娟,6

@@ -1,0 +1,261 @@
+/* Shared desktop readability styling for result pages. */
+.results-readable-page .file-context {
+  display: none;
+}
+
+.results-readable-page .brand span,
+.results-readable-page .nav-label,
+.results-readable-page .nav-current,
+.results-readable-page .nav-status,
+.results-readable-page .sidebar-footer {
+  font-size: 11px;
+}
+
+.results-readable-page .compare-topbar h1 {
+  font-size: 30px;
+}
+
+.results-readable-page .compare-topbar .subtitle {
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.results-readable-page .eyebrow {
+  font-size: 11px;
+}
+
+.results-readable-page .result-top-context span {
+  font-size: 12px;
+}
+
+.results-readable-page .result-top-context strong {
+  font-size: 16px;
+}
+
+.results-readable-page .task-page-tab {
+  min-height: 42px;
+  padding: 9px 14px;
+}
+
+.results-readable-page .task-page-tab > span {
+  width: 25px;
+  height: 25px;
+  font-size: 12px;
+}
+
+.results-readable-page .task-page-tab strong {
+  font-size: 14px;
+}
+
+.results-readable-page .section-heading {
+  padding: 20px 22px 18px;
+}
+
+.results-readable-page .section-heading h2 {
+  font-size: 20px;
+}
+
+.results-readable-page .section-heading p:not(.eyebrow) {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.results-readable-page .workbench-heading-actions button {
+  min-height: 42px;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
+.results-readable-page .result-action-message {
+  padding: 11px 22px;
+  font-size: 13px;
+}
+
+.results-readable-page .mock-result-notice {
+  gap: 12px;
+  padding: 11px 18px;
+  font-size: 13px;
+}
+
+.results-readable-page .mock-result-notice strong {
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.results-readable-page .workbench-grid,
+.results-readable-page .diff-workbench.is-detail-collapsed .workbench-grid {
+  min-height: 620px;
+  grid-template-columns: 200px 180px minmax(460px, 1fr) 250px;
+}
+
+.results-readable-page .pane-heading,
+.results-readable-page .diff-toolbar {
+  height: 54px;
+  padding-right: 16px;
+  padding-left: 16px;
+}
+
+.results-readable-page .pane-heading strong,
+.results-readable-page .diff-toolbar strong {
+  font-size: 15px;
+}
+
+.results-readable-page .pane-heading span,
+.results-readable-page .diff-toolbar small,
+.results-readable-page .table-status {
+  font-size: 12px;
+}
+
+.results-readable-page .workbook-list,
+.results-readable-page .sheet-list {
+  gap: 8px;
+  padding: 10px;
+}
+
+.results-readable-page .workbook-nav-item,
+.results-readable-page .sheet-nav-item {
+  gap: 6px;
+  padding: 11px 10px;
+}
+
+.results-readable-page .workbook-nav-item strong,
+.results-readable-page .sheet-nav-item strong {
+  font-size: 14px;
+}
+
+.results-readable-page .workbook-nav-item small,
+.results-readable-page .workbook-nav-item span,
+.results-readable-page .sheet-status {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.results-readable-page .workbook-empty strong,
+.results-readable-page .sheet-empty strong {
+  font-size: 14px;
+}
+
+.results-readable-page .workbook-empty small,
+.results-readable-page .sheet-empty small {
+  font-size: 12px;
+}
+
+.results-readable-page .diff-state-view {
+  min-height: 520px;
+}
+
+.results-readable-page .diff-state-view h3 {
+  font-size: 18px;
+}
+
+.results-readable-page .diff-state-view p {
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.results-readable-page .diff-partial-warning {
+  border-bottom: 1px solid #f3c78c;
+  background: #fff8e8;
+  color: #7a430b;
+  padding: 12px 16px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.results-readable-page .diff-partial-warning ul,
+.results-readable-page .diff-error-list {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+
+.results-readable-page .diff-error-list {
+  max-width: 620px;
+  color: #b42318;
+  font-size: 12px;
+  text-align: left;
+}
+
+.results-readable-page .field-diff-empty {
+  color: #667085;
+  font-size: 12px;
+}
+
+.results-readable-page .semantic-table-header,
+.results-readable-page .semantic-diff-row {
+  grid-template-columns: minmax(120px, 1fr) 110px minmax(280px, 2fr);
+}
+
+.results-readable-page .semantic-table-header {
+  font-size: 12px;
+}
+
+.results-readable-page .semantic-table-header span {
+  padding: 13px 14px;
+}
+
+.results-readable-page .semantic-diff-row {
+  min-height: 82px;
+}
+
+.results-readable-page .semantic-key {
+  gap: 6px;
+  padding: 13px 14px;
+}
+
+.results-readable-page .semantic-key strong {
+  font-size: 14px;
+}
+
+.results-readable-page .semantic-key small,
+.results-readable-page .row-change-status {
+  font-size: 12px;
+}
+
+.results-readable-page .field-diff-list {
+  gap: 8px;
+  padding: 11px 14px;
+}
+
+.results-readable-page .field-diff-button {
+  min-width: 148px;
+  gap: 5px;
+  padding: 9px 11px;
+}
+
+.results-readable-page .field-diff-button strong {
+  font-size: 13px;
+}
+
+.results-readable-page .field-diff-button span {
+  font-size: 12px;
+}
+
+.results-readable-page .detail-list div {
+  padding: 15px 16px;
+}
+
+.results-readable-page .detail-list dt {
+  font-size: 12px;
+}
+
+.results-readable-page .detail-list dd {
+  margin-top: 6px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.results-readable-page .detail-pane > p {
+  margin: 18px 16px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.results-readable-page .results-gate strong {
+  font-size: 16px;
+}
+
+.results-readable-page .results-gate span:not(.state-illustration),
+.results-readable-page .result-back-link,
+.results-readable-page footer {
+  font-size: 12px;
+}

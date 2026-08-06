@@ -1,0 +1,28 @@
+{
+  "schema_version": "m2.diff.v1",
+  "direction": {
+    "source": "left",
+    "target": "right"
+  },
+  "workbook": {
+    "name": "Example.xlsm",
+    "status": "unchanged",
+    "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "target_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "summary": {
+    "total_sheets": 0,
+    "unchanged_sheets": 0,
+    "modified_sheets": 0,
+    "source_only_sheets": 0,
+    "target_only_sheets": 0,
+    "failed_sheets": 0,
+    "source_only_rows": 0,
+    "target_only_rows": 0,
+    "modified_rows": 0,
+    "modified_fields": 0,
+    "error_count": 0
+  },
+  "sheets": [],
+  "errors": []
+}

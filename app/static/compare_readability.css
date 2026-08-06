@@ -1,0 +1,234 @@
+/* Shared desktop readability overrides for compare input pages. */
+.compare-readable-page .brand span,
+.compare-readable-page .nav-label,
+.compare-readable-page .nav-current,
+.compare-readable-page .nav-status,
+.compare-readable-page .sidebar-footer {
+  font-size: 11px;
+}
+
+.compare-readable-page .compare-topbar h1 {
+  font-size: 30px;
+}
+
+.compare-readable-page .compare-topbar .subtitle {
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.compare-readable-page .eyebrow {
+  font-size: 11px;
+}
+
+.compare-readable-page .task-state span {
+  font-size: 12px;
+}
+
+.compare-readable-page .task-state strong {
+  font-size: 16px;
+}
+
+.compare-readable-page .task-state small {
+  font-size: 13px;
+}
+
+.compare-readable-page .task-page-tab {
+  min-height: 42px;
+  padding: 9px 14px;
+}
+
+.compare-readable-page .task-page-tab > span {
+  width: 25px;
+  height: 25px;
+  font-size: 12px;
+}
+
+.compare-readable-page .task-page-tab strong {
+  font-size: 14px;
+}
+
+.compare-readable-page .task-page-nav > .badge {
+  font-size: 12px;
+}
+
+.compare-readable-page .section-heading {
+  padding: 20px 22px 18px;
+}
+
+.compare-readable-page .section-index {
+  width: 32px;
+  height: 32px;
+  flex-basis: 32px;
+  font-size: 14px;
+}
+
+.compare-readable-page .section-heading h2 {
+  font-size: 20px;
+}
+
+.compare-readable-page .section-heading p:not(.eyebrow) {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.compare-readable-page .section-heading button,
+.compare-readable-page .snapshot-commandbar button,
+.compare-readable-page .candidate-heading-actions button {
+  min-height: 42px;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
+.compare-readable-page .endpoint-pair {
+  padding: 20px 22px;
+}
+
+.compare-readable-page .endpoint-side {
+  gap: 15px;
+  padding: 18px;
+}
+
+.compare-readable-page .snapshot-card-heading h3 {
+  font-size: 19px;
+}
+
+.compare-readable-page .side-label {
+  font-size: 12px;
+}
+
+.compare-readable-page .endpoint-side label {
+  font-size: 14px;
+}
+
+.compare-readable-page .endpoint-side label small {
+  font-size: 12px;
+}
+
+.compare-readable-page .endpoint-side input {
+  min-height: 42px;
+  font-size: 14px;
+}
+
+.compare-readable-page .endpoint-match-item {
+  padding: 9px 11px;
+  font-size: 13px;
+}
+
+.compare-readable-page .endpoint-match-item small {
+  font-size: 12px;
+}
+
+.compare-readable-page .endpoint-url {
+  font-size: 13px;
+}
+
+.compare-readable-page .scope-line {
+  font-size: 12px;
+}
+
+.compare-readable-page .scope-line code,
+.compare-readable-page .scope-line small {
+  font-size: 12px;
+}
+
+.compare-readable-page .connection-state strong {
+  font-size: 14px;
+}
+
+.compare-readable-page .connection-state small,
+.compare-readable-page .snapshot-commandbar button span {
+  font-size: 12px;
+}
+
+.compare-readable-page .endpoint-form-error {
+  font-size: 13px;
+}
+
+.compare-readable-page .summary-title h3 {
+  font-size: 15px;
+}
+
+.compare-readable-page .summary-title .badge,
+.compare-readable-page .count-badge {
+  font-size: 12px;
+}
+
+.compare-readable-page .snapshot-stat {
+  min-height: 94px;
+  gap: 6px;
+  padding: 14px 16px;
+}
+
+.compare-readable-page .snapshot-stat span {
+  font-size: 12px;
+}
+
+.compare-readable-page .snapshot-stat strong {
+  font-size: 24px;
+}
+
+.compare-readable-page .snapshot-stat small {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.compare-readable-page .snapshot-progress-meta,
+.compare-readable-page .snapshot-progress-meta strong,
+.compare-readable-page .snapshot-progress-meta span {
+  font-size: 12px;
+}
+
+.compare-readable-page .candidate-toolbar {
+  padding: 12px 22px;
+}
+
+.compare-readable-page .search-field input,
+.compare-readable-page .filter-field,
+.compare-readable-page .filter-field select {
+  min-height: 40px;
+  font-size: 13px;
+}
+
+.compare-readable-page .search-field > span:not(.sr-only) {
+  top: 11px;
+}
+
+.compare-readable-page .manifest-table {
+  font-size: 13px;
+}
+
+.compare-readable-page .manifest-table th {
+  height: 44px;
+  font-size: 12px;
+}
+
+.compare-readable-page .manifest-table td {
+  padding: 14px 12px;
+}
+
+.compare-readable-page .manifest-table td code {
+  font-size: 13px;
+}
+
+.compare-readable-page .manifest-table td small,
+.compare-readable-page .file-status,
+.compare-readable-page .parse-status {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.compare-readable-page .file-status b {
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+}
+
+.compare-readable-page .manifest-empty td strong {
+  font-size: 15px;
+}
+
+.compare-readable-page .manifest-empty td span,
+.compare-readable-page .candidate-caption,
+.compare-readable-page footer {
+  font-size: 12px;
+}

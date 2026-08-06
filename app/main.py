@@ -1,0 +1,310 @@
+"""M0 本地 Web 入口。
+
+运行：
+    python -m app.main
+"""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from core.svn_provider import SVNProviderError, provider_from_config
+
+from app.api import batch, diff, health, replay, svn
+from app.services.workbook_dataset_service import (
+    SVNWorkbookDatasetResolver,
+    UnavailableWorkbookDatasetResolver,
+    WorkbookCompareError,
+    WorkbookDatasetResolver,
+)
+from app.services.workbook_diff_service import DatasetLayout, WorkbookDiffService
+from app.services.svn_service import SVNService
+from app.services.snapshot_service import SnapshotService
+from app.services.config_service import ConfigStore
+from app.services.batch_diff_service import (
+    BatchDiffService,
+    DefaultBatchWorkbookRunner,
+    SnapshotBatchCandidateResolver,
+)
+from app.services.batch_store import BatchDiffError, BatchStore
+from app.services.offline_fixture import OfflineFixtureError, OfflineFixtureService
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "settings.json"
+DEFAULT_ENDPOINT_REGISTRY: list[dict[str, Any]] = []
+
+DEFAULT_ENDPOINT_CATALOG = {
+    "TC": {"display_name": "港台 TC", "trunk_branch": "Trunk_TC", "fix_pattern": "TC-fix-x.x.x.x"},
+    "KR": {"display_name": "韩国 KR", "trunk_branch": "Trunk_KR", "fix_pattern": "KR-fix-x.x.x.x"},
+    "BT": {"display_name": "折扣 BT", "trunk_branch": "", "fix_pattern": ""},
+    "JP": {"display_name": "日本 JP", "trunk_branch": "", "fix_pattern": ""},
+}
+
+
+def load_config(path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    return data if isinstance(data, dict) else {}
+
+
+def create_app(
+    *,
+    config: dict[str, Any] | None = None,
+    provider=None,
+    workbook_dataset_resolver: WorkbookDatasetResolver | None = None,
+    batch_diff_service: BatchDiffService | None = None,
+    workbook_diff_service: WorkbookDiffService | None = None,
+) -> FastAPI:
+    config = config if config is not None else load_config()
+    svn_config = config.get("svn", {}) if isinstance(config, dict) else {}
+    web_config = config.get("web", {}) if isinstance(config, dict) else {}
+    provider = provider or provider_from_config(config)
+    provider_name = str(svn_config.get("provider", "mock")).lower()
+    credential_source = str(svn_config.get("credential_source", "svn_cli_cache"))
+    allowed_schemes = tuple(svn_config.get("allowed_schemes", ("http", "https", "svn", "svn+ssh", "file")))
+    preview_limit = int(svn_config.get("content_preview_max_bytes", 262144))
+    max_workers = int(config.get("max_workers", 6)) if isinstance(config, dict) else 6
+
+    app = FastAPI(title="Excel Diff/Merge SVN 基座", version="0.1.0")
+    app.state.provider = provider
+    app.state.provider_name = provider_name
+    app.state.credential_source = credential_source
+    app.state.default_url = str(svn_config.get("server_url", ""))
+    app.state.config_store = ConfigStore(DEFAULT_CONFIG_PATH)
+    app.state.endpoint_catalog = svn_config.get("endpoint_catalog") or DEFAULT_ENDPOINT_CATALOG
+    app.state.endpoint_registry = SnapshotService.normalize_registry(svn_config.get("endpoint_registry") or DEFAULT_ENDPOINT_REGISTRY)
+    app.state.svn_service = SVNService(provider, allowed_schemes=allowed_schemes, preview_limit=preview_limit)
+    app.state.snapshot_service = SnapshotService(provider, allowed_schemes=allowed_schemes, max_workers=max_workers, preview_limit=preview_limit)
+    app.state.offline_fixture_service = (
+        OfflineFixtureService() if bool(web_config.get("dev_mode", False)) else None
+    )
+    dataset_layout = config.get("dataset_layout") if isinstance(config, dict) else None
+    app.state.workbook_diff_service = workbook_diff_service or (
+        WorkbookDiffService(DatasetLayout.from_config(dataset_layout))
+        if isinstance(dataset_layout, dict)
+        else None
+    )
+    if workbook_dataset_resolver is not None:
+        app.state.workbook_dataset_resolver = workbook_dataset_resolver
+    elif isinstance(dataset_layout, dict):
+        app.state.workbook_dataset_resolver = SVNWorkbookDatasetResolver(
+            provider,
+            lambda: getattr(app.state, "endpoint_registry", []),
+            dataset_layout,
+            allowed_schemes=allowed_schemes,
+        )
+    else:
+        app.state.workbook_dataset_resolver = UnavailableWorkbookDatasetResolver()
+
+    if batch_diff_service is not None:
+        app.state.batch_diff_service = batch_diff_service
+    elif (
+        isinstance(dataset_layout, dict)
+        and app.state.workbook_diff_service is not None
+        and not isinstance(
+            app.state.workbook_dataset_resolver,
+            UnavailableWorkbookDatasetResolver,
+        )
+    ):
+        batch_config = config.get("batch_diff", {}) if isinstance(config, dict) else {}
+        configured_state = os.environ.get("EXCEL_MERGE_BATCH_STATE_DIR") or str(
+            batch_config.get("state_directory", "")
+        ).strip()
+        state_directory = (
+            Path(configured_state)
+            if configured_state
+            else PROJECT_ROOT / "var" / "m2-batch"
+        )
+        if not state_directory.is_absolute():
+            state_directory = PROJECT_ROOT / state_directory
+        candidate_resolver = SnapshotBatchCandidateResolver(
+            app.state.snapshot_service,
+            lambda: getattr(app.state, "endpoint_registry", []),
+        )
+        workbook_runner = DefaultBatchWorkbookRunner(
+            app.state.workbook_dataset_resolver,
+            app.state.workbook_diff_service,
+        )
+        app.state.batch_diff_service = BatchDiffService(
+            BatchStore(state_directory),
+            candidate_resolver,
+            workbook_runner,
+        )
+    else:
+        app.state.batch_diff_service = None
+
+    def close_batch_service() -> None:
+        service = getattr(app.state, "batch_diff_service", None)
+        if service is not None:
+            service.close()
+
+    app.add_event_handler("shutdown", close_batch_service)
+
+    templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+    app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
+
+    @app.get("/", include_in_schema=False)
+    def index(request: Request):
+        return templates.TemplateResponse("index.html", {"request": request, "provider": provider_name, "credential_source": credential_source, "default_url": str(getattr(request.app.state, "default_url", "")), "endpoint_catalog": getattr(request.app.state, "endpoint_catalog", DEFAULT_ENDPOINT_CATALOG), "active_page": "settings"})
+
+    @app.get("/compare", include_in_schema=False)
+    def compare_preview(request: Request):
+        """M2 版本与快照入口；沿用 M1 快照接口，不执行语义 Diff。"""
+        return templates.TemplateResponse(
+            "compare.html",
+            {
+                "request": request,
+                "provider": provider_name,
+                "active_page": "compare",
+                "demo_mode": False,
+            },
+        )
+
+    @app.get("/compare/demo", include_in_schema=False)
+    def compare_demo(request: Request):
+        """开发模式流程示例；不读取本地文件或生成真实语义 Diff。"""
+        if not bool(web_config.get("dev_mode", False)):
+            raise HTTPException(status_code=404)
+        return templates.TemplateResponse(
+            "compare.html",
+            {
+                "request": request,
+                "provider": provider_name,
+                "active_page": "compare",
+                "demo_mode": True,
+            },
+        )
+
+    @app.get("/compare/results", include_in_schema=False)
+    def compare_results(request: Request):
+        """独立差异结果页；当前只恢复前端任务上下文。"""
+        return templates.TemplateResponse(
+            "compare_results.html",
+            {
+                "request": request,
+                "provider": provider_name,
+                "active_page": "compare",
+                "demo_mode": False,
+            },
+        )
+
+    @app.get("/compare/demo/results", include_in_schema=False)
+    def compare_demo_results(request: Request):
+        """开发模式独立结果页；只展示明确标注的 UI 假数据。"""
+        if not bool(web_config.get("dev_mode", False)):
+            raise HTTPException(status_code=404)
+        return templates.TemplateResponse(
+            "compare_results.html",
+            {
+                "request": request,
+                "provider": provider_name,
+                "active_page": "compare",
+                "demo_mode": True,
+            },
+        )
+
+    @app.get("/compare/replay", include_in_schema=False)
+    def compare_replay(request: Request):
+        """开发模式离线夹具回放；不访问 SVN 或批量数据库。"""
+        if not bool(web_config.get("dev_mode", False)):
+            raise HTTPException(status_code=404)
+        return templates.TemplateResponse(
+            "compare_results.html",
+            {
+                "request": request,
+                "provider": provider_name,
+                "active_page": "compare",
+                "demo_mode": False,
+                "replay_mode": True,
+            },
+        )
+    @app.exception_handler(SVNProviderError)
+    async def svn_error_handler(_: Request, exc: SVNProviderError):
+        return JSONResponse(status_code=400, content={"error": {"code": exc.code, "message": exc.message}})
+
+    @app.exception_handler(WorkbookCompareError)
+    async def workbook_compare_error_handler(_: Request, exc: WorkbookCompareError):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"code": exc.code, "message": exc.message}},
+        )
+
+    @app.exception_handler(BatchDiffError)
+    async def batch_diff_error_handler(_: Request, exc: BatchDiffError):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"code": exc.code, "message": exc.message}},
+        )
+
+
+    @app.exception_handler(OfflineFixtureError)
+    async def offline_fixture_error_handler(_: Request, exc: OfflineFixtureError):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"code": exc.code, "message": exc.message}},
+        )
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(request: Request, exc: RequestValidationError):
+        if request.url.path.startswith(("/api/diff/batches", "/api/diff/batch-results")):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "code": "BATCH_INVALID_REQUEST",
+                        "message": "批量 Diff 请求无效",
+                    }
+                },
+            )
+        if request.url.path.startswith("/api/diff/"):
+            invalid_path = any(
+                error.get("loc", ())[-1:] == ("workbook_path",)
+                for error in exc.errors()
+            )
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "code": (
+                            "DIFF_INVALID_WORKBOOK_PATH"
+                            if invalid_path
+                            else "DIFF_INVALID_REQUEST"
+                        ),
+                        "message": (
+                            "工作簿路径不合法"
+                            if invalid_path
+                            else "单工作簿比较请求无效"
+                        ),
+                    }
+                },
+            )
+        return JSONResponse(status_code=422, content={"error": {"code": "SVN_INVALID_REQUEST", "message": "请求参数无效", "fields": exc.errors()}})
+
+    app.include_router(health.router, prefix="/api")
+    app.include_router(svn.router, prefix="/api")
+    app.include_router(diff.router, prefix="/api")
+    app.include_router(batch.router, prefix="/api")
+    if bool(web_config.get("dev_mode", False)):
+        app.include_router(replay.router, prefix="/api")
+    return app
+
+
+app = create_app()
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    config = load_config()
+    web_config = config.get("web", {})
+    uvicorn.run(app, host=str(web_config.get("host", "127.0.0.1")), port=int(web_config.get("port", 5566)))

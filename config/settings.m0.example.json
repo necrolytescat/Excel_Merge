@@ -1,0 +1,86 @@
+{
+  "max_workers": 6,
+  "excel_extensions": [
+    ".xlsx",
+    ".xlsm",
+    ".xls"
+  ],
+  "encoding_fallback": [
+    "utf-8",
+    "gbk"
+  ],
+  "dummy_change_suppress": true,
+  "branch": "fix",
+  "net_diff": true,
+  "dataset_layout": {
+    "binding_policy": {
+      "same_endpoint": true,
+      "same_frozen_revision": true
+    },
+    "workbook_source": {
+      "logical_scope": "TABLE",
+      "directory_name": "Table"
+    },
+    "csv_export": {
+      "logical_scope": "TABLECSV",
+      "directory_name": "TableCsv",
+      "extension": ".csv",
+      "filename_template": "{tbxName}.csv",
+      "field_name_row": 2,
+      "field_type_row": 3,
+      "field_scope_row": 4,
+      "data_start_row": 8,
+      "primary_key_fields": [
+        "Id",
+        "id"
+      ]
+    },
+    "manifest": {
+      "sheet_name": "main",
+      "sheet_field": "sheetName",
+      "csv_name_field": "tbxName",
+      "export_flag_field": "isExport"
+    }
+  },
+  "web": {
+    "host": "127.0.0.1",
+    "port": 5566
+  },
+  "svn": {
+    "provider": "mock",
+    "server_url": "https://mock.local/repo",
+    "credential_source": "svn_cli_cache",
+    "allowed_schemes": [
+      "http",
+      "https",
+      "svn",
+      "svn+ssh",
+      "file"
+    ],
+    "timeout_seconds": 30,
+    "content_preview_max_bytes": 262144,
+    "cache_dir": ".cache/svn",
+    "endpoint_catalog": {
+      "TC": {
+        "display_name": "港台 TC",
+        "trunk_branch": "Trunk_TC",
+        "fix_pattern": "TC-fix-x.x.x.x"
+      },
+      "KR": {
+        "display_name": "韩国 KR",
+        "trunk_branch": "Trunk_KR",
+        "fix_pattern": "KR-fix-x.x.x.x"
+      },
+      "BT": {
+        "display_name": "折扣 BT",
+        "trunk_branch": "",
+        "fix_pattern": ""
+      },
+      "JP": {
+        "display_name": "日本 JP",
+        "trunk_branch": "",
+        "fix_pattern": ""
+      }
+    }
+  }
+}

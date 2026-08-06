@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Config Atlas · 系统配置</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.1.4">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="主导航">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">CA</div>
+        <div>
+          <strong>Config Atlas</strong>
+          <span>SVN · READ ONLY</span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <p class="nav-label">系统配置</p>
+        <a class="nav-item{% if active_page == 'settings' %} active{% endif %}" href="/"{% if active_page == 'settings' %}aria-current="page"{% endif %}>
+          <span class="nav-icon" aria-hidden="true">⌂</span>
+          <span>基础连接</span>
+          <span class="nav-current">当前</span>
+        </a>
+
+        <p class="nav-label">对比工具</p>
+        <a class="nav-item{% if active_page == 'compare' %} active{% endif %}" href="/compare"{% if active_page == 'compare' %} aria-current="page"{% endif %}>
+          <span class="nav-icon" aria-hidden="true">⇄</span>
+          <span>版本对比</span>
+          <span class="nav-status">预览</span>
+        </a>
+
+        <p class="nav-label">结果</p>
+        <button class="nav-item is-disabled" type="button" disabled title="后续开发">
+          <span class="nav-icon" aria-hidden="true">▤</span>
+          <span>任务与报告</span>
+          <span class="nav-status">后续</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <span class="sidebar-readonly"><span class="status-dot status-ok"></span> 只读模式</span>
+        <span class="sidebar-version">M0.1 · 本地 Web</span>
+      </div>
+    </aside>
+
+    <div class="app-content">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">SYSTEM / CONFIGURATION</p>
+          <h1>系统配置</h1>
+          <p class="subtitle">管理 SVN 基础连接，后续模块将复用这里的只读认证和地址配置。</p>
+        </div>
+        <span id="provider-badge" class="badge">Provider: {{ provider }}</span>
+      </header>
+
+      <main class="layout">
+        <section class="panel connection-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">01 · CONNECTION</p>
+              <h2>SVN 连接配置</h2>
+            </div>
+            <span id="health-state" class="status-dot status-unknown">检查中</span>
+          </div>
+          <form id="endpoint-form" class="form-grid">
+            <label class="wide">
+              SVN 服务 / 仓库地址
+              <input id="svn-url" type="url" value="{{ default_url }}" placeholder="https://svn.example.com/repository" required>
+              <small>当前配置 KR/DEV；端点目录和区域分支将在 M1 建立。</small>
+            </label>
+            <div class="actions wide">
+              <button type="submit" class="primary">测试连接</button>
+              <button type="button" id="save-config" class="secondary">保存地址</button>
+            </div>
+          </form>
+          <p class="config-note">认证来源：<code>{{ credential_source }}</code>。认证信息不进入页面、配置文件或 API 响应。CLI 模式下使用当前 Windows 用户的 SVN 本地认证缓存；未缓存凭据时，连接会返回认证失败。</p>
+          <div id="config-state" class="config-state" role="status"></div>
+          <div id="error-box" class="error-box hidden" role="alert"></div>
+          <div class="connection-result">
+            <div class="subsection-heading">
+              <p class="eyebrow">连接结果</p>
+              <span class="muted">测试连接后更新</span>
+            </div>
+            <dl id="repo-info" class="info-grid">
+              <div><dt>仓库根地址</dt><dd data-field="repository_root">—</dd></div>
+              <div><dt>HEAD Revision</dt><dd data-field="revision">—</dd></div>
+              <div><dt>最近变更 Revision</dt><dd data-field="last_changed_revision">—</dd></div>
+              <div><dt>最近变更作者</dt><dd data-field="last_changed_author">—</dd></div>
+              <div><dt>最近变更时间</dt><dd data-field="last_changed_date">—</dd></div>
+              <div><dt>仓库 UUID</dt><dd data-field="repository_uuid">—</dd></div>
+            </dl>
+          </div>
+        </section>
+        <section class="panel region-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">02 · REGION / TC</p>
+              <h2>港台 TC</h2>
+            </div>
+            <span class="badge badge-light">已配置</span>
+          </div>
+          <div class="region-fields">
+            <label>主干分支
+              <select id="trunk-TC" data-selected="{{ endpoint_catalog.get('TC', {}).get('trunk_branch', '') }}">
+                <option value="">正在读取 SVN...</option>
+              </select>
+              <small id="trunk-state-TC">将从 SVN 项目根目录读取候选分支。</small>
+            </label>
+            <label>FIX 模糊匹配规则
+              <input id="fix-TC" type="text" value="{{ endpoint_catalog.get('TC', {}).get('fix_pattern', '') }}" placeholder="TC-fix-x.x.x.x">
+              <small>x 表示一个版本段，例如 TC-fix-1.2.3.4。</small>
+              <small id="fix-state-TC" class="branch-match-state">等待读取配置匹配结果</small>
+              <div id="fix-candidates-TC" class="branch-candidates" aria-live="polite"></div>
+            </label>
+          </div>
+          <div class="endpoint-actions">
+            <button type="button" class="secondary" data-region-save="TC">保存 TC 配置</button>
+            <span id="endpoint-config-state-TC" class="config-state" role="status"></span>
+          </div>
+        </section>
+
+        <section class="panel region-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">03 · REGION / KR</p>
+              <h2>韩国 KR</h2>
+            </div>
+            <span class="badge badge-light">已配置</span>
+          </div>
+          <div class="region-fields">
+            <label>主干分支
+              <select id="trunk-KR" data-selected="{{ endpoint_catalog.get('KR', {}).get('trunk_branch', '') }}">
+                <option value="">正在读取 SVN...</option>
+              </select>
+              <small id="trunk-state-KR">将从 SVN 项目根目录读取候选分支。</small>
+            </label>
+            <label>FIX 模糊匹配规则
+              <input id="fix-KR" type="text" value="{{ endpoint_catalog.get('KR', {}).get('fix_pattern', '') }}" placeholder="KR-fix-x.x.x.x">
+              <small>x 表示一个版本段，例如 KR-fix-1.2.3.4。</small>
+              <small id="fix-state-KR" class="branch-match-state">等待读取配置匹配结果</small>
+              <div id="fix-candidates-KR" class="branch-candidates" aria-live="polite"></div>
+            </label>
+          </div>
+          <div class="endpoint-actions">
+            <button type="button" class="secondary" data-region-save="KR">保存 KR 配置</button>
+            <span id="endpoint-config-state-KR" class="config-state" role="status"></span>
+          </div>
+        </section>
+
+        <section class="panel region-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">04 · REGION / BT</p>
+              <h2>折扣 BT</h2>
+            </div>
+            <span class="status-dot status-unknown">待配置</span>
+          </div>
+          <div class="region-fields">
+            <label>主干分支
+              <select id="trunk-BT" disabled>
+                <option value="">暂未配置</option>
+              </select>
+            </label>
+            <label>FIX 模糊匹配规则
+              <input id="fix-BT" type="text" value="" placeholder="待配置" disabled>
+              <small>正式 SVN 目录确认后再启用。</small>
+            </label>
+          </div>
+          <div class="endpoint-actions">
+            <button type="button" class="secondary" data-region-save="BT" disabled>保存 BT 配置</button>
+            <span id="endpoint-config-state-BT" class="config-state" role="status"></span>
+          </div>
+        </section>
+
+        <section class="panel region-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">05 · REGION / JP</p>
+              <h2>日本 JP</h2>
+            </div>
+            <span class="status-dot status-unknown">待配置</span>
+          </div>
+          <div class="region-fields">
+            <label>主干分支
+              <select id="trunk-JP" disabled>
+                <option value="">暂未配置</option>
+              </select>
+            </label>
+            <label>FIX 模糊匹配规则
+              <input id="fix-JP" type="text" value="" placeholder="待配置" disabled>
+              <small>正式 SVN 目录确认后再启用。</small>
+            </label>
+          </div>
+          <div class="endpoint-actions">
+            <button type="button" class="secondary" data-region-save="JP" disabled>保存 JP 配置</button>
+            <span id="endpoint-config-state-JP" class="config-state" role="status"></span>
+          </div>
+        </section>
+
+        <section class="panel scope-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">06 · ROADMAP</p>
+              <h2>模块进度</h2>
+            </div>
+            <span class="badge badge-light">M0.1 已归档</span>
+          </div>
+          <div class="scope-grid">
+            <div><strong>已完成</strong><span>SVN 地址持久化、CLI 认证缓存、只读连接探测。</span></div>
+            <div><strong>下一阶段</strong><span>端点目录建模，管理 KR/JP/TC/BT 与 Dev/Fix 地址。</span></div>
+            <div><strong>后续能力</strong><span>选择两个端点和 Revision，生成可比较的版本快照。</span></div>
+          </div>
+        </section>
+      </main>
+
+      <footer>M0.1 只读配置基座 · 不执行 svn commit、svn merge 或其他写操作</footer>
+    </div>
+  </div>
+
+  <script>
+    window.M0_CONFIG = { defaultUrl: {{ default_url|tojson }}, credentialSource: {{ credential_source|tojson }} };
+  </script>
+  <script src="{{ url_for('static', path='app.js') }}?v=0.1.4"></script>
+</body>
+</html>
+
+
+
+

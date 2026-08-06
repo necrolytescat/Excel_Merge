@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Config Atlas · {{ '离线数据矫正' if replay_mode else ('示例差异结果' if demo_mode else '差异结果') }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.1">
+  <link rel="stylesheet" href="{{ url_for('static', path='compare_results_readability.css') }}?v=1.0.0">
+  <link rel="stylesheet" href="{{ url_for('static', path='compare_results_batch.css') }}?v=1.1.0">
+  {% if replay_mode %}<link rel="stylesheet" href="{{ url_for('static', path='offline_replay.css') }}?v=1.0.0">{% endif %}
+  <script src="{{ url_for('static', path='m2_diff_mapper.js') }}?v=1.0.0" defer></script>
+  <script src="{{ url_for('static', path='compare_results.js') }}?v=1.2.0" defer></script>
+  <script src="{{ url_for('static', path='compare_results_batch.js') }}?v=1.1.0" defer></script>
+  {% if replay_mode %}<script src="{{ url_for('static', path='offline_replay.js') }}?v=1.0.0" defer></script>{% endif %}
+</head>
+<body class="results-readable-page" data-demo-mode="{{ 'true' if demo_mode else 'false' }}" data-replay-mode="{{ 'true' if replay_mode else 'false' }}">
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="主导航">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">CA</div>
+        <div><strong>Config Atlas</strong><span>EXCEL REVIEW · READ ONLY</span></div>
+      </div>
+      <nav class="sidebar-nav">
+        <p class="nav-label">系统配置</p>
+        <a class="nav-item" href="/"><span class="nav-icon" aria-hidden="true">⌂</span><span>基础连接</span></a>
+        <p class="nav-label">对比工具</p>
+        <a class="nav-item active" href="/compare" aria-current="page"><span class="nav-icon" aria-hidden="true">⇄</span><span>Excel Diff 工作台</span><span class="nav-current">M2</span></a>
+        <p class="nav-label">结果</p>
+        <button class="nav-item is-disabled" type="button" disabled title="后续里程碑开放"><span class="nav-icon" aria-hidden="true">▤</span><span>任务与报告</span><span class="nav-status">后续</span></button>
+      </nav>
+      <div class="sidebar-footer">
+        <span class="sidebar-readonly"><span class="status-dot status-ok"></span> 只读模式</span>
+        <span class="sidebar-version">M2 · Web 工作台</span>
+      </div>
+    </aside>
+
+    <div class="app-content compare-content">
+      <header class="topbar compare-topbar result-topbar">
+        <div>
+          <p class="eyebrow">{{ 'OFFLINE DATA CORRECTION' if replay_mode else ('DEVELOPMENT RESULT FIXTURE' if demo_mode else 'VERSION REVIEW / DIFF RESULTS') }}</p>
+          <h1>{{ '离线数据矫正' if replay_mode else ('示例差异结果' if demo_mode else '差异结果') }}</h1>
+          <p class="subtitle">{{ '加载固定原始数据，切换黄金结果与当前代码重算结果。' if replay_mode else '批量任务生成全部工作簿结果；按工作簿、Sheet、业务主键和字段逐层查看。' }}</p>
+        </div>
+        <div class="result-top-context" role="status" aria-live="polite" aria-label="差异任务上下文">
+          <div><span>左侧分支</span><strong id="result-source-label">—</strong></div>
+          <div><span>右侧分支</span><strong id="result-target-label">—</strong></div>
+          <div><span>差异文件数量</span><strong id="result-workbook-total">0</strong></div>
+        </div>
+      </header>
+
+      <nav class="task-page-nav" aria-label="Diff 任务页面">
+        <a class="task-page-tab" id="input-page-link" href="{{ '/compare/replay' if replay_mode else ('/compare/demo' if demo_mode else '/compare') }}"><span>1</span><strong>{{ '夹具输入' if replay_mode else '版本与快照' }}</strong></a>
+        <a class="task-page-tab is-active" href="{{ '/compare/replay' if replay_mode else ('/compare/demo/results' if demo_mode else '/compare/results') }}" aria-current="page"><span>2</span><strong>{{ '离线结果' if replay_mode else '差异结果' }}</strong></a>
+      </nav>
+
+      <main class="layout compare-layout result-layout">
+        {% if replay_mode %}
+        <section class="offline-fixture-panel" id="offline-fixture-panel" aria-labelledby="offline-fixture-heading">
+          <div class="offline-fixture-heading">
+            <div>
+              <p class="eyebrow">M2 OFFLINE FIXTURE</p>
+              <h2 id="offline-fixture-heading">离线夹具</h2>
+            </div>
+            <div class="offline-fixture-actions">
+              <label class="offline-file-picker" for="offline-fixture-file">
+                <span id="offline-fixture-file-label">选择 .m2fixture</span>
+                <input id="offline-fixture-file" type="file" accept=".m2fixture,application/octet-stream">
+              </label>
+              <button id="load-offline-fixture" type="button" class="primary" disabled>加载</button>
+            </div>
+          </div>
+          <div class="offline-fixture-controls">
+            <fieldset class="offline-mode-switch" id="offline-mode-switch" disabled>
+              <legend>结果来源</legend>
+              <label><input type="radio" name="offline-result-mode" value="golden" checked><span>黄金结果</span></label>
+              <label><input type="radio" name="offline-result-mode" value="current"><span>当前重算</span></label>
+            </fieldset>
+            <button id="recompute-offline-fixture" type="button" class="secondary" disabled>重算全部</button>
+            <span id="offline-fixture-counts">未加载</span>
+          </div>
+          <div class="offline-fixture-meta" role="status" aria-live="polite">
+            <strong id="offline-fixture-status">等待夹具</strong>
+            <code id="offline-fixture-sha">—</code>
+          </div>
+          <p class="batch-task-error hidden" id="offline-fixture-error" role="alert"></p>
+        </section>
+        {% endif %}
+        <section class="batch-task-panel hidden" id="batch-task-panel" aria-labelledby="batch-task-heading">
+          <div class="batch-task-heading">
+            <div><p class="eyebrow">M2 BATCH TASK</p><h2 id="batch-task-heading">全部工作簿比对</h2><code id="batch-task-id">—</code></div>
+            <div class="batch-task-actions"><strong id="batch-task-status">等待任务</strong><button id="cancel-batch-task" type="button" class="secondary" disabled>取消</button><button id="retry-batch-task" type="button" class="primary" disabled>重试失败项</button></div>
+          </div>
+          <div class="batch-task-progress-track" aria-hidden="true"><span id="batch-task-progress-bar"></span></div>
+          <div class="batch-task-progress-meta" role="status" aria-live="polite">
+            <strong id="batch-task-progress">正在读取任务</strong>
+            <span id="batch-task-detail">等待服务端状态</span>
+          </div>
+          <p class="batch-task-error hidden" id="batch-task-error" role="alert"></p>
+        </section>
+
+        <section class="workspace-section results-missing hidden" id="results-missing" aria-labelledby="missing-heading">
+          <div class="results-gate"><div class="state-illustration" aria-hidden="true">!</div><strong id="missing-heading">没有可恢复的差异任务</strong><span id="missing-detail">请返回“版本与快照”生成文件候选并执行差异比对。</span><a class="secondary result-back-link" href="{{ '/compare/demo' if demo_mode else '/compare' }}">返回版本与快照</a></div>
+        </section>
+
+        <section class="workspace-section diff-workbench hidden" id="diff-workbench" data-diff-state="diff_unavailable" aria-labelledby="workbench-heading">
+          <div class="section-heading workbench-heading-row">
+            <div>
+              <p class="eyebrow">WORKBOOK DIFF RESULTS</p>
+              <h2 id="workbench-heading">单工作簿差异</h2>
+              <p id="workbench-caption">从左侧选择工作簿查看结果状态。</p>
+            </div>
+            <div class="workbench-heading-actions">
+              <button id="compare-current-workbook" type="button" class="primary" disabled>比对当前工作簿</button>
+              <button id="toggle-detail" class="secondary icon-text-button" type="button" aria-expanded="true"><span aria-hidden="true">▥</span>详情</button>
+            </div>
+          </div>
+          <p class="result-action-message" id="result-action-message" role="status" aria-live="polite">选择左侧工作簿后可执行单工作簿比对。</p>
+
+          <div class="file-context" id="file-context">
+            <div class="file-context-side"><span>左侧 · SOURCE</span><strong id="context-old-file">未选择文件</strong><small id="context-old-source">等待候选</small></div>
+            <div class="context-path"><span>相对路径</span><code id="context-path">—</code><small id="context-file-status">未开始</small></div>
+            <div class="file-context-side is-new"><span>右侧 · TARGET</span><strong id="context-new-file">未选择文件</strong><small id="context-new-source">等待候选</small></div>
+          </div>
+
+          <div class="mock-result-notice hidden" id="mock-result-notice" role="status"><strong>UI 示例假数据</strong><span>仅用于确认结果页布局和交互，不是 Excel 解析或语义 Diff 结果。</span></div>
+
+          <div class="workbench-grid">
+            <aside class="workbook-pane" aria-label="工作簿导航">
+              <div class="pane-heading"><strong>工作簿</strong><span id="workbook-count">0</span></div>
+              <div class="workbook-empty" id="workbook-navigation"><span aria-hidden="true">▤</span><strong>暂无工作簿</strong><small>需要先从版本页执行差异比对。</small></div>
+            </aside>
+            <aside class="sheet-pane" aria-label="Sheet 导航">
+              <div class="pane-heading"><strong>Sheet</strong><span id="sheet-count">0</span></div>
+              <div class="sheet-empty" id="sheet-navigation"><span aria-hidden="true">▦</span><strong>暂无 Sheet 数据</strong><small>选择工作簿后显示结果状态。</small></div>
+            </aside>
+
+            <div class="diff-main-pane">
+              <div class="diff-toolbar"><div><strong>行与字段差异</strong><small>按业务主键组织</small></div><span class="table-status" id="diff-state-badge">未执行</span></div>
+              <div class="diff-partial-warning hidden" id="diff-partial-warning" role="alert"><strong>部分 Sheet 处理失败，可用结果已保留</strong><ul id="diff-partial-errors"></ul></div>
+              <div class="diff-state-view is-active" data-state="diff_unavailable"><div class="state-illustration" aria-hidden="true">—</div><h3>尚未执行语义 Diff</h3><p id="diff-unavailable-detail">已保留快照和工作簿上下文，可执行当前 modified 工作簿。</p></div>
+              <div class="diff-state-view" data-state="diff_loading"><div class="state-spinner" aria-hidden="true"></div><h3>正在比对当前工作簿</h3><p id="diff-loading-detail">等待工作簿结果。</p></div>
+              <div class="diff-state-view" data-state="diff_empty"><div class="state-illustration state-success" aria-hidden="true">✓</div><h3>语义 Diff 已完成，无差异</h3><p>该工作簿已完成解析与比对，差异数为 0。</p></div>
+              <div class="diff-state-view" data-state="diff_error"><div class="state-illustration state-error" aria-hidden="true">!</div><h3>语义 Diff 失败</h3><p id="diff-error-detail">失败信息将在此显示，不会降级为空差异。</p><ul class="diff-error-list" id="diff-error-list"></ul></div>
+              <div class="diff-state-view diff-ready-view" data-state="diff_ready">
+                <div class="semantic-table-header"><span>业务主键</span><span>变更类型</span><span>字段差异</span></div>
+                <div id="semantic-table-body"><div class="semantic-table-empty">等待工作簿结果。</div></div>
+              </div>
+            </div>
+
+            <aside class="detail-pane" id="detail-pane" aria-label="当前差异详情">
+              <div class="pane-heading"><strong>当前差异详情</strong><span id="detail-state">未选择</span></div>
+              <dl class="detail-list">
+                <div><dt>主键字段</dt><dd id="detail-primary-key">—</dd></div>
+                <div><dt>字段</dt><dd id="detail-field">—</dd></div>
+                <div><dt>字段状态</dt><dd id="detail-field-status">—</dd></div>
+                <div><dt>左侧值</dt><dd id="detail-source-value">—</dd></div>
+                <div><dt>右侧值</dt><dd id="detail-target-value">—</dd></div>
+                <div><dt>左侧定义</dt><dd id="detail-source-definition">—</dd></div>
+                <div><dt>右侧定义</dt><dd id="detail-target-definition">—</dd></div>
+                <div><dt>定位</dt><dd id="detail-location">—</dd></div>
+              </dl>
+              <p id="detail-caption">选择字段差异后显示详情。</p>
+            </aside>
+          </div>
+        </section>
+      </main>
+
+      <footer>M2-07 · 批量只读差异结果，不执行 Excel 写回或 SVN 写操作</footer>
+    </div>
+  </div>
+</body>
+</html>

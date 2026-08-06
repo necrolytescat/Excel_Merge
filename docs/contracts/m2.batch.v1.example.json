@@ -1,0 +1,318 @@
+{
+  "schema_version": "m2.batch.v1",
+  "task_id": "4f990dce-6564-4476-b1b5-838421e9c6b0",
+  "request_id": "a7e47a49-3308-4d10-936c-bbb80e4547b3",
+  "retry_of_task_id": null,
+  "status": "completed_with_failures",
+  "source": {
+    "endpoint_id": "KR_FIX_KR-Fix-1.0.0.0",
+    "revision": 123456
+  },
+  "target": {
+    "endpoint_id": "KR_FIX_KR-Fix-1.0.1.0",
+    "revision": 123789
+  },
+  "candidate_source": {
+    "kind": "m1_server_revalidated",
+    "ruleset": "m1.table-excel-candidates.v1",
+    "scope": "all",
+    "status": "ready",
+    "manifest_sha256": "11b481fcf64e0460ad4a30a3ad626ccda01352a42c2161cd10f22d6e15fbd982"
+  },
+  "execution_policy": {
+    "global_concurrency": 2,
+    "per_task_concurrency": 1,
+    "item_timeout_seconds": 600,
+    "automatic_retry_attempts": 0,
+    "max_recovery_attempts": 1
+  },
+  "progress": {
+    "total_items": 7,
+    "queued_items": 0,
+    "running_items": 0,
+    "succeeded_items": 1,
+    "business_failed_items": 2,
+    "orchestration_failed_items": 1,
+    "skipped_items": 3,
+    "cancelled_items": 0,
+    "processed_items": 7,
+    "ratio": 1.0
+  },
+  "items": [
+    {
+      "item_id": "8166814a-7251-4c8a-b2c4-536950972fe1",
+      "retry_of_item_id": null,
+      "ordinal": 0,
+      "candidate": {
+        "path": "AtlasConfig.xlsm",
+        "status": "modified",
+        "source": {
+          "exists": true,
+          "size_bytes": 125430,
+          "content_sha256": "98dfc44131b1432f878fcf792e678818db47a5fc1a2c2eb0ce5d17b71c9b1f0f",
+          "read_error": null
+        },
+        "target": {
+          "exists": true,
+          "size_bytes": 126004,
+          "content_sha256": "a32d0c3aeaa0d17c54dcf0d7f7b19f516ac032748549153ef425702fa22ee519",
+          "read_error": null
+        },
+        "fingerprint_sha256": "0cc6795aa89fc7d646e3ac02fa4230de9e2e3aba505d45f89ac9d0e209385e79"
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_AAAAAAAAAAAAAAAAAAAAAA",
+      "result_sha256": "430e5ae560fa6c83d6580e40f9e635294149cbdd9cacfb7020df9a2acb59a1e7",
+      "result_size_bytes": 466891,
+      "result_expires_at": "2026-09-04T02:07:18Z",
+      "orchestration_error": null,
+      "reason_code": null,
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "created_at": "2026-08-05T02:00:04Z",
+      "started_at": "2026-08-05T02:00:05Z",
+      "finished_at": "2026-08-05T02:01:16Z",
+      "updated_at": "2026-08-05T02:01:16Z"
+    },
+    {
+      "item_id": "4c32d15c-80d7-4874-aa97-049a97d912a4",
+      "retry_of_item_id": null,
+      "ordinal": 1,
+      "candidate": {
+        "path": "BattleConfig.xlsm",
+        "status": "modified",
+        "source": {
+          "exists": true,
+          "size_bytes": 93217,
+          "content_sha256": "e70f1ee9485cc39147d582f93fafd5951cb842115fc21a8bd1cbb62531ca5938",
+          "read_error": null
+        },
+        "target": {
+          "exists": true,
+          "size_bytes": 93810,
+          "content_sha256": "7c28df79d79ca59fe51ebf37a124a1d49b8fa8550bca8add39f3d80bfccac4a5",
+          "read_error": null
+        },
+        "fingerprint_sha256": "d0ce4d15ef404e9c046ca5636cf0797165315583643119743915ef7578aa2f68"
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 2,
+      "result_ref": "m2r_BBBBBBBBBBBBBBBBBBBBBB",
+      "result_sha256": "d4de48b872f336baf40da299026079045ca90922852aa977991dfd21d3202939",
+      "result_size_bytes": 183442,
+      "result_expires_at": "2026-09-04T02:07:18Z",
+      "orchestration_error": null,
+      "reason_code": null,
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "created_at": "2026-08-05T02:00:04Z",
+      "started_at": "2026-08-05T02:01:16Z",
+      "finished_at": "2026-08-05T02:02:09Z",
+      "updated_at": "2026-08-05T02:02:09Z"
+    },
+    {
+      "item_id": "edb96a65-b02b-4678-a99a-528ba15df098",
+      "retry_of_item_id": null,
+      "ordinal": 2,
+      "candidate": {
+        "path": "CharacterConfig.xlsm",
+        "status": "modified",
+        "source": {
+          "exists": true,
+          "size_bytes": 74112,
+          "content_sha256": "e8a0aa24b79c1cfa4ecff9eab58df497942abe8009b724587eb155817e67589b",
+          "read_error": null
+        },
+        "target": {
+          "exists": true,
+          "size_bytes": 74189,
+          "content_sha256": "79f0659e42390099fd12f7673f84a47ba788897f27e0e2b9c9b3fc7fcd0084fb",
+          "read_error": null
+        },
+        "fingerprint_sha256": "961c9e2b150272279135915ed769f100594417a654d85e5f6ab9d048a9dc8dd7"
+      },
+      "status": "business_failed",
+      "diff_status": "failed",
+      "diff_error_count": 1,
+      "result_ref": "m2r_CCCCCCCCCCCCCCCCCCCCCC",
+      "result_sha256": "fbe54bf852f46cfca4aab8739a3dc01730cefe60dfe8ad582fb1ff028323465e",
+      "result_size_bytes": 2811,
+      "result_expires_at": "2026-09-04T02:07:18Z",
+      "orchestration_error": null,
+      "reason_code": null,
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "created_at": "2026-08-05T02:00:04Z",
+      "started_at": "2026-08-05T02:02:09Z",
+      "finished_at": "2026-08-05T02:02:43Z",
+      "updated_at": "2026-08-05T02:02:43Z"
+    },
+    {
+      "item_id": "12287e7f-56d8-4d58-b939-a4f5706c99fa",
+      "retry_of_item_id": null,
+      "ordinal": 3,
+      "candidate": {
+        "path": "EventConfig.xlsm",
+        "status": "modified",
+        "source": {
+          "exists": true,
+          "size_bytes": 88201,
+          "content_sha256": "d85e73d6377497576301859056b664e84e76e9e6cbafc958a1de9136a7930a2a",
+          "read_error": null
+        },
+        "target": {
+          "exists": true,
+          "size_bytes": 88519,
+          "content_sha256": "efbb8895b1ef38d67e1f30a7d18834e3a04dbd20bca6f73e54d70b6990003eb5",
+          "read_error": null
+        },
+        "fingerprint_sha256": "018da9a0feb8b90ba692671173f102de7064496bc348493f8921eb7474d70ea7"
+      },
+      "status": "orchestration_failed",
+      "diff_status": null,
+      "diff_error_count": null,
+      "result_ref": null,
+      "result_sha256": null,
+      "result_size_bytes": null,
+      "result_expires_at": null,
+      "orchestration_error": {
+        "code": "BATCH_ITEM_TIMEOUT",
+        "message": "单工作簿处理超过 600 秒",
+        "retryable": true
+      },
+      "reason_code": null,
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "created_at": "2026-08-05T02:00:04Z",
+      "started_at": "2026-08-05T02:02:43Z",
+      "finished_at": "2026-08-05T02:07:18Z",
+      "updated_at": "2026-08-05T02:07:18Z"
+    },
+    {
+      "item_id": "e81de850-34d6-41c7-b9b2-4fe8edfc2811",
+      "retry_of_item_id": null,
+      "ordinal": 4,
+      "candidate": {
+        "path": "LegacyConfig.xls",
+        "status": "left_only",
+        "source": {
+          "exists": true,
+          "size_bytes": 58368,
+          "content_sha256": "3a79afcbc0e44bdf7fca75dc8d105cd434f974fa41984ec186fefa540895afb4",
+          "read_error": null
+        },
+        "target": {
+          "exists": false,
+          "size_bytes": null,
+          "content_sha256": null,
+          "read_error": null
+        },
+        "fingerprint_sha256": "a649c88f08f6a15b65c82dd30ad20c98ca79395afbeb7b54a09bc291c58d694f"
+      },
+      "status": "skipped",
+      "diff_status": null,
+      "diff_error_count": null,
+      "result_ref": null,
+      "result_sha256": null,
+      "result_size_bytes": null,
+      "result_expires_at": null,
+      "orchestration_error": null,
+      "reason_code": "BATCH_CANDIDATE_LEFT_ONLY",
+      "attempt_count": 0,
+      "recovery_count": 0,
+      "created_at": "2026-08-05T02:00:04Z",
+      "started_at": null,
+      "finished_at": "2026-08-05T02:00:04Z",
+      "updated_at": "2026-08-05T02:00:04Z"
+    },
+    {
+      "item_id": "3aa42c75-01ff-4c22-81cd-b4c56dd412e5",
+      "retry_of_item_id": null,
+      "ordinal": 5,
+      "candidate": {
+        "path": "NewFeatureConfig.xlsx",
+        "status": "right_only",
+        "source": {
+          "exists": false,
+          "size_bytes": null,
+          "content_sha256": null,
+          "read_error": null
+        },
+        "target": {
+          "exists": true,
+          "size_bytes": 64120,
+          "content_sha256": "c0f8ada1862a89b59ebdf87340c254576f73b5bec36219131125051aebc8bb80",
+          "read_error": null
+        },
+        "fingerprint_sha256": "14c3eed4b87250750026c199931de49e31c85ef3c203937066128933408bd8cf"
+      },
+      "status": "skipped",
+      "diff_status": null,
+      "diff_error_count": null,
+      "result_ref": null,
+      "result_sha256": null,
+      "result_size_bytes": null,
+      "result_expires_at": null,
+      "orchestration_error": null,
+      "reason_code": "BATCH_CANDIDATE_RIGHT_ONLY",
+      "attempt_count": 0,
+      "recovery_count": 0,
+      "created_at": "2026-08-05T02:00:04Z",
+      "started_at": null,
+      "finished_at": "2026-08-05T02:00:04Z",
+      "updated_at": "2026-08-05T02:00:04Z"
+    },
+    {
+      "item_id": "67a752f1-89f6-4e08-8924-450041cc0dd5",
+      "retry_of_item_id": null,
+      "ordinal": 6,
+      "candidate": {
+        "path": "UnreadableConfig.xlsm",
+        "status": "read_error",
+        "source": {
+          "exists": true,
+          "size_bytes": 52708,
+          "content_sha256": "20cb0584fbc3929c8d5d95db79f59bdce7d322fd9854713a3316dd162b4c1bb0",
+          "read_error": null
+        },
+        "target": {
+          "exists": true,
+          "size_bytes": 52802,
+          "content_sha256": null,
+          "read_error": {
+            "code": "SVN_FILE_READ_FAILED",
+            "message": "文件读取失败"
+          }
+        },
+        "fingerprint_sha256": "8ae2fba88a549229818771ece62b84a36c69a6db6f9a20a940d6dcfc32d77a39"
+      },
+      "status": "skipped",
+      "diff_status": null,
+      "diff_error_count": null,
+      "result_ref": null,
+      "result_sha256": null,
+      "result_size_bytes": null,
+      "result_expires_at": null,
+      "orchestration_error": null,
+      "reason_code": "BATCH_CANDIDATE_READ_ERROR",
+      "attempt_count": 0,
+      "recovery_count": 0,
+      "created_at": "2026-08-05T02:00:04Z",
+      "started_at": null,
+      "finished_at": "2026-08-05T02:00:04Z",
+      "updated_at": "2026-08-05T02:00:04Z"
+    }
+  ],
+  "errors": [],
+  "created_at": "2026-08-05T02:00:00Z",
+  "updated_at": "2026-08-05T02:07:18Z",
+  "preparation_started_at": "2026-08-05T02:00:01Z",
+  "prepared_at": "2026-08-05T02:00:04Z",
+  "started_at": "2026-08-05T02:00:05Z",
+  "cancel_requested_at": null,
+  "finished_at": "2026-08-05T02:07:18Z",
+  "expires_at": "2026-09-04T02:07:18Z"
+}

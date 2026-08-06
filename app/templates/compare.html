@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Config Atlas · {{ '流程示例' if demo_mode else '版本对比' }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.1">
+  <link rel="stylesheet" href="{{ url_for('static', path='compare_readability.css') }}?v=1.0.0">
+  <script src="{{ url_for('static', path='compare.js') }}?v=1.1.2" defer></script>
+</head>
+<body class="compare-readable-page" data-page-state="idle" data-demo-mode="{{ 'true' if demo_mode else 'false' }}">
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="主导航">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">CA</div>
+        <div><strong>Config Atlas</strong><span>EXCEL REVIEW · READ ONLY</span></div>
+      </div>
+      <nav class="sidebar-nav">
+        <p class="nav-label">系统配置</p>
+        <a class="nav-item" href="/"><span class="nav-icon" aria-hidden="true">⌂</span><span>基础连接</span></a>
+        <p class="nav-label">对比工具</p>
+        <a class="nav-item active" href="/compare" aria-current="page"><span class="nav-icon" aria-hidden="true">⇄</span><span>Excel Diff 工作台</span><span class="nav-current">M2</span></a>
+        <p class="nav-label">结果</p>
+        <button class="nav-item is-disabled" type="button" disabled title="后续里程碑开放"><span class="nav-icon" aria-hidden="true">▤</span><span>任务与报告</span><span class="nav-status">后续</span></button>
+      </nav>
+      <div class="sidebar-footer">
+        <span class="sidebar-readonly"><span class="status-dot status-ok"></span> 只读模式</span>
+        <span class="sidebar-version">M2 · Web 工作台</span>
+      </div>
+    </aside>
+
+    <div class="app-content compare-content">
+      <header class="topbar compare-topbar">
+        <div>
+          <p class="eyebrow">{{ 'DEVELOPMENT FLOW FIXTURE' if demo_mode else 'VERSION REVIEW / EXCEL DIFF' }}</p>
+          <h1>{{ 'Excel Diff 流程示例' if demo_mode else 'Excel Diff 工作台' }}</h1>
+          <p class="subtitle">{% if demo_mode %}独立开发页面，仅使用明确标注的 UI 假数据验证进入结果页及单工作簿操作。{% else %}冻结两个 SVN 端点并生成候选；一次批量任务完成全部 modified 工作簿语义 Diff。{% endif %}</p>
+        </div>
+        <div class="task-state" role="status" aria-live="polite">
+          <span>当前任务</span>
+          <strong id="current-task-state">等待选择端点</strong>
+          <small id="current-task-detail">未创建快照</small>
+        </div>
+      </header>
+
+      <nav class="task-page-nav" aria-label="Diff 任务页面">
+        <a class="task-page-tab is-active" href="{{ '/compare/demo' if demo_mode else '/compare' }}" aria-current="page"><span>1</span><strong>版本与快照</strong></a>
+        <a class="task-page-tab is-disabled" id="results-page-link" aria-disabled="true"><span>2</span><strong>差异结果</strong></a>
+        <span class="badge badge-light" id="registry-badge">正在读取端点注册表</span>
+      </nav>
+
+      <main class="layout compare-layout">
+        <section class="workspace-section endpoint-panel" aria-labelledby="snapshot-heading">
+          <div class="section-heading">
+            <div class="section-index">1A</div>
+            <div>
+              <p class="eyebrow">SNAPSHOT INPUT</p>
+              <h2 id="snapshot-heading">确认两个端点并生成快照</h2>
+              <p>选择两个不同端点，确认时分别冻结当前 HEAD，并读取 Table 下的 Excel 文件。</p>
+            </div>
+            <button id="swap-endpoints" type="button" class="secondary icon-text-button" disabled><span aria-hidden="true">⇄</span>交换端点</button>
+          </div>
+
+          <div class="endpoint-pair">
+            <div class="endpoint-side endpoint-side-old" id="source-card">
+              <div class="snapshot-card-heading">
+                <div><span class="side-label">SOURCE · 左侧端点</span><h3 id="source-label">未选择</h3></div>
+                <span class="status-dot status-unknown" id="source-status">待选择</span>
+              </div>
+              <label for="source-endpoint">分支目录名
+                <input id="source-endpoint" type="text" autocomplete="off" placeholder="输入 Trunk_KR 或 KR-Fix-1.0.0.0">
+                <small id="source-match-state">正在读取端点候选…</small>
+              </label>
+              <div class="endpoint-match-list" id="source-endpoint-matches" aria-label="左侧端点匹配结果"></div>
+              <p class="endpoint-url" id="source-url">请选择一个已启用端点</p>
+              <div class="scope-line"><span>读取范围</span><code>Table</code><small id="source-scope-detail">全量 Excel</small></div>
+            </div>
+
+            <div class="pair-divider" aria-hidden="true"><span>VS</span></div>
+
+            <div class="endpoint-side endpoint-side-new" id="target-card">
+              <div class="snapshot-card-heading">
+                <div><span class="side-label">TARGET · 右侧端点</span><h3 id="target-label">未选择</h3></div>
+                <span class="status-dot status-unknown" id="target-status">待选择</span>
+              </div>
+              <label for="target-endpoint">分支目录名
+                <input id="target-endpoint" type="text" autocomplete="off" placeholder="输入 Trunk_KR 或 KR-Fix-1.0.0.0">
+                <small id="target-match-state">正在读取端点候选…</small>
+              </label>
+              <div class="endpoint-match-list" id="target-endpoint-matches" aria-label="右侧端点匹配结果"></div>
+              <p class="endpoint-url" id="target-url">请选择一个已启用端点</p>
+              <div class="scope-line"><span>读取范围</span><code>Table</code><small id="target-scope-detail">全量 Excel</small></div>
+            </div>
+          </div>
+
+          <div class="snapshot-commandbar">
+            <div class="connection-state" id="endpoint-connection-state"><span class="status-dot status-unknown"></span><span><strong>等待端点注册表</strong><small>请选择两个不同端点</small></span></div>
+            <button id="create-snapshot" type="button" class="primary" disabled>锁定并读取快照 <span id="snapshot-button-state">不可用</span></button>
+          </div>
+          <p class="endpoint-form-error hidden" id="endpoint-form-error" role="alert"></p>
+
+          <div class="snapshot-summary" aria-labelledby="snapshot-summary-heading">
+            <div class="summary-title"><h3 id="snapshot-summary-heading">快照状态</h3><span class="badge badge-light" id="snapshot-summary-badge">待确认</span></div>
+            <div class="snapshot-stats">
+              <div class="snapshot-stat"><span>左侧文件</span><strong id="source-file-count">—</strong><small id="source-revision">选择端点后显示</small></div>
+              <div class="snapshot-stat"><span>右侧文件</span><strong id="target-file-count">—</strong><small id="target-revision">选择端点后显示</small></div>
+              <div class="snapshot-stat"><span>读取大小</span><strong id="snapshot-total-size">—</strong><small>Table Excel 合计</small></div>
+              <div class="snapshot-stat snapshot-stat-status"><span>阶段</span><strong id="snapshot-state">未执行</strong><small id="snapshot-captured-at">确认时冻结 HEAD</small></div>
+            </div>
+            <div class="snapshot-progress hidden" id="snapshot-progress" aria-live="polite">
+              <div class="snapshot-progress-track" aria-hidden="true"><span id="snapshot-progress-bar"></span></div>
+              <div class="snapshot-progress-meta"><strong id="snapshot-progress-text">准备读取</strong><span id="snapshot-progress-elapsed">已耗时 0 秒</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="workspace-section candidates-section" aria-labelledby="candidates-heading">
+          <div class="section-heading">
+            <div class="section-index">1B</div>
+            <div><p class="eyebrow">DIFF CANDIDATES · SNAPSHOT OUTPUT</p><h2 id="candidates-heading">需要比对的工作簿</h2><p>快照用于预览；批量任务会在相同冻结 Revision 上由服务端重建完整候选。</p></div>
+            <div class="candidate-heading-actions"><span class="count-badge" id="candidate-count">0 个候选</span><button id="execute-diff" type="button" class="primary" disabled>比对全部 <span id="execute-diff-count">0</span></button></div>
+          </div>
+          <div class="candidate-toolbar">
+            <label class="search-field" for="candidate-search"><span class="sr-only">搜索候选</span><span aria-hidden="true">⌕</span><input id="candidate-search" type="search" placeholder="搜索相对路径" disabled></label>
+            <label class="filter-field" for="candidate-status-filter"><span>文件状态</span><select id="candidate-status-filter" disabled><option value="all">全部状态</option><option value="modified">内容变化</option><option value="left_only">仅左侧</option><option value="right_only">仅右侧</option><option value="read_error">读取失败</option></select></label>
+          </div>
+          <div class="table-wrap candidate-table-wrap">
+            <table class="manifest-table">
+              <thead><tr><th>状态</th><th>逻辑相对路径</th><th>左侧文件信息</th><th>右侧文件信息</th><th>解析状态</th></tr></thead>
+              <tbody id="manifest-body"><tr class="manifest-empty"><td colspan="5"><div class="empty-symbol" aria-hidden="true">□</div><strong>尚未生成文件候选</strong><span>锁定快照后在此显示新增、删除和内容变化文件。</span></td></tr></tbody>
+            </table>
+          </div>
+          <p class="candidate-caption" id="manifest-caption">快照未执行</p>
+        </section>
+
+      </main>
+
+      <footer>M2-07 · 批量只读语义 Diff，不执行 Excel 写回或 SVN 写操作</footer>
+    </div>
+  </div>
+</body>
+</html>

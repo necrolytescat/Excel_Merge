@@ -1,0 +1,3739 @@
+{
+  "schema_version": "m2.d2-real-trial-evidence.v1",
+  "exported_at": "2026-08-06T03:57:26Z",
+  "source": {
+    "database": "var/m2-batch/batch.sqlite3",
+    "result_directory": "var/m2-batch/results/6131d91a-07b0-4820-a09e-2812e041a3ea",
+    "note": "result_ref 原始文件受 30 天保留策略约束；本文件保留任务索引和错误明细。"
+  },
+  "task": {
+    "task_id": "6131d91a-07b0-4820-a09e-2812e041a3ea",
+    "request_id": "e3f73b21-ad33-450c-9041-b5fe5acc4d04",
+    "status": "completed_with_failures",
+    "source": {
+      "endpoint_id": "KR_FIX_KR-Fix-1.0.0.0",
+      "revision": 26421
+    },
+    "target": {
+      "endpoint_id": "KR_FIX_KR-Fix-1.0.1.0",
+      "revision": 26421
+    },
+    "candidate_scope": "all",
+    "candidate_manifest_sha256": "e39acba6b27f83b9e8e36427d8ed010848454479e7a3f8424155ee133ca38f63",
+    "created_at": "2026-08-06T03:28:03.765043Z",
+    "prepared_at": "2026-08-06T03:28:14.849540Z",
+    "started_at": "2026-08-06T03:28:14.855674Z",
+    "finished_at": "2026-08-06T03:32:58.350412Z",
+    "expires_at": "2026-09-05T03:32:58.350412Z"
+  },
+  "summary": {
+    "total_items": 54,
+    "item_status_counts": {
+      "business_failed": 29,
+      "succeeded": 25
+    },
+    "diff_status_counts": {
+      "failed": 11,
+      "modified": 17,
+      "partial": 18,
+      "unchanged": 8
+    },
+    "orchestration_failure_count": 0,
+    "error_count": 166,
+    "validation_issue_count": 0
+  },
+  "error_summary": [
+    {
+      "code": "M2_CSV_MISSING",
+      "error_count": 88,
+      "workbook_count": 7
+    },
+    {
+      "code": "M2_CSV_PRIMARY_KEY_MISSING",
+      "error_count": 50,
+      "workbook_count": 13
+    },
+    {
+      "code": "M2_MANIFEST_FIELD_MISSING",
+      "error_count": 12,
+      "workbook_count": 6
+    },
+    {
+      "code": "M2_CSV_DUPLICATE_FIELD",
+      "error_count": 10,
+      "workbook_count": 5
+    },
+    {
+      "code": "M2_CSV_STRUCTURE_INVALID",
+      "error_count": 6,
+      "workbook_count": 3
+    }
+  ],
+  "representative_errors": [
+    {
+      "code": "M2_CSV_MISSING",
+      "stage": "csv_read",
+      "side": "source",
+      "workbook": "AttributeConfig.xlsm",
+      "sheet_name": "Base",
+      "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+      "message": "main 清单对应的 CSV 不存在或无法读取",
+      "details": {}
+    },
+    {
+      "code": "M2_CSV_PRIMARY_KEY_MISSING",
+      "stage": "csv_parse",
+      "side": "source",
+      "workbook": "ActivityBossConfigNew.xlsm",
+      "sheet_name": "Base",
+      "file": "ActivityBossConfigNew_Base.csv",
+      "message": "CSV 缺少业务主键字段",
+      "details": {
+        "candidates": [
+          "Id",
+          "id"
+        ]
+      }
+    },
+    {
+      "code": "M2_MANIFEST_FIELD_MISSING",
+      "stage": "manifest_parse",
+      "side": "source",
+      "workbook": "AreaClean.xlsm",
+      "sheet_name": "main",
+      "file": null,
+      "message": "main 清单行缺少 sheetName 或 tbxName",
+      "details": {
+        "row": 7
+      }
+    },
+    {
+      "code": "M2_CSV_DUPLICATE_FIELD",
+      "stage": "csv_parse",
+      "side": "source",
+      "workbook": "ArenaPeak.xlsm",
+      "sheet_name": "Map",
+      "file": "ArenaPeak_Map.csv",
+      "message": "CSV 存在重复字段名：Name",
+      "details": {
+        "field": "Name",
+        "columns": [
+          5,
+          8
+        ]
+      }
+    },
+    {
+      "code": "M2_CSV_STRUCTURE_INVALID",
+      "stage": "csv_parse",
+      "side": "source",
+      "workbook": "CalamityLines.xlsm",
+      "sheet_name": "BossLevelReward",
+      "file": "CalamityLines_BossLevelReward.csv",
+      "message": "CSV 业务字段之间存在空字段名",
+      "details": {
+        "column": 3
+      }
+    }
+  ],
+  "validation_issues": [],
+  "items": [
+    {
+      "ordinal": 0,
+      "item_id": "b9a5809b-15f7-4596-ba18-62e3d1935540",
+      "workbook": "Activity.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "38d958f725d986ed79dd5d153f907a01c9d566b8e84e0859972bb805c7084a06",
+      "source": {
+        "content_sha256": "955f13ed5e8e5a8f0d232241bf5b4856beb9c3df74c2e2ad291ca94347f8e3d7",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 78510
+      },
+      "target": {
+        "content_sha256": "7f3e1bb6fde4c5209d3d9364cc014527d46733d028cf5535b5766f99dc499b2a",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 78435
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_3wLjSacSENUA33hAkJNNjA",
+      "result_sha256": "a0efc1938855e15c8cd07e352fcfefbc82215791c9bbed4424ce5591a165848b",
+      "result_size_bytes": 19249,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/b9a5809b-15f7-4596-ba18-62e3d1935540.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 1,
+      "item_id": "58157259-46d3-4f69-aa97-bcd372f742bf",
+      "workbook": "ActivityAdventureConfigNew.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "c2273caa95a8955f3e93555bdb628c384d6bb5f2f57a12ffdde62b31062156e4",
+      "source": {
+        "content_sha256": "5d12ff21a3e654f4ca82a38ad5293710c8eabb79c998eae8723a50b1496f2795",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 159229
+      },
+      "target": {
+        "content_sha256": "0f212fcba2acb6e72cfd5820d5a84e1dec1fa092ff8f07d7aca500e91c393663",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 159423
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_OMHlK-c1fL4zOvic_0YwVA",
+      "result_sha256": "0f71fc6200b6f2f254063f079d286437bca74937ad9e01a5073ef29ddb3a0a1f",
+      "result_size_bytes": 25911,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/58157259-46d3-4f69-aa97-bcd372f742bf.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 2,
+      "item_id": "3a27d1e7-98c8-47ea-b795-2d19e6113d77",
+      "workbook": "ActivityBossConfigNew.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "673f937d2d5a547f3fb21cdbeae8bbd8d75bc79f250800d3880ba4bf1705146a",
+      "source": {
+        "content_sha256": "b850c947773a676feeff81b9c8ecf0f7323e521d85083edcd19a49d7ab25a39d",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 55119
+      },
+      "target": {
+        "content_sha256": "9a476037bbc72229a522da3d3f0f26b3cc31dd09be3332d594b12271fb2bc955",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 55125
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 4,
+      "result_ref": "m2r_nKdFDA48x03AIByLkLv7_Q",
+      "result_sha256": "6e4355ac466f18889549c8053e31fbb4a46bf6edfbdea491ea53989d14fa7d47",
+      "result_size_bytes": 9206,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/3a27d1e7-98c8-47ea-b795-2d19e6113d77.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "ActivityBossConfigNew.xlsm",
+          "sheet_name": "Base",
+          "file": "ActivityBossConfigNew_Base.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "ActivityBossConfigNew.xlsm",
+          "sheet_name": "Base",
+          "file": "ActivityBossConfigNew_Base.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "ActivityBossConfigNew.xlsm",
+          "sheet_name": "ChallengeBuff",
+          "file": "ActivityBossConfigNew_ChallengeBuff.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "ActivityBossConfigNew.xlsm",
+          "sheet_name": "ChallengeBuff",
+          "file": "ActivityBossConfigNew_ChallengeBuff.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 3,
+      "item_id": "be853e9e-5f66-40f0-82e7-19a8655cd8a4",
+      "workbook": "ActivityTask.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "2bab0f513edc57af60ab07c7b6caff7bc4bd27664a23aa77274fd5bf7743cc75",
+      "source": {
+        "content_sha256": "981a496e524b76f0aee441e03a0dcf83e752f18daa1d94855f0a45a05f07b012",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 43941
+      },
+      "target": {
+        "content_sha256": "04cf5641b873b688707d9c5eddf4269f9d7079ecc88fe70ed7bd51f9eec236fe",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 42673
+      },
+      "status": "succeeded",
+      "diff_status": "unchanged",
+      "diff_error_count": 0,
+      "result_ref": "m2r_nr-GpLPH5LPsN5zgrAvfgA",
+      "result_sha256": "d08736a10f8a29ce73c1c06911270c775e49b82c1b175c17aee2ba4657b5ff95",
+      "result_size_bytes": 7394,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/be853e9e-5f66-40f0-82e7-19a8655cd8a4.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 4,
+      "item_id": "98e012d9-0bab-48fb-8a10-4d6daa63f6d4",
+      "workbook": "AllianceOccupyConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "e1ca703d9557c20aa62c2b8613964881cbcd1c78c0182381253516343bc2e511",
+      "source": {
+        "content_sha256": "d6bf59479702d3ca0fd46b25b19902e4a4c2681c312d525ab46e75fea9379430",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 84957
+      },
+      "target": {
+        "content_sha256": "894ee0eeb21e170d4aafda221e8d46158c4aa973659fac510905e8a9e975c2c2",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 84962
+      },
+      "status": "succeeded",
+      "diff_status": "unchanged",
+      "diff_error_count": 0,
+      "result_ref": "m2r_Qf_GlfAzl53FfBddkjGrVQ",
+      "result_sha256": "8e3597c8302c81d08610d1982e12b18406b73364130844f51994eb62a929a35d",
+      "result_size_bytes": 20238,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/98e012d9-0bab-48fb-8a10-4d6daa63f6d4.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 5,
+      "item_id": "d027d9ad-f1c0-401b-b152-404f7e46475e",
+      "workbook": "AreaClean.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "36a57b396884e68d9938c8c4a40f925922f4a951ab2fc60299f84008249821dc",
+      "source": {
+        "content_sha256": "77100327f86aaaf249a36466c9a79661584933668bb07a66ee7be868f93a4813",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 713405
+      },
+      "target": {
+        "content_sha256": "132cffb2b4e6063d507193609f31b6a1b520202a34444dd09178505f303173a1",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 713388
+      },
+      "status": "business_failed",
+      "diff_status": "failed",
+      "diff_error_count": 2,
+      "result_ref": "m2r_pXW6ebQ07SCgf51gufOESQ",
+      "result_sha256": "13a75c14cd3cc18990598cdf63c959dd38fcea75c3eefe37ae1fc58dca255879",
+      "result_size_bytes": 1300,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/d027d9ad-f1c0-401b-b152-404f7e46475e.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_MANIFEST_FIELD_MISSING",
+          "stage": "manifest_parse",
+          "side": "source",
+          "workbook": "AreaClean.xlsm",
+          "sheet_name": "main",
+          "file": null,
+          "message": "main 清单行缺少 sheetName 或 tbxName",
+          "details": {
+            "row": 7
+          }
+        },
+        {
+          "code": "M2_MANIFEST_FIELD_MISSING",
+          "stage": "manifest_parse",
+          "side": "target",
+          "workbook": "AreaClean.xlsm",
+          "sheet_name": "main",
+          "file": null,
+          "message": "main 清单行缺少 sheetName 或 tbxName",
+          "details": {
+            "row": 7
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 6,
+      "item_id": "9486ad86-1982-4ddb-94b2-e9b7c4574ece",
+      "workbook": "ArenaPeak.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "ed829b54253471ead0f81815f8c714de623d21237aae19da2c6e28f5bf4285b7",
+      "source": {
+        "content_sha256": "3036ba59d186b783f4ca26aed5bcfe18f6251ab82c5b7b745f566442789e7e3f",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 351856
+      },
+      "target": {
+        "content_sha256": "caa435511c843554b39fe20fa4a84cfbaf4d08db0ee0b263ed43bf7e73c86631",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 350639
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 2,
+      "result_ref": "m2r_GLJr55hVZAfXnRnlhDJqzQ",
+      "result_sha256": "6655ef762d55a5271c7f7a0cfc51a44b6de98ca22d27aeb3fce842c8609ece63",
+      "result_size_bytes": 26136,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/9486ad86-1982-4ddb-94b2-e9b7c4574ece.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_DUPLICATE_FIELD",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "ArenaPeak.xlsm",
+          "sheet_name": "Map",
+          "file": "ArenaPeak_Map.csv",
+          "message": "CSV 存在重复字段名：Name",
+          "details": {
+            "field": "Name",
+            "columns": [
+              5,
+              8
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_DUPLICATE_FIELD",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "ArenaPeak.xlsm",
+          "sheet_name": "Map",
+          "file": "ArenaPeak_Map.csv",
+          "message": "CSV 存在重复字段名：Name",
+          "details": {
+            "field": "Name",
+            "columns": [
+              5,
+              8
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 7,
+      "item_id": "65f8522f-cda8-4d46-9046-8202b20f5aca",
+      "workbook": "ArenaTop64.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "710ca896fb34bbdfa4155c90185e98233394cf0abbbbc762137a4dbb1a5c0a4f",
+      "source": {
+        "content_sha256": "71c2f3aca990354e6d1471e08762f452a66e28e6a123ac069fdd7e2a04e4893b",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 68298
+      },
+      "target": {
+        "content_sha256": "cc13b51bba8dc208ed8c7398427fbdbdfaef994e3e8a99f488d9561daa9e4360",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 68337
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 2,
+      "result_ref": "m2r_V7XilTUCZkODlYXev68vyw",
+      "result_sha256": "2a2c2e8f7c7f4501fe3fc5cd077ea46b65fc04f76410ec277dde7c05a89dd675",
+      "result_size_bytes": 22999,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/65f8522f-cda8-4d46-9046-8202b20f5aca.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "ArenaTop64.xlsm",
+          "sheet_name": "Notice",
+          "file": "ArenaTop64_Notice.csv",
+          "message": "CSV 数据行缺少主键 Id",
+          "details": {
+            "row": 23,
+            "field": "Id"
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "ArenaTop64.xlsm",
+          "sheet_name": "Notice",
+          "file": "ArenaTop64_Notice.csv",
+          "message": "CSV 数据行缺少主键 Id",
+          "details": {
+            "row": 23,
+            "field": "Id"
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 8,
+      "item_id": "435a9d2f-c7a7-444d-953f-0658388bcef1",
+      "workbook": "AtlasConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "722f75968bf0930c25131943ec7ac99aec48d47ea289c0ad5eaf2e6d3a5e8496",
+      "source": {
+        "content_sha256": "0811e031e0630b7edfef24ff50814e0c49b82786e907fda52d1202b9ae81c952",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 261107
+      },
+      "target": {
+        "content_sha256": "9f3d455e7d81c434d5e8b7a0846fb083285fbf38804cf3bbfa1d03013ca41194",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 263360
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_MkLm2iurFv_IOEs2spN95Q",
+      "result_sha256": "d9e34f7083aa1a3c2586587e592a576484991a56075e53b1fe2d76e5cc307577",
+      "result_size_bytes": 144083,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/435a9d2f-c7a7-444d-953f-0658388bcef1.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 9,
+      "item_id": "1ad01dd8-701e-4683-ad9b-e8f652769ad0",
+      "workbook": "AttributeConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "c1d6aa7650624ceb749b3747286693bb8c4d31e7fdbf57e37175a89048f81554",
+      "source": {
+        "content_sha256": "5c53e0a9a831c6432d3acd246420d3e63ed616dedaa1868845caf639a70a7ccc",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 928471
+      },
+      "target": {
+        "content_sha256": "88f4310d2ae353b9fa55c294bc56761092fb7b673c95e74c38f317ef2627a794",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 907376
+      },
+      "status": "business_failed",
+      "diff_status": "failed",
+      "diff_error_count": 10,
+      "result_ref": "m2r_FIlpaJ4VVoGbFU-0kOD2OQ",
+      "result_sha256": "ad34d8aabc84f2fb624538f8decd9febc8fa8805196dc896a9cab54f0ebd5c39",
+      "result_size_bytes": 12856,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/1ad01dd8-701e-4683-ad9b-e8f652769ad0.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "AttributeConfig.xlsm",
+          "sheet_name": "Base",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "AttributeConfig.xlsm",
+          "sheet_name": "Base",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "AttributeConfig.xlsm",
+          "sheet_name": "Define",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "AttributeConfig.xlsm",
+          "sheet_name": "Define",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "AttributeConfig.xlsm",
+          "sheet_name": "AtrInherit",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "AttributeConfig.xlsm",
+          "sheet_name": "AtrInherit",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "AttributeConfig.xlsm",
+          "sheet_name": "Annotation",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "AttributeConfig.xlsm",
+          "sheet_name": "Annotation",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "AttributeConfig.xlsm",
+          "sheet_name": "Ratio",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "AttributeConfig.xlsm",
+          "sheet_name": "Ratio",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        }
+      ]
+    },
+    {
+      "ordinal": 10,
+      "item_id": "d6ba1ff4-cb7f-4fbf-94ed-d43e375ea989",
+      "workbook": "AVGStoryConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "ef849cf38fe3fbb27af777da5b87f2c4f93851c32bad0f436720e154ef48ed66",
+      "source": {
+        "content_sha256": "226b504f70da3f9f7135a66db3900974eabbb05aa4e363ca39c6058129e09c6d",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 611152
+      },
+      "target": {
+        "content_sha256": "2f037d8b82cfcf3bc02ed60f76ed4dce23a219946ddbe89c532aa5f52f7dd079",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 610843
+      },
+      "status": "business_failed",
+      "diff_status": "failed",
+      "diff_error_count": 4,
+      "result_ref": "m2r_sQhA-h7bpYsooK_uLZjhhw",
+      "result_sha256": "966f83cc051d3dd211c46fb3db67422c25057150d377e265755a6755a6b70c9a",
+      "result_size_bytes": 5129,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/d6ba1ff4-cb7f-4fbf-94ed-d43e375ea989.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "AVGStoryConfig.xlsm",
+          "sheet_name": "Base",
+          "file": "AVGStoryConfig_Base.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "AVGStoryConfig.xlsm",
+          "sheet_name": "Base",
+          "file": "AVGStoryConfig_Base.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "AVGStoryConfig.xlsm",
+          "sheet_name": "GroupIntro",
+          "file": "AVGStoryConfig_GroupIntro.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "AVGStoryConfig.xlsm",
+          "sheet_name": "GroupIntro",
+          "file": "AVGStoryConfig_GroupIntro.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 11,
+      "item_id": "7fec8618-908d-41fb-9b90-5571c9746711",
+      "workbook": "BalancedConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "ddea6dfc602c336df924161ee326a9e0fbc0b498d41567a0fa1b09b8d1093045",
+      "source": {
+        "content_sha256": "068ed7348729e6a216675bf7ec9ab0117b0f85843b36b8593c92022c6bb86069",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 36040
+      },
+      "target": {
+        "content_sha256": "525ce5a778219b8b8bf4ff604c786fa7a0c0f261d3d9d8932d03b8d5951e76e5",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 36031
+      },
+      "status": "succeeded",
+      "diff_status": "unchanged",
+      "diff_error_count": 0,
+      "result_ref": "m2r_XzG64t1O_-UZFMWvBXLBQA",
+      "result_sha256": "dab23711bcdc0e3fce9b446bad6a9a2ec5a00134c790b92307d0336ed6af6b3a",
+      "result_size_bytes": 7560,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/7fec8618-908d-41fb-9b90-5571c9746711.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 12,
+      "item_id": "5a529c7d-3295-4d81-9ef5-d89760a36938",
+      "workbook": "BattlePassConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "701a18ddca9c10f4039bbf6bac54e264696e0c961e67993ce02d7352c8e09ae5",
+      "source": {
+        "content_sha256": "85de165e68e84456746f90d5b9c964f06e2e15ab65b0d0024c011ab41b1ca225",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 185938
+      },
+      "target": {
+        "content_sha256": "306ad326dcc49eac396b47b61236213deb6327bb48a04d29cc92c96fb7a50169",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 186012
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_nx-3jQJRXsA9JsIH09uh7Q",
+      "result_sha256": "0059ee5881c34362b913eda73d0847f66f2c529002a08d59c324aa5ad922214e",
+      "result_size_bytes": 54660,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/5a529c7d-3295-4d81-9ef5-d89760a36938.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 13,
+      "item_id": "aa3cf2da-6f84-4d7c-b9cc-215f3c363d79",
+      "workbook": "Billboard.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "df8e05495ca6aca044aa7e93f74f7b54a0dfd7126f5f3f2e1e79ed27542198c8",
+      "source": {
+        "content_sha256": "b12ab248fc135b42a8eb955d6f4032e4c104dea9d4a3fdb9b25aee2722ebe3a2",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 70848
+      },
+      "target": {
+        "content_sha256": "76fe167abc63e111ab801016b5a0476f6c30c8e379ca6af512a1c2b08fe91728",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 70850
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_Hsk-yCQ0mhpvLj3qOqc--g",
+      "result_sha256": "da05a145c86298d922462d25c504c4b396f5c2e33d92ebfebd43ce999f50ebbd",
+      "result_size_bytes": 17948,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/aa3cf2da-6f84-4d7c-b9cc-215f3c363d79.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 14,
+      "item_id": "27b8e66c-da2c-4eac-947c-3a33fd5e2a88",
+      "workbook": "CalamityLines.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "cd8db2a94e748cd0f17a1f0910efd240892f1f11b40b64cfc63df3fbe4594bc6",
+      "source": {
+        "content_sha256": "5d57910d8326109f99ed4ac895a491ce254c1f32c42ff8cf79c25da27590dde9",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 52800
+      },
+      "target": {
+        "content_sha256": "7871da0a86e5f3202de80450ee7c4aa729940cbe3fdf854e3c6136bcaa2c7122",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 52801
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 4,
+      "result_ref": "m2r_Ax0kyiYPSA3elYxOX1B_lg",
+      "result_sha256": "bedab1276023cba3adaf41cd12c1025d4773b6fd346ab2bfb2c46fb22a68a81e",
+      "result_size_bytes": 17382,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/27b8e66c-da2c-4eac-947c-3a33fd5e2a88.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "CalamityLines.xlsm",
+          "sheet_name": "BossLevel",
+          "file": "CalamityLines_BossLevel.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "CalamityLines.xlsm",
+          "sheet_name": "BossLevel",
+          "file": "CalamityLines_BossLevel.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_STRUCTURE_INVALID",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "CalamityLines.xlsm",
+          "sheet_name": "BossLevelReward",
+          "file": "CalamityLines_BossLevelReward.csv",
+          "message": "CSV 业务字段之间存在空字段名",
+          "details": {
+            "column": 3
+          }
+        },
+        {
+          "code": "M2_CSV_STRUCTURE_INVALID",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "CalamityLines.xlsm",
+          "sheet_name": "BossLevelReward",
+          "file": "CalamityLines_BossLevelReward.csv",
+          "message": "CSV 业务字段之间存在空字段名",
+          "details": {
+            "column": 3
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 15,
+      "item_id": "086757db-3670-438b-925d-4cdfd3c09ace",
+      "workbook": "ChaosAttack.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "33d606403cc31225d129bf7f6665b5ad755a882bf2c05f5644fe0a28dc513bff",
+      "source": {
+        "content_sha256": "01827caa9526c0b66128891b75923c1b64d669446a3400b302623d46cf9aa94d",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 121217
+      },
+      "target": {
+        "content_sha256": "3c27e4507a0618e31ff737c5e6c4ff087f9a93a6bc7b7811034bc629b3425db2",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 123485
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 6,
+      "result_ref": "m2r_gqmhqcZB93PJ_O6HaHLtOQ",
+      "result_sha256": "b1c28a07a435a1dfb900b2d76350e0eba7e7077bb5d753bbbe3be8df23022489",
+      "result_size_bytes": 108741,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/086757db-3670-438b-925d-4cdfd3c09ace.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "ChaosAttack.xlsm",
+          "sheet_name": "Base",
+          "file": "ChaosAttack_Base.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "ChaosAttack.xlsm",
+          "sheet_name": "Base",
+          "file": "ChaosAttack_Base.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "ChaosAttack.xlsm",
+          "sheet_name": "DifficultGroup",
+          "file": "ChaosAttack_DifficultGroup.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "ChaosAttack.xlsm",
+          "sheet_name": "DifficultGroup",
+          "file": "ChaosAttack_DifficultGroup.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "ChaosAttack.xlsm",
+          "sheet_name": "BuffClient",
+          "file": "ChaosAttack_BuffClient.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "ChaosAttack.xlsm",
+          "sheet_name": "BuffClient",
+          "file": "ChaosAttack_BuffClient.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 16,
+      "item_id": "3d874356-f8f8-4ff7-bae9-5885bebcb8d9",
+      "workbook": "CharacterConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "675a48c679d6ebfaf93a90433da472a8e7e6ea56c46ad6e9b59a08466eec03a2",
+      "source": {
+        "content_sha256": "900d7290a893ca0a37434a4cbe2ddcb36b0ad10654f89e857be64c7ca4b24126",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 216596
+      },
+      "target": {
+        "content_sha256": "646493123f52a2b99c60f2954977123cd369db7234b9bb819d1f4a3ae1e88f11",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 216568
+      },
+      "status": "business_failed",
+      "diff_status": "failed",
+      "diff_error_count": 2,
+      "result_ref": "m2r_oo50DyPYzdKTiUBFHau7FA",
+      "result_sha256": "89f3be3be984df512ff54bfd114c19c53a4ad4e6cfa4b5831dd7f377497999f6",
+      "result_size_bytes": 1320,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/3d874356-f8f8-4ff7-bae9-5885bebcb8d9.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_MANIFEST_FIELD_MISSING",
+          "stage": "manifest_parse",
+          "side": "source",
+          "workbook": "CharacterConfig.xlsm",
+          "sheet_name": "main",
+          "file": null,
+          "message": "main 清单行缺少 sheetName 或 tbxName",
+          "details": {
+            "row": 10
+          }
+        },
+        {
+          "code": "M2_MANIFEST_FIELD_MISSING",
+          "stage": "manifest_parse",
+          "side": "target",
+          "workbook": "CharacterConfig.xlsm",
+          "sheet_name": "main",
+          "file": null,
+          "message": "main 清单行缺少 sheetName 或 tbxName",
+          "details": {
+            "row": 10
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 17,
+      "item_id": "483e7231-d88e-44d4-a13e-43650f0f1284",
+      "workbook": "ConditionConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "030afe05b68de3891901c6337785450dd66a80190bf440a46f494823d28d5ea8",
+      "source": {
+        "content_sha256": "d30150f6f053418ef7cdf18430d291671ecb49b4bf5795faedb3cd5667536f7b",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 70482
+      },
+      "target": {
+        "content_sha256": "a0e1c6e078ae032670b798ae3e9de7c59a6e9a23f9a077f943b34508ff5bdb4b",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 69924
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 2,
+      "result_ref": "m2r_3vCyNfANFhnZd2py7hYhQg",
+      "result_sha256": "f34851980ebb768ec40bac5c26b222d51935962f221e08b022553f6a4afb6b54",
+      "result_size_bytes": 6231,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/483e7231-d88e-44d4-a13e-43650f0f1284.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_DUPLICATE_FIELD",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "ConditionConfig.xlsm",
+          "sheet_name": "Target",
+          "file": "ConditionConfig_Target.csv",
+          "message": "CSV 存在重复字段名：Tip",
+          "details": {
+            "field": "Tip",
+            "columns": [
+              3,
+              6
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_DUPLICATE_FIELD",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "ConditionConfig.xlsm",
+          "sheet_name": "Target",
+          "file": "ConditionConfig_Target.csv",
+          "message": "CSV 存在重复字段名：Tip",
+          "details": {
+            "field": "Tip",
+            "columns": [
+              3,
+              6
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 18,
+      "item_id": "3abaf4b8-d15b-4bf5-9b5f-e312f9a6792b",
+      "workbook": "DreamLandConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "b2bcccfd69994bb51cc710b98bafc96d95e952b3cb46d0c1cd8c4a20586c52b0",
+      "source": {
+        "content_sha256": "00c6260b55483d842c5ed3364d96b875789ab518d7f762045455ed00577871d7",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 347410
+      },
+      "target": {
+        "content_sha256": "7fd89c9a1a7956565fbac68bb5e2b46fc487cecbefa1f1161575c07a254497d2",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 347409
+      },
+      "status": "succeeded",
+      "diff_status": "unchanged",
+      "diff_error_count": 0,
+      "result_ref": "m2r_RHw61dsQVi3rtbNj8uBZiw",
+      "result_sha256": "b370193a4a3cb77e07d417e87556625c540bb0e1f558b0de3caf5c0c54668a31",
+      "result_size_bytes": 28286,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/3abaf4b8-d15b-4bf5-9b5f-e312f9a6792b.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 19,
+      "item_id": "20232a17-54b4-482c-9429-a0f4034cfe05",
+      "workbook": "DressConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "224933f7d6bb3e1f2f107f2330488e10f0885cfe4bc742e19130a83e787f6548",
+      "source": {
+        "content_sha256": "042de3261c928e8c196f481cc01fa12b6653a5651a9ef443915cf2d8e239a4c7",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 124003
+      },
+      "target": {
+        "content_sha256": "a9f632be34b68a8e9d8e80206e95e2c61a2f66ecc51afe12a90392f704769f76",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 125342
+      },
+      "status": "business_failed",
+      "diff_status": "failed",
+      "diff_error_count": 14,
+      "result_ref": "m2r_6sLKBdpI1iAZGGHmEbm85w",
+      "result_sha256": "77527065173ec0d50b0ff649847461fdf813cdb2b0c1a5eda626202f1dfb3726",
+      "result_size_bytes": 17577,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/20232a17-54b4-482c-9429-a0f4034cfe05.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "DressConfig.xlsm",
+          "sheet_name": "Avatar",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "DressConfig.xlsm",
+          "sheet_name": "Avatar",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "DressConfig.xlsm",
+          "sheet_name": "Frame",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "DressConfig.xlsm",
+          "sheet_name": "Frame",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "DressConfig.xlsm",
+          "sheet_name": "Bubble",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "DressConfig.xlsm",
+          "sheet_name": "Bubble",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "DressConfig.xlsm",
+          "sheet_name": "CardBG",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "DressConfig.xlsm",
+          "sheet_name": "CardBG",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "DressConfig.xlsm",
+          "sheet_name": "Title",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "DressConfig.xlsm",
+          "sheet_name": "Title",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "DressConfig.xlsm",
+          "sheet_name": "Sticker",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "DressConfig.xlsm",
+          "sheet_name": "Sticker",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "DressConfig.xlsm",
+          "sheet_name": "StandShow",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "DressConfig.xlsm",
+          "sheet_name": "StandShow",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        }
+      ]
+    },
+    {
+      "ordinal": 20,
+      "item_id": "883cc0cb-6ef3-4e19-ae89-3cab43f6ece4",
+      "workbook": "DropNewConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "de19151943e7dc84b122e67722b3da3ce075f59faab14600fcdce9f5357b590b",
+      "source": {
+        "content_sha256": "122c8531ad81c4c092e2a5278fe1556f35830d2f3d8c333dc43b0644fae68c62",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 154378
+      },
+      "target": {
+        "content_sha256": "10aff200d7ca6d3d38ca8be9e31ee65733414ea68bb47f8762738e3c060d9c4e",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 154511
+      },
+      "status": "business_failed",
+      "diff_status": "failed",
+      "diff_error_count": 2,
+      "result_ref": "m2r__LJEwkj4DTE8RVNMkwBxdQ",
+      "result_sha256": "a358f255914941f61eb8c19b143405e3a49ef2e45e1cfa3236127be3ecad2d78",
+      "result_size_bytes": 2942,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/883cc0cb-6ef3-4e19-ae89-3cab43f6ece4.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_DUPLICATE_FIELD",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "DropNewConfig.xlsm",
+          "sheet_name": "Base",
+          "file": "DropNewConfig_Base.csv",
+          "message": "CSV 存在重复字段名：Mark",
+          "details": {
+            "field": "Mark",
+            "columns": [
+              5,
+              6
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_DUPLICATE_FIELD",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "DropNewConfig.xlsm",
+          "sheet_name": "Base",
+          "file": "DropNewConfig_Base.csv",
+          "message": "CSV 存在重复字段名：Mark",
+          "details": {
+            "field": "Mark",
+            "columns": [
+              5,
+              6
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 21,
+      "item_id": "1462ebd1-397d-45a0-97f1-754c19b1969e",
+      "workbook": "FatigueEffect.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "7555832b880f2775b08adf3c8e3217269c9f6910ed28032979df24237633ba09",
+      "source": {
+        "content_sha256": "5c29f4a25f2328110e3aa17870cdd9ed02aeef4d32228e350db5d6f5e9aa8b06",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 40978
+      },
+      "target": {
+        "content_sha256": "e6708a59f40ee8015b174ac2f1829f58567165074e3b28be3dd2df4b41ab9124",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 40980
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_b2QDhJhPK3RrrliM9NdITQ",
+      "result_sha256": "2a834ba25baf819d294c502b80290df014112849c4dfdcedc1cfaf7e718f6070",
+      "result_size_bytes": 5644,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/1462ebd1-397d-45a0-97f1-754c19b1969e.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 22,
+      "item_id": "06eb75e6-351b-4949-af99-7c637c11e736",
+      "workbook": "FormationConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "85dcfc3733284c707eb58bcbbb27eede8f81ca3145b78fa0832844dc251c6abc",
+      "source": {
+        "content_sha256": "3be59a3a22786a44f06433071222e36d885ce3b1e774ec2c582550a9e8d72397",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 78577
+      },
+      "target": {
+        "content_sha256": "38e52710e434eb7509a604384be9569bd833950315bd682a0ebf3c60f4811e75",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 81531
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_Y7hO7FAi0AlUB6pbaxYhEw",
+      "result_sha256": "1ef424f0b08e5c1cdb9ab774c3f0e8a11bcade996e0bb7db8d4da21a5b8be92f",
+      "result_size_bytes": 24614,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/06eb75e6-351b-4949-af99-7c637c11e736.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 23,
+      "item_id": "4ebfc794-65b5-420f-aa22-b911bf38ac0d",
+      "workbook": "GameConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "b913eb9fd950f5ac8e825db5a7632e5d817b8b919d97e797be73b1a378c865c5",
+      "source": {
+        "content_sha256": "bd26d626a62e014b6bd183332160d0b4408a116adf822df72a51b46067961a73",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 198432
+      },
+      "target": {
+        "content_sha256": "c3e4cb61399a256935f12ee89da9fc9909743985f475102eaf9ce438030d675e",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 198616
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 2,
+      "result_ref": "m2r_8OedVGn3QRn1YUEmeo_mTA",
+      "result_sha256": "934d8903ae2bf9a76e34275d0ec0157fd347ccc72ef2683ee14212ae5cec1eb0",
+      "result_size_bytes": 23607,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/4ebfc794-65b5-420f-aa22-b911bf38ac0d.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_STRUCTURE_INVALID",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "GameConfig.xlsm",
+          "sheet_name": "Mail",
+          "file": "GameConfig_Mail.csv",
+          "message": "CSV 业务字段之间存在空字段名",
+          "details": {
+            "column": 14
+          }
+        },
+        {
+          "code": "M2_CSV_STRUCTURE_INVALID",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "GameConfig.xlsm",
+          "sheet_name": "Mail",
+          "file": "GameConfig_Mail.csv",
+          "message": "CSV 业务字段之间存在空字段名",
+          "details": {
+            "column": 14
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 24,
+      "item_id": "dfaee1f0-e35d-4324-8b26-3e8479443ab2",
+      "workbook": "GamePlayCollection.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "e2195673a617ae9142fc28a919311f411b0ab74e67cab2266fd0e18ee5b4e64e",
+      "source": {
+        "content_sha256": "12e8441144efd67dadc757f06d2e75806511ddf1e93d6ce8e602ae4c27ea7c51",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 33624
+      },
+      "target": {
+        "content_sha256": "54602f4c932c31b7f7fae08f4002e03ec321ef2ef8ef6b08adb77a83588b6f4f",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 33640
+      },
+      "status": "succeeded",
+      "diff_status": "unchanged",
+      "diff_error_count": 0,
+      "result_ref": "m2r_jDiT8z3xTOl6PNpl2aIrKQ",
+      "result_sha256": "4cf06ab84de19c9c176eb1d060a1348208a335572ac77ed6abb4fd7ec6e55a10",
+      "result_size_bytes": 6997,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/dfaee1f0-e35d-4324-8b26-3e8479443ab2.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 25,
+      "item_id": "a8e7da5c-87fb-4e1a-95d1-59630c45770d",
+      "workbook": "GuideNew.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "c0e5df0e5f01d248112fa869a49cf9813c5f4c71ca4ae7a11e6536c4d684cc6f",
+      "source": {
+        "content_sha256": "50a9c27cfcd7f49d041686a719b438d5cbc721a174cd47afca84ad610cd0c7df",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 108885
+      },
+      "target": {
+        "content_sha256": "9e7de83c0114fef0d11611fbc6ead7404e7e0229b6e30039fdd3c58f6757e9c8",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 108897
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_W-vsBHvIZEAI0dHhjvcL7A",
+      "result_sha256": "b9cd737a342cc7730b6c4d955a0da3aef044e9bb995459ffe6dfea33148e213f",
+      "result_size_bytes": 8770,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/a8e7da5c-87fb-4e1a-95d1-59630c45770d.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 26,
+      "item_id": "5059b8dd-9c5e-4a3b-af9f-78817c9a15e5",
+      "workbook": "HeroConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "d2286a4155638cd7eea4d005ef2e211ba75fa0849171a87f67c4a8a0eeff0a8a",
+      "source": {
+        "content_sha256": "897031133bfdcfebeae192f664a37a49c9a5534594356aef3d11d833846d535d",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 1271232
+      },
+      "target": {
+        "content_sha256": "1c4ea919b95781266a131bbf9583c16cdc2bb18df553b4aa17fb7209a1642a9f",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 1271230
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 36,
+      "result_ref": "m2r_TjCbZhWddTeUX1BEbShpvA",
+      "result_sha256": "5f30783f726d3fedd09a95d0715fb95aaefd5eb7240bc492f5a6944070a54862",
+      "result_size_bytes": 39961,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/5059b8dd-9c5e-4a3b-af9f-78817c9a15e5.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Global",
+          "file": "=IF(C2=1,_xlfn.CONCAT(\"HeroConfig_\",A2),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Global",
+          "file": "=IF(C2=1,_xlfn.CONCAT(\"HeroConfig_\",A2),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Quality",
+          "file": "=IF(C3=1,_xlfn.CONCAT(\"HeroConfig_\",A3),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Quality",
+          "file": "=IF(C3=1,_xlfn.CONCAT(\"HeroConfig_\",A3),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Base",
+          "file": "=IF(C4=1,_xlfn.CONCAT(\"HeroConfig_\",A4),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Base",
+          "file": "=IF(C4=1,_xlfn.CONCAT(\"HeroConfig_\",A4),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Phasic",
+          "file": "=IF(C5=1,_xlfn.CONCAT(\"HeroConfig_\",A5),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Phasic",
+          "file": "=IF(C5=1,_xlfn.CONCAT(\"HeroConfig_\",A5),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Skin",
+          "file": "=IF(C6=1,_xlfn.CONCAT(\"HeroConfig_\",A6),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Skin",
+          "file": "=IF(C6=1,_xlfn.CONCAT(\"HeroConfig_\",A6),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "LevelUp",
+          "file": "=IF(C7=1,_xlfn.CONCAT(\"HeroConfig_\",A7),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "LevelUp",
+          "file": "=IF(C7=1,_xlfn.CONCAT(\"HeroConfig_\",A7),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Reborn_TransferLevel",
+          "file": "=IF(C8=1,_xlfn.CONCAT(\"HeroConfig_\",A8),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Reborn_TransferLevel",
+          "file": "=IF(C8=1,_xlfn.CONCAT(\"HeroConfig_\",A8),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Reborn_LevelControl",
+          "file": "=IF(C9=1,_xlfn.CONCAT(\"HeroConfig_\",A9),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Reborn_LevelControl",
+          "file": "=IF(C9=1,_xlfn.CONCAT(\"HeroConfig_\",A9),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Breach",
+          "file": "=IF(C10=1,_xlfn.CONCAT(\"HeroConfig_\",A10),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Breach",
+          "file": "=IF(C10=1,_xlfn.CONCAT(\"HeroConfig_\",A10),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Awake",
+          "file": "=IF(C11=1,_xlfn.CONCAT(\"HeroConfig_\",A11),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Awake",
+          "file": "=IF(C11=1,_xlfn.CONCAT(\"HeroConfig_\",A11),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "AttrNew",
+          "file": "=IF(C12=1,_xlfn.CONCAT(\"HeroConfig_\",A12),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "AttrNew",
+          "file": "=IF(C12=1,_xlfn.CONCAT(\"HeroConfig_\",A12),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Profession",
+          "file": "=IF(C13=1,_xlfn.CONCAT(\"HeroConfig_\",A13),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Profession",
+          "file": "=IF(C13=1,_xlfn.CONCAT(\"HeroConfig_\",A13),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Force",
+          "file": "=IF(C14=1,_xlfn.CONCAT(\"HeroConfig_\",A14),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Force",
+          "file": "=IF(C14=1,_xlfn.CONCAT(\"HeroConfig_\",A14),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "SkillCardSkin",
+          "file": "=IF(C15=1,_xlfn.CONCAT(\"HeroConfig_\",A15),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "SkillCardSkin",
+          "file": "=IF(C15=1,_xlfn.CONCAT(\"HeroConfig_\",A15),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Skill_LevelUp",
+          "file": "=IF(C16=1,_xlfn.CONCAT(\"HeroConfig_\",A16),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Skill_LevelUp",
+          "file": "=IF(C16=1,_xlfn.CONCAT(\"HeroConfig_\",A16),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Skill_LevelUp_Description",
+          "file": "=IF(C17=1,_xlfn.CONCAT(\"HeroConfig_\",A17),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Skill_LevelUp_Description",
+          "file": "=IF(C17=1,_xlfn.CONCAT(\"HeroConfig_\",A17),\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Reburn_Quality",
+          "file": "HeroConfig_Reburn_Quality.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "Reburn_Quality",
+          "file": "HeroConfig_Reburn_Quality.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_STRUCTURE_INVALID",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "ReburnAwake",
+          "file": "HeroConfig_ReburnAwake.csv",
+          "message": "CSV 业务字段之间存在空字段名",
+          "details": {
+            "column": 8
+          }
+        },
+        {
+          "code": "M2_CSV_STRUCTURE_INVALID",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "HeroConfig.xlsm",
+          "sheet_name": "ReburnAwake",
+          "file": "HeroConfig_ReburnAwake.csv",
+          "message": "CSV 业务字段之间存在空字段名",
+          "details": {
+            "column": 8
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 27,
+      "item_id": "be39c983-bc43-4a99-a718-7b1cbcfd41de",
+      "workbook": "HotRecommend.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "938cac5302d2a49743279542339b0c25e94e7e0e33e86484e558fc84bb163232",
+      "source": {
+        "content_sha256": "1967771f068dbea9324bba892e4188e7db9b5525498dbe3c1a1ef76be759f57a",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 68764
+      },
+      "target": {
+        "content_sha256": "c64f8bef43c8b4b6c065e7bab0877dee9b494eac44d696704e9b609facb25348",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 69361
+      },
+      "status": "business_failed",
+      "diff_status": "failed",
+      "diff_error_count": 2,
+      "result_ref": "m2r_zs4gtUAJZG1YsOuVeLMTjw",
+      "result_sha256": "37e8a76602471f316930fa8623c73a00da16f80b81128802cd174e64f2b958db",
+      "result_size_bytes": 1311,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/be39c983-bc43-4a99-a718-7b1cbcfd41de.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_MANIFEST_FIELD_MISSING",
+          "stage": "manifest_parse",
+          "side": "source",
+          "workbook": "HotRecommend.xlsm",
+          "sheet_name": "main",
+          "file": null,
+          "message": "main 清单行缺少 sheetName 或 tbxName",
+          "details": {
+            "row": 10
+          }
+        },
+        {
+          "code": "M2_MANIFEST_FIELD_MISSING",
+          "stage": "manifest_parse",
+          "side": "target",
+          "workbook": "HotRecommend.xlsm",
+          "sheet_name": "main",
+          "file": null,
+          "message": "main 清单行缺少 sheetName 或 tbxName",
+          "details": {
+            "row": 10
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 28,
+      "item_id": "821a0402-ae31-401a-a60e-668955a4300f",
+      "workbook": "IconDisplay.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "dc30c80caa4a33e3bdca94bdaabdbed7a314c6a1e49b507f6473bc883534d1f7",
+      "source": {
+        "content_sha256": "025eecb9d3d87128804ed0c11dc3e89042ac415d24b80e09e53560eb7f76df83",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 39956
+      },
+      "target": {
+        "content_sha256": "320c4057220fb4f90e88b5508786e7b07c14ffe0fd8fae856d64bb931af9a174",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 39301
+      },
+      "status": "succeeded",
+      "diff_status": "unchanged",
+      "diff_error_count": 0,
+      "result_ref": "m2r_eHN2q2nwMqtRyFGLe_ipjw",
+      "result_sha256": "cf5a9762f338dddee6d2f7cfd4b9d927f33d0724cde7a456fbf42ffe4314e77c",
+      "result_size_bytes": 5315,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/821a0402-ae31-401a-a60e-668955a4300f.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 29,
+      "item_id": "1fce328a-3d68-442e-8619-77a39248df34",
+      "workbook": "ImpactConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "d590646a425f402e03c1b8d5eec57c8515a23299c67912b87868902cd654baff",
+      "source": {
+        "content_sha256": "438f734e4cd71ccaa0c04cbdedafc309f379065cddfff8bf39a5494d2905a418",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 6518665
+      },
+      "target": {
+        "content_sha256": "d27ca04324287b173ff4a914f2d812080df085f6f1c8d7801509206e331f00cb",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 6518693
+      },
+      "status": "business_failed",
+      "diff_status": "failed",
+      "diff_error_count": 2,
+      "result_ref": "m2r_eYk6Czl1Gq9R2wDBBwJI2A",
+      "result_sha256": "968f3882674f60cf4c97a53dcf86cbd874f92a6e6c18ec0ad61bac74230bb15a",
+      "result_size_bytes": 1311,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/1fce328a-3d68-442e-8619-77a39248df34.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_MANIFEST_FIELD_MISSING",
+          "stage": "manifest_parse",
+          "side": "source",
+          "workbook": "ImpactConfig.xlsm",
+          "sheet_name": "main",
+          "file": null,
+          "message": "main 清单行缺少 sheetName 或 tbxName",
+          "details": {
+            "row": 19
+          }
+        },
+        {
+          "code": "M2_MANIFEST_FIELD_MISSING",
+          "stage": "manifest_parse",
+          "side": "target",
+          "workbook": "ImpactConfig.xlsm",
+          "sheet_name": "main",
+          "file": null,
+          "message": "main 清单行缺少 sheetName 或 tbxName",
+          "details": {
+            "row": 19
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 30,
+      "item_id": "b33b29d6-9023-44cf-9537-26fa60e61ffa",
+      "workbook": "InspirationConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "add7d682748237dc016485229e2953abdfc01620866c9ee51cbc3368e132f63a",
+      "source": {
+        "content_sha256": "5becc18c2bb6489898a83be771dc16250d3f00e355c7959c9fca8a54cbdcf59f",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 134571
+      },
+      "target": {
+        "content_sha256": "2bd010fc223c6953cdd9cf5c5cd83544d51d21d7886726b30f612ce0b8f0ccae",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 134554
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 2,
+      "result_ref": "m2r_kCs8yfRdwEO8593pa4naFQ",
+      "result_sha256": "797ae67b18fb0895d40e841763c3e03bfa689eb4e6dfd2835fcdcf22f313e01c",
+      "result_size_bytes": 31289,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/b33b29d6-9023-44cf-9537-26fa60e61ffa.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "InspirationConfig.xlsm",
+          "sheet_name": "Quality",
+          "file": "InspirationConfig_Quality.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "InspirationConfig.xlsm",
+          "sheet_name": "Quality",
+          "file": "InspirationConfig_Quality.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 31,
+      "item_id": "08f87a6e-82b6-49c3-8f26-11ce7d6ad3e6",
+      "workbook": "ItemConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "2cc894a49aaf2465e9c1210de8a7fde0e3b027aac3f7b66a74c63dbba4e515ac",
+      "source": {
+        "content_sha256": "d1bdb6af710162e6fd4db7b206e6aa579f1f74ba6f19c94bd24464d579e98e8a",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 778260
+      },
+      "target": {
+        "content_sha256": "4d7d6e0c89e3739fd85121289914597917e05b422f49aed94ee046eee70e1de7",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 957617
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_O-24cGDiiOkf7PP1_82QZQ",
+      "result_sha256": "ff3125e0027f2ef53c38368deaa585d4bcd94af5e0561348fc79854ad9535a19",
+      "result_size_bytes": 1434340,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/08f87a6e-82b6-49c3-8f26-11ce7d6ad3e6.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 32,
+      "item_id": "09f5f815-8e5a-4989-9664-4d42f09bf6d9",
+      "workbook": "LobbySkin.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "66ce188bb9661f7a7d95447c59ff773c845842f474543ddaac6f13b61a5f964f",
+      "source": {
+        "content_sha256": "ebc0c710f6a2394fb5f87b98ce9464affae9c057a3cba2b47b37559eea784044",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 23489
+      },
+      "target": {
+        "content_sha256": "4f5a00908930aadd5bcc6bc8ae12b641b4b67ff5c91ba0f94e0123d6b012a6ff",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 19286
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_gEEs-o26OsJBL-OPH65OBw",
+      "result_sha256": "2c28743430c7c894db8423beebb8366c6d3ef56a5889e44b0050fe130118b2cd",
+      "result_size_bytes": 4485,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/09f5f815-8e5a-4989-9664-4d42f09bf6d9.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 33,
+      "item_id": "eec9bdf1-133f-4a6a-8996-8e1213db0ad3",
+      "workbook": "Loot.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "c8b6c2599d424f9884ee9b6f3b95feebb86d717dfb3774ab27cb707fdd5c935b",
+      "source": {
+        "content_sha256": "a6d1400d735c308039a798429ba3a1f2cfeeae9b5a2d6a2ded1b08aea6e3d8d4",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 328556
+      },
+      "target": {
+        "content_sha256": "3dec3d051ae5e86618dd0e610863b80022617ab9c6708c2ee65150e5d375730f",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 331091
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_16wA0UYcmHumUcGwsniziA",
+      "result_sha256": "6d580ee6bec4140068b7b041336c02c2c4e171ba9be1fe15cc73a5f49d1b477c",
+      "result_size_bytes": 4758432,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/eec9bdf1-133f-4a6a-8996-8e1213db0ad3.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 34,
+      "item_id": "5fa0c448-7f7e-4263-accd-93e079affd2f",
+      "workbook": "LotteryConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "eceb369baad0eaf23eeef0fe979073af8fbffbcf50f3bfae261aed6d5f4edebe",
+      "source": {
+        "content_sha256": "958d1aaee63b1a1caa69bdeb60e1e677dce845159d2a4099ec9a1d4faabb07be",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 173918
+      },
+      "target": {
+        "content_sha256": "27360d8be875a282f21d0f3390fdf771d9c3607ff7a710342b36c244d988f735",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 174294
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 4,
+      "result_ref": "m2r_Rj0IyPWxw6CsOI0_ikeLug",
+      "result_sha256": "ce81c9bf8b4246d70dae4a6b282bc9e179844df64913a5495eb94c1c3e143a0c",
+      "result_size_bytes": 304447,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/5fa0c448-7f7e-4263-accd-93e079affd2f.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "LotteryConfig.xlsm",
+          "sheet_name": "Banner",
+          "file": "LotteryConfig_Banner.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "LotteryConfig.xlsm",
+          "sheet_name": "Banner",
+          "file": "LotteryConfig_Banner.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "LotteryConfig.xlsm",
+          "sheet_name": "Shop",
+          "file": "LotteryConfig_Shop.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "LotteryConfig.xlsm",
+          "sheet_name": "Shop",
+          "file": "LotteryConfig_Shop.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 35,
+      "item_id": "fd078875-0b0b-4d4d-a904-cd3218040e07",
+      "workbook": "MainActivity.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "f17b1d820cc84e5ba64cea4a73fbf3e94b7685fb7f5966445b9ed10b337a7a06",
+      "source": {
+        "content_sha256": "b8f1576921c3fd02200b7a3d7b451ef1243d47ce05fc8c0ba14e25c62fa48040",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 85669
+      },
+      "target": {
+        "content_sha256": "fc063d8d48e137890e36c5b881c0ffafda1702191a3d69001495fd87b981a572",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 85748
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 6,
+      "result_ref": "m2r_QbHEI6iexJb4J7oV4Iz1_A",
+      "result_sha256": "d2be77c6ab4572ad51ea28671b4784a2f3b7086793dc77fd357a2740f8102e1a",
+      "result_size_bytes": 25202,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/fd078875-0b0b-4d4d-a904-cd3218040e07.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "MainActivity.xlsm",
+          "sheet_name": "FunctionName",
+          "file": "MainActivity_FunctionName.csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "MainActivity.xlsm",
+          "sheet_name": "FunctionName",
+          "file": "MainActivity_FunctionName.csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_DUPLICATE_FIELD",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "MainActivity.xlsm",
+          "sheet_name": "GroupPack",
+          "file": "MainActivity_GroupPack.csv",
+          "message": "CSV 存在重复字段名：Type",
+          "details": {
+            "field": "Type",
+            "columns": [
+              6,
+              7
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_DUPLICATE_FIELD",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "MainActivity.xlsm",
+          "sheet_name": "GroupPack",
+          "file": "MainActivity_GroupPack.csv",
+          "message": "CSV 存在重复字段名：Type",
+          "details": {
+            "field": "Type",
+            "columns": [
+              6,
+              7
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "MainActivity.xlsm",
+          "sheet_name": "BattlePass",
+          "file": "MainActivity_BattlePass.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "MainActivity.xlsm",
+          "sheet_name": "BattlePass",
+          "file": "MainActivity_BattlePass.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 36,
+      "item_id": "b2b3f130-7e36-4cc0-8c91-29244cad8a7d",
+      "workbook": "Monster.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "f6a6dfebbfd5fc3abd2eb471fd770b129c4c9f08b3342db957003eaf4039fd43",
+      "source": {
+        "content_sha256": "61e4bfa6aa9b71fcfe690d227de5f99edf793abae27f7dbac9465ce8eeb4e996",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 3674599
+      },
+      "target": {
+        "content_sha256": "280b1214bb86daed423d7a9d4cf716ad35722db9a653a4f85add6dba3cffa169",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 3668099
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 2,
+      "result_ref": "m2r_zQqzUCKafcKLYJNgOkiw1A",
+      "result_sha256": "44dd68ef5f4c6041dfec8175896ce4552e913e7d2e348bd48b3559f0b6b3a5d1",
+      "result_size_bytes": 14613,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/b2b3f130-7e36-4cc0-8c91-29244cad8a7d.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_DUPLICATE_FIELD",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "Monster.xlsm",
+          "sheet_name": "Base",
+          "file": "Monster_Base.csv",
+          "message": "CSV 存在重复字段名：Desc",
+          "details": {
+            "field": "Desc",
+            "columns": [
+              2,
+              3
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_DUPLICATE_FIELD",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "Monster.xlsm",
+          "sheet_name": "Base",
+          "file": "Monster_Base.csv",
+          "message": "CSV 存在重复字段名：Desc",
+          "details": {
+            "field": "Desc",
+            "columns": [
+              2,
+              3
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 37,
+      "item_id": "90d26fe7-119f-4017-8b7a-a9eae8f8063c",
+      "workbook": "Outfit.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "0023fffd81d04f9977ab223a4b64247edf08f7220f43f8033ba6c9417d2be539",
+      "source": {
+        "content_sha256": "e145fcf85260554a7cd3f43a89b6ae042bcebcdb282843e99188f116d683c000",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 383677
+      },
+      "target": {
+        "content_sha256": "9111025dbbc425a8202fc8992454f9ad807ae08133a5e421afda352a52f54006",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 383686
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_8_ndiDTRCSkrAESwKnQrUg",
+      "result_sha256": "86d828137b72706610fe80f393c4e101593a717f9d8dd0abb8bbc6338ce70f72",
+      "result_size_bytes": 33294,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/90d26fe7-119f-4017-8b7a-a9eae8f8063c.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 38,
+      "item_id": "dfb21a44-41d4-47a8-acc1-816201e1d51c",
+      "workbook": "PetConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "5a15a0a69d507ea06f9b7ea2871664cff3271779cf58b856d8b6c76478178788",
+      "source": {
+        "content_sha256": "acbea04485addb5347f358a3a0c873ae34df436e6dc0fd0228e0dae358f2badd",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 207225
+      },
+      "target": {
+        "content_sha256": "b21add453f007b057e3fff1addeae8483f1b28dd657072b96c37ecdbecc73ba0",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 207450
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 16,
+      "result_ref": "m2r_jU0kraaHVAgNG3B8aTz3VA",
+      "result_sha256": "d6e825e824c92d57b3cc13f1560c3ffd6b5c916be5ae4b2bad92289bb8377e81",
+      "result_size_bytes": 33218,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/dfb21a44-41d4-47a8-acc1-816201e1d51c.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "Base",
+          "file": "PetConfig_Base.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "Base",
+          "file": "PetConfig_Base.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "PetQuality",
+          "file": "PetConfig_PetQuality.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "PetQuality",
+          "file": "PetConfig_PetQuality.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "UpGrade",
+          "file": "PetConfig_UpGrade.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "UpGrade",
+          "file": "PetConfig_UpGrade.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "UpStar",
+          "file": "PetConfig_UpStar.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "UpStar",
+          "file": "PetConfig_UpStar.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "Skill",
+          "file": "PetConfig_Skill.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "Skill",
+          "file": "PetConfig_Skill.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "SuitSkill",
+          "file": "PetConfig_SuitSkill.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "SuitSkill",
+          "file": "PetConfig_SuitSkill.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "OutfitLevel",
+          "file": "PetConfig_OutfitLevel.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "OutfitLevel",
+          "file": "PetConfig_OutfitLevel.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "ValueQuality",
+          "file": "PetConfig_ValueQuality.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "PetConfig.xlsm",
+          "sheet_name": "ValueQuality",
+          "file": "PetConfig_ValueQuality.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 39,
+      "item_id": "976ad28a-5927-4da7-80f3-fd8b65fa0f3d",
+      "workbook": "PlayerConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "6a13101e41fa71f8363a6c8882dc90a1a49e934ec2ad3a4864a2b00382c737c2",
+      "source": {
+        "content_sha256": "2eefb733df6d622ccea273ada264aad58c480c840ad91202a71228001277968d",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 91713
+      },
+      "target": {
+        "content_sha256": "2d631a2c9c784086e1d1987b0103147d224117535579532cfa21a0193a243f0b",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 91261
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_tXYaY56xBSqxjUe-Bj_1eQ",
+      "result_sha256": "eb2ad63765ad84130b52db6ff766af70f842347332b6937b73291280ac3d0ab1",
+      "result_size_bytes": 109144,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/976ad28a-5927-4da7-80f3-fd8b65fa0f3d.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 40,
+      "item_id": "7f8211f6-a5b0-432a-a1bf-65b373dab2ea",
+      "workbook": "QuestConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "590150839360ebfed94aa9ca82cb6329851c3f32da9ca232bb13aa6b72da138f",
+      "source": {
+        "content_sha256": "05dcad4f762afbe568adceace37be6a194a9a45f91c9fc62e30168070cd4b2c5",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 402810
+      },
+      "target": {
+        "content_sha256": "85b6f08b50b56ad87ef1d858ecfc2f306d0f4107dbdb5be7dfde79f389e862ba",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 467447
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 2,
+      "result_ref": "m2r_FZRYq30yYtcqWJsjyv8jIg",
+      "result_sha256": "358241c369c3b5acfa1265216714f55207c0059bf2288b42eaf5ae3cfc905d9f",
+      "result_size_bytes": 180332,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/7f8211f6-a5b0-432a-a1bf-65b373dab2ea.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "QuestConfig.xlsm",
+          "sheet_name": "Statement",
+          "file": "QuestConfig_Statement.csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "QuestConfig.xlsm",
+          "sheet_name": "Statement",
+          "file": "QuestConfig_Statement.csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        }
+      ]
+    },
+    {
+      "ordinal": 41,
+      "item_id": "d7747919-7562-4108-9166-8673c1c56551",
+      "workbook": "RankConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "76f7a293a3957b11855d4f5700139915d4daf9e825d55dc7ccc5422ecafa9637",
+      "source": {
+        "content_sha256": "cf8a534c1ae0317b247bd84722b0be6aaa962956eb247e92297ab600f9b25ee5",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 80226
+      },
+      "target": {
+        "content_sha256": "f4ea8083d960ed4c1921c2c51aa1d7fe9d4c5753b9b40043946dd8cbf6af8715",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 77707
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_skvOPQj1fI0R8WlL_0EadQ",
+      "result_sha256": "f4c6b0785aaa1187dff9e08fb7ecbd850eedff092c76716d28335c20990ed191",
+      "result_size_bytes": 40262,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/d7747919-7562-4108-9166-8673c1c56551.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 42,
+      "item_id": "02c6d8bb-ced1-4acf-8756-f321b2618c55",
+      "workbook": "SceneConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "9a52123538d8ddfeed21e6e66731721522a44421cc89ae7ce917868aebc2477f",
+      "source": {
+        "content_sha256": "7d485de37f68143b5c18980582b762a04023d6b0412dbcad55e3a5a6d927edf6",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 1845197
+      },
+      "target": {
+        "content_sha256": "522c6cfb7ed5cd9fbab247c6e7bdbe9df4626ba56539791441db8d4dc1b5ed64",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 1647478
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_WE0TPoGEF30a3KuFOR8OGA",
+      "result_sha256": "d4a3203d7b1c1765e5360d5364680482e66bddadfa35a76abb5cc1b52d4d865e",
+      "result_size_bytes": 113895,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/02c6d8bb-ced1-4acf-8756-f321b2618c55.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 43,
+      "item_id": "fa0ce286-7be9-4662-b2b0-a57fe2f42c92",
+      "workbook": "ShopConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "6af1ea13276d8ca6aecd2724b22d70f3c6fdb4d52147481547d7b0298ac88bf7",
+      "source": {
+        "content_sha256": "75e58d772dbde4fa8de8119100777c1523176898b40c135679081e94f2dc358b",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 557955
+      },
+      "target": {
+        "content_sha256": "ffe993eddf11cf26f3414c0c88a9c844a55db4a6c6ce2c785f7420ac408ddd5b",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 558940
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 2,
+      "result_ref": "m2r_xXM8D8VFGY-1euPURvVVJQ",
+      "result_sha256": "ba9ecb14f24df3736052c1c65772810629d118b978c1894b1ce87ee59df3eb4f",
+      "result_size_bytes": 213435,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/fa0ce286-7be9-4662-b2b0-a57fe2f42c92.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "ShopConfig.xlsm",
+          "sheet_name": "RefreshShop",
+          "file": "ShopConfig_RefreshShop.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "ShopConfig.xlsm",
+          "sheet_name": "RefreshShop",
+          "file": "ShopConfig_RefreshShop.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 44,
+      "item_id": "ba2d3e82-0d88-449d-bf72-e3becac95c3d",
+      "workbook": "SpawnGroup.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "bbb38db053f2c68606fbbf902c92c0457fb8340f15344769518ca90a61f21145",
+      "source": {
+        "content_sha256": "4a9395b920f3dadb4c5f3862b99a5c88c6bb71132cb4cbeb2245f8f516c07416",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 745686
+      },
+      "target": {
+        "content_sha256": "e47e8366ab6adf8bc1c4294bca9c4f25a49a779fa1cdc9829a74cc5f4106221b",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 745680
+      },
+      "status": "business_failed",
+      "diff_status": "failed",
+      "diff_error_count": 2,
+      "result_ref": "m2r_RwCOCHcTHiiHx7YD7TFwxA",
+      "result_sha256": "96ef06651bff33bdcc1ac0b6ca881748c7473afb1b43d8c9aefbb524ed80b1c1",
+      "result_size_bytes": 3121,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/ba2d3e82-0d88-449d-bf72-e3becac95c3d.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "SpawnGroup.xlsm",
+          "sheet_name": "SpawnGroup",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "SpawnGroup.xlsm",
+          "sheet_name": "SpawnGroup",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        }
+      ]
+    },
+    {
+      "ordinal": 45,
+      "item_id": "c990daef-03e4-47cd-bd47-68337094215a",
+      "workbook": "SpineConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "1da38e791f62d2353e45befbcd195d09713f9da99682166b605826ddede32282",
+      "source": {
+        "content_sha256": "8f4b3f20527e09af4199bff1a0c34fbf2b5542a79040f611558b1c1e7fc06ae7",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 33780
+      },
+      "target": {
+        "content_sha256": "20199c8a7e9163f02e796005c73f444115fb5a22dee431b165179c27e8e39484",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 33809
+      },
+      "status": "business_failed",
+      "diff_status": "failed",
+      "diff_error_count": 2,
+      "result_ref": "m2r_ewdGO1eK-lGPo27e89EfKg",
+      "result_sha256": "34b0398205c25de6a32f4325152ee3c043eb835ad295001a0624c4dad3e487ea",
+      "result_size_bytes": 1306,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/c990daef-03e4-47cd-bd47-68337094215a.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_MANIFEST_FIELD_MISSING",
+          "stage": "manifest_parse",
+          "side": "source",
+          "workbook": "SpineConfig.xlsm",
+          "sheet_name": "main",
+          "file": null,
+          "message": "main 清单行缺少 sheetName 或 tbxName",
+          "details": {
+            "row": 3
+          }
+        },
+        {
+          "code": "M2_MANIFEST_FIELD_MISSING",
+          "stage": "manifest_parse",
+          "side": "target",
+          "workbook": "SpineConfig.xlsm",
+          "sheet_name": "main",
+          "file": null,
+          "message": "main 清单行缺少 sheetName 或 tbxName",
+          "details": {
+            "row": 3
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 46,
+      "item_id": "8fcf9381-9588-49b2-a713-521336cffd73",
+      "workbook": "StagePack.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "e602ddc16397264ef0ad57086a9638d7c6d63137a30566ab5b7b98badfadd131",
+      "source": {
+        "content_sha256": "47e175125e49b0011ab3a343731829f0cc2d72766df64d8f744639c5f5a1b169",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 58640
+      },
+      "target": {
+        "content_sha256": "29195d7f795db22e41343cc973fcef93474968641f38f6641747c91cdd4cbf4a",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 58685
+      },
+      "status": "succeeded",
+      "diff_status": "unchanged",
+      "diff_error_count": 0,
+      "result_ref": "m2r_35BM6fomVUVAT8NszATSNg",
+      "result_sha256": "943e790c031acae945b8cf7fe14c98743f76145da70a07b915a1d54f3984ae60",
+      "result_size_bytes": 9509,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/8fcf9381-9588-49b2-a713-521336cffd73.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 47,
+      "item_id": "1876c9a9-16da-4089-b4e2-65ad65461b5e",
+      "workbook": "StarSoulBattleConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "ef06b4d8d5df6a942fd277b749a6563e39289e5a412571e0acbbf7e9f1dcf45c",
+      "source": {
+        "content_sha256": "6ff4fb887df06bec58a00f31481cb908c10ca0ea928639b6e68c637e06fada5c",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 102241
+      },
+      "target": {
+        "content_sha256": "b8070534319636a4d6a8fbefc192c15306de50062e4092d1abf0fc80df6b4372",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 102245
+      },
+      "status": "succeeded",
+      "diff_status": "unchanged",
+      "diff_error_count": 0,
+      "result_ref": "m2r_bzbsqktp1pRNjOCpq0Q3Ug",
+      "result_sha256": "bdb26f2d47ce9079c8fbaef138bbc00b6ddd4d9dc4f4e2e8f0c7dc93c6f4fac0",
+      "result_size_bytes": 21292,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/1876c9a9-16da-4089-b4e2-65ad65461b5e.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 48,
+      "item_id": "da4f779e-8a55-41d1-a61f-e1a8d32e25b2",
+      "workbook": "StoryConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "2d2886ba1006679db15ceb69374e188ab3e55c3a3a3835cad19646610434dd0b",
+      "source": {
+        "content_sha256": "31e085e1496cfa0fbe1ebeb52469ef9292bde370c2b01f80312242a8f6a4384a",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 215376
+      },
+      "target": {
+        "content_sha256": "e08154021508c2ecf56d94af43805b320b61ebfda67da06b049dec9f650b8154",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 219043
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_qZaIoIxc4Br47fzRWYC9Lw",
+      "result_sha256": "6b3027ebfc482cfe9803b51d49e7e4c956f9bd967228c5de026aefee031b2cce",
+      "result_size_bytes": 47421,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/da4f779e-8a55-41d1-a61f-e1a8d32e25b2.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 49,
+      "item_id": "931d9474-d48f-4280-9e04-2534952f61b4",
+      "workbook": "SystemConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "16b35106f6ad7a31c73cdd362b72caddf562e50df871b79631cb6f8156f5921b",
+      "source": {
+        "content_sha256": "feba2c88c7e4ed3971a98d253ec5bcef161edc44ac5e7e6ba36a6e538a74fa9a",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 274571
+      },
+      "target": {
+        "content_sha256": "6468408e31f217eaefb40899a722d23600adb2f8a08138bea626bcb88d848545",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 277624
+      },
+      "status": "business_failed",
+      "diff_status": "failed",
+      "diff_error_count": 2,
+      "result_ref": "m2r_AcQn4ZZkx1Us9E6lhzcVoA",
+      "result_sha256": "2369df5120df9913e032a8d85e116d8f4f675500c8e4726bbecbd7e67ca2431a",
+      "result_size_bytes": 1309,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/931d9474-d48f-4280-9e04-2534952f61b4.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_MANIFEST_FIELD_MISSING",
+          "stage": "manifest_parse",
+          "side": "source",
+          "workbook": "SystemConfig.xlsm",
+          "sheet_name": "main",
+          "file": null,
+          "message": "main 清单行缺少 sheetName 或 tbxName",
+          "details": {
+            "row": 4
+          }
+        },
+        {
+          "code": "M2_MANIFEST_FIELD_MISSING",
+          "stage": "manifest_parse",
+          "side": "target",
+          "workbook": "SystemConfig.xlsm",
+          "sheet_name": "main",
+          "file": null,
+          "message": "main 清单行缺少 sheetName 或 tbxName",
+          "details": {
+            "row": 4
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 50,
+      "item_id": "4e17356f-ba8d-497a-847f-dc431da02f85",
+      "workbook": "SystemDescribe.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "acc71181e99f5de84962559cd5017698d7efeddc064d87ed99bb90ad840cf194",
+      "source": {
+        "content_sha256": "0ca5f05829f0313b2d04a3b33ea511c5b6612c00b673a90a0078a824be2ada54",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 83605
+      },
+      "target": {
+        "content_sha256": "ae37880b8c01e8c840329b0e82501d06b7e08600e50189e52c49e775d09640d7",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 70094
+      },
+      "status": "succeeded",
+      "diff_status": "modified",
+      "diff_error_count": 0,
+      "result_ref": "m2r_S-R8yr-Dmh6wBNnm-ymUIQ",
+      "result_sha256": "3319f41bfad269758ad208ec4b346eac88619e8b890b199ce3f5cb4eef86b15c",
+      "result_size_bytes": 10626,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/4e17356f-ba8d-497a-847f-dc431da02f85.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": []
+    },
+    {
+      "ordinal": 51,
+      "item_id": "e8997bae-5ef8-4342-8620-e5ac478ca67e",
+      "workbook": "TeamBattleConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "4c4b7f2b7790336e5277508626fcb831fbe0c25c447f067e125f6ddcc3084c54",
+      "source": {
+        "content_sha256": "ef5b51ae8cd05ad9816b513a44c107c216fd873ced24634419d3197d155bc630",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 73640
+      },
+      "target": {
+        "content_sha256": "e038b638d97c5c643df1adf22da67cf247928916067656af578eea2dbf798d0c",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 73676
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 2,
+      "result_ref": "m2r_DFMLYOjseBrGNRp3pmMwqA",
+      "result_sha256": "138be93344b6db4fd13eef8b2c677aecb7afd63b684c9127db2b1220ec49c213",
+      "result_size_bytes": 16585,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/e8997bae-5ef8-4342-8620-e5ac478ca67e.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "TeamBattleConfig.xlsm",
+          "sheet_name": "Base",
+          "file": "TeamBattleConfig_Base.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "TeamBattleConfig.xlsm",
+          "sheet_name": "Base",
+          "file": "TeamBattleConfig_Base.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 52,
+      "item_id": "c631cdea-4957-4438-8958-5bfa63c46735",
+      "workbook": "TroupeNew.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "181bbf455f2604e3bbf4c9a5f889e0f46d769b69d43647e1f192936404c2b743",
+      "source": {
+        "content_sha256": "7ea4e0da0794c2844e5b353aafe83865616fc1b21225550cc11d10ff12c1ff9c",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 652429
+      },
+      "target": {
+        "content_sha256": "031236543daba9d1e0644a92535fe08dae691fcbd7bc13a598063dfb273f0f33",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 592184
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 2,
+      "result_ref": "m2r_O-gAHaAFp0NSEDNaIiI3qA",
+      "result_sha256": "c5f8e8d1a894b192330413192b8dfffa88c5484fbb135be90e2bad1c325de008",
+      "result_size_bytes": 88156,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/c631cdea-4957-4438-8958-5bfa63c46735.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "source",
+          "workbook": "TroupeNew.xlsm",
+          "sheet_name": "ExpeditionEntryPool",
+          "file": "TroupeNew_ExpeditionEntryPool.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        },
+        {
+          "code": "M2_CSV_PRIMARY_KEY_MISSING",
+          "stage": "csv_parse",
+          "side": "target",
+          "workbook": "TroupeNew.xlsm",
+          "sheet_name": "ExpeditionEntryPool",
+          "file": "TroupeNew_ExpeditionEntryPool.csv",
+          "message": "CSV 缺少业务主键字段",
+          "details": {
+            "candidates": [
+              "Id",
+              "id"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "ordinal": 53,
+      "item_id": "387fd161-8b93-4900-b81b-a721ff7af401",
+      "workbook": "UnionConfig.xlsm",
+      "candidate_status": "modified",
+      "candidate_fingerprint_sha256": "ef1f0d4f3b9948c9350df535ad49c8f889b52b861b30c461bc22207965c01cd7",
+      "source": {
+        "content_sha256": "028fae536256ba2f972c2211eacb39d175e864ab35662b39d06d10cf88be4f0c",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 146942
+      },
+      "target": {
+        "content_sha256": "83ea737c3211b2f27a09363d93e994b209d571ec6d2c3cfad23d723678148d6b",
+        "exists": true,
+        "read_error": null,
+        "size_bytes": 147001
+      },
+      "status": "business_failed",
+      "diff_status": "partial",
+      "diff_error_count": 26,
+      "result_ref": "m2r_VBjr9UdCoXba9ytOgWWjLw",
+      "result_sha256": "850e02c52db04b513a5505e9b7275c79dca434288a42732f5a3f03354b5593eb",
+      "result_size_bytes": 39516,
+      "result_file": "results/6131d91a-07b0-4820-a09e-2812e041a3ea/387fd161-8b93-4900-b81b-a721ff7af401.json.gz",
+      "attempt_count": 1,
+      "recovery_count": 0,
+      "errors": [
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Level",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Level",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Sign",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Sign",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Banner",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Banner",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Value",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Value",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Trends",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Trends",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Position",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Position",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Mark",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Mark",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Shading",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Shading",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Seting",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Seting",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "DailyTask",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "DailyTask",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Achievement",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "Achievement",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "TaskReward",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "TaskReward",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "source",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "PlayerShow",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        },
+        {
+          "code": "M2_CSV_MISSING",
+          "stage": "csv_read",
+          "side": "target",
+          "workbook": "UnionConfig.xlsm",
+          "sheet_name": "PlayerShow",
+          "file": "=IF(表1[[#This Row],[isExport]]=1,MID(CELL(\"filename\",$A$1),FIND(\"[\",CELL(\"filename\",$A$1))+1,FIND(\".\",CELL(\"filename\",$A$1))-1-FIND(\"[\",CELL(\"filename\",$A$1)))&\"_\"&表1[[#This Row],[sheetName]],\"\").csv",
+          "message": "main 清单对应的 CSV 不存在或无法读取",
+          "details": {}
+        }
+      ]
+    }
+  ]
+}

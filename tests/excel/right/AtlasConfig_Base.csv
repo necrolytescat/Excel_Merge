@@ -1,0 +1,14 @@
+﻿流水ID,Key_名称,功能模块名称,模块功能名（策划看）,功能模块
+Id,Key_Name,Name,beizhu,Module
+uint32,string,string,string,string
+All,Client,Client,None,Client
+ ,,,,
+请注意合理分配ID段,,,,
+阿宁,阿宁,阿宁,阿宁,冬卿
+1,At_Ba_Name_1,剧作重演,剧作灵感,Inspiration
+2,At_Ba_Name_2,同舟旅行,英雄,Phantom
+3,At_Ba_Name_3,童书绘卷,绘本,PictureBook
+4,At_Ba_Name_4,旧梦重温,动画cg/插图,StoryLine
+5,At_Ba_Name_5,羁绊名册,团员羁绊,Fetter
+6,At_Ba_Name_6,道具收藏,世界观道具,Item
+7,At_Ba_Name_7,旅途羁绊,英雄小组,PhantomTeam
