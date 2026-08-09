@@ -75,6 +75,7 @@
 |---|---|---|
 | `/compare` | 端点选择、快照、候选、启动全量比对 | 正式 SVN/API |
 | `/compare/results` | 正式批量结果页 | `m2.batch.v1` + `m2.diff.v1` |
+| /compare/history | 历史任务、实时进度、任务事件、脱敏日志与全局缓存治理 | 批量管理契约 + P3 运维契约 |
 | `/compare/demo` | 开发期交互预览 | Demo 数据，仅开发模式 |
 | `/compare/demo/results` | 开发期结果预览 | Demo 数据，仅开发模式 |
 | `/compare/replay` | 冻结夹具加载、黄金/当前重算结果 | `.m2fixture`，仅开发模式 |
@@ -87,6 +88,9 @@ Demo 不是正式数据源，也不是主要验收入口。共享模板或渲染
 |---|---|
 | `app/templates/compare.html` | 版本与快照页结构 |
 | `app/static/compare.js` | 端点、快照、候选、批量创建及页面上下文 |
+| pp/templates/history_tasks.html | 历史任务筛选、列表和页面状态结构 |
+| pp/static/history_tasks.js | 任务分页、筛选、ETag 刷新和结果入口 |
+| pp/static/history_tasks.css | 历史任务表格与响应式布局 |
 | `app/templates/compare_results.html` | 正式、Demo、Replay 共用结果页结构 |
 | `app/static/m2_diff_mapper.js` | 严格校验 `m2.diff.v1` 并映射为唯一前端视图模型 |
 | `app/static/compare_results.js` | 工作簿/Sheet/行字段渲染、筛选、确认态、虚拟滚动和交互 |
@@ -104,7 +108,7 @@ Demo 不是正式数据源，也不是主要验收入口。共享模板或渲染
 - `globalThis.ExcelDiffBatchRuntime`：任务刷新和结果加载；
 - `globalThis.OfflineFixtureRuntime`：当前工作簿离线重算。
 
-`sessionStorage` 中的 `excelDiffTaskContext` 连接输入页与结果页。工作簿“已确认”状态也保存在 `sessionStorage`，作用域按正式 task ID 或 Replay fixture ID 隔离，不写后端。
+正式结果 URL 使用 `/compare/results?task_id=<UUID>`；URL Task ID 优先于 `sessionStorage`，可在关闭标签页后从“历史任务”重新发现并恢复。`sessionStorage` 中的 `excelDiffTaskContext` 继续作为旧链接兼容和当前页面缓存。工作簿“已确认”状态也保存在 `sessionStorage`，作用域按正式 task ID 或 Replay fixture ID 隔离，不写后端。
 
 ### 4.3 已验收界面基线
 
@@ -149,17 +153,24 @@ Demo 不是正式数据源，也不是主要验收入口。共享模板或渲染
 
 正式 API：
 
+P3 运维服务由 app/services/operations_service.py 负责应用日志轮转、脱敏查询与 SVN 全局缓存治理。
+
 | 方法与路径 | 契约/用途 |
 |---|---|
 | `POST /api/svn/snapshots` | 冻结两侧 HEAD 并返回 Table Excel 快照 |
 | `POST /api/diff/workbooks/compare` | 单工作簿请求，直接返回 `m2.diff.v1` |
 | `POST /api/diff/batches` | 创建 `m2.batch.v1` 任务 |
+| `GET /api/diff/batches` | 查询历史任务摘要，支持游标、筛选和 ETag/304 |
 | `GET /api/diff/batches/{task_id}` | 查询任务，支持 ETag/304 |
+| `GET /api/diff/batches/{task_id}/management` | 查询结构化事件、正式结果统计和重试关系 |
+| `DELETE /api/diff/batches/{task_id}` | 幂等删除终态任务及该任务正式结果 |
 | `GET /api/diff/batch-results/{result_ref}` | 读取原始 `m2.diff.v1`，支持 ETag/304 |
 | `POST /api/diff/batches/{task_id}/cancel` | 请求取消 |
 | `POST /api/diff/batches/{task_id}/retry` | 从终态任务创建重试子任务 |
 
 Replay API 仅在 `web.dev_mode=true` 时注册：`/api/replay/fixture`、`/api/replay/recompute`、`/api/replay/recompute/{item_id}`、`/api/replay/results/{item_id}`。
+
+P3 运维 API：GET /api/operations/logs、GET /api/operations/svn-cache、POST /api/operations/svn-cache/clear。日志响应不含物理路径和堆栈；缓存响应不含缓存目录和任务归属。
 
 ## 6. 数据来源与语义引擎
 
@@ -255,6 +266,8 @@ errors[]
 
 `BatchStore` 默认写入 `var/m2-batch/batch.sqlite3`，结果写入 `var/m2-batch/results/<task>/<item>.json.gz`。启动时恢复租约和孤立文件；运行数据不进入 Git。
 
+`m2.batch-management.v1` 定义在 `docs/contracts/m2.batch-management.v1.md`。结构化事件独立于批量任务 JSON，默认保留 90 天；终态任务可从历史任务页手动删除。删除仅影响该任务正式结果，不级联重试任务，不触碰原始日志、全局 SVN 缓存或 Replay 夹具。
+
 ## 8. Replay 与当前夹具
 
 当前可提交回归夹具：
@@ -339,7 +352,7 @@ py -3 -m pytest -q
 - `tests/contract/test_compare_preview.py`：模板、资源和结果页界面契约；
 - `tests/contract/test_diff_web_mapping.py`：mapper 映射；
 - `tests/contract/test_diff_json_contract.py`：`m2.diff.v1`；
-- `tests/contract/test_batch_diff_api.py`：`m2.batch.v1` API；
+- `tests/contract/test_batch_diff_api.py`：`m2.batch.v1`、`m2.batch-list.v1`、`m2.batch-management.v1` API 与恢复/清理；
 - `tests/unit/test_offline_fixture.py`：夹具门禁与 Replay；
 - `tests/unit/test_table_csv_parser.py`、`test_semantic_diff.py`：语义规则；
 - `tests/unit/test_svn_workbook_dataset_resolver.py`：同侧冻结数据物化；
@@ -350,7 +363,7 @@ py -3 -m pytest -q
 ## 12. 已知限制与后续边界
 
 - 当前批量运行时是本地单机 SQLite，不是分布式队列。
-- 当前没有任务列表、跨任务搜索、长期报告、通知或管理后台。
+- 当前已有保留期内任务列表、Task URL 恢复、结构化任务事件、终态结果管理、脱敏应用日志检索和全局 SVN 缓存治理；仍没有长期报告或通知。
 - 工作簿确认态只在当前浏览器会话保存，不是多人审阅记录。
 - Replay 会话只在服务进程内存中保存，重启后需重新加载夹具。
 - Demo 仅用于开发预览，不能证明正式数据链路正确。

@@ -7,7 +7,7 @@
   <title>Config Atlas · {{ '流程示例' if demo_mode else '版本对比' }}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.1">
   <link rel="stylesheet" href="{{ url_for('static', path='compare_readability.css') }}?v=1.0.0">
-  <script src="{{ url_for('static', path='compare.js') }}?v=1.1.2" defer></script>
+  <script src="{{ url_for('static', path='compare.js') }}?v=1.2.0" defer></script>
 </head>
 <body class="compare-readable-page" data-page-state="idle" data-demo-mode="{{ 'true' if demo_mode else 'false' }}">
   <div class="app-shell">
@@ -22,7 +22,7 @@
         <p class="nav-label">对比工具</p>
         <a class="nav-item active" href="/compare" aria-current="page"><span class="nav-icon" aria-hidden="true">⇄</span><span>Excel Diff 工作台</span><span class="nav-current">M2</span></a>
         <p class="nav-label">结果</p>
-        <button class="nav-item is-disabled" type="button" disabled title="后续里程碑开放"><span class="nav-icon" aria-hidden="true">▤</span><span>任务与报告</span><span class="nav-status">后续</span></button>
+        <a class="nav-item" href="/compare/history"><span class="nav-icon" aria-hidden="true">▤</span><span>历史任务</span></a>
       </nav>
       <div class="sidebar-footer">
         <span class="sidebar-readonly"><span class="status-dot status-ok"></span> 只读模式</span>

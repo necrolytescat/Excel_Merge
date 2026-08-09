@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Config Atlas · 历史任务</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.3">
+  <link rel="stylesheet" href="{{ url_for('static', path='history_tasks.css') }}?v=3.0.0">
+  <script src="{{ url_for('static', path='history_tasks.js') }}?v=3.0.0" defer></script>
+</head>
+<body class="history-page">
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="主导航">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">CA</div>
+        <div><strong>Config Atlas</strong><span>EXCEL REVIEW · READ ONLY</span></div>
+      </div>
+      <nav class="sidebar-nav">
+        <p class="nav-label">系统配置</p>
+        <a class="nav-item" href="/"><span class="nav-icon" aria-hidden="true">⌂</span><span>基础连接</span></a>
+        <p class="nav-label">对比工具</p>
+        <a class="nav-item" href="/compare"><span class="nav-icon" aria-hidden="true">⇄</span><span>Excel Diff 工作台</span><span class="nav-current">M2</span></a>
+        <p class="nav-label">结果</p>
+        <a class="nav-item active" href="/compare/history" aria-current="page"><span class="nav-icon" aria-hidden="true">▤</span><span>历史任务</span></a>
+      </nav>
+      <div class="sidebar-footer">
+        <span class="sidebar-readonly"><span class="status-dot status-ok"></span> 只读模式</span>
+        <span class="sidebar-version">M2 · Web 工作台</span>
+      </div>
+    </aside>
+
+    <div class="app-content history-content">
+      <header class="topbar history-topbar">
+        <div>
+          <p class="eyebrow">VERSION REVIEW / TASK HISTORY</p>
+          <h1>历史任务</h1>
+          <p class="subtitle">任务恢复、运行日志与全局可再生缓存</p>
+        </div>
+        <div class="history-top-stats" role="status" aria-live="polite">
+          <div><span id="history-loaded-label">当前载入</span><strong id="history-loaded-count">0</strong></div>
+          <div><span id="history-active-label">进行中</span><strong id="history-active-count">0</strong></div>
+          <div><span>最后刷新</span><strong id="history-refreshed-at">—</strong></div>
+        </div>
+      </header>
+
+      <main class="history-main">
+        <nav class="history-view-switch" aria-label="历史任务视图">
+          <button type="button" class="is-selected" data-history-view="tasks" aria-pressed="true">任务记录</button>
+          <button type="button" data-history-view="logs" aria-pressed="false">运行日志</button>
+          <button type="button" data-history-view="cache" aria-pressed="false">SVN 缓存</button>
+        </nav>
+
+        <div class="history-view-panel" id="history-tasks-view">
+        <section class="history-toolbar" aria-labelledby="history-filter-heading">
+          <div class="history-toolbar-heading">
+            <div><p class="eyebrow">TASK INDEX</p><h2 id="history-filter-heading">任务索引</h2></div>
+            <button class="history-refresh" id="history-refresh" type="button" title="刷新任务列表"><span aria-hidden="true">↻</span><strong>刷新</strong></button>
+          </div>
+          <div class="history-status-switch" id="history-status-switch" role="group" aria-label="任务状态范围">
+            <button type="button" class="is-selected" data-status-group="all" aria-pressed="true">全部</button>
+            <button type="button" data-status-group="active" aria-pressed="false">进行中</button>
+            <button type="button" data-status-group="completed" aria-pressed="false">已完成</button>
+            <button type="button" data-status-group="attention" aria-pressed="false">需关注</button>
+          </div>
+          <form class="history-filters" id="history-filters">
+            <label class="history-search"><span>Task / 端点</span><input id="history-query" type="search" maxlength="128" autocomplete="off" placeholder="输入 Task ID 或端点 ID"></label>
+            <label><span>开始日期</span><input id="history-created-from" type="date"></label>
+            <label><span>结束日期</span><input id="history-created-to" type="date"></label>
+            <div class="history-filter-actions"><button class="primary" type="submit">筛选</button><button class="secondary" id="history-reset" type="button">重置</button></div>
+          </form>
+        </section>
+
+        <p class="history-alert hidden" id="history-alert" role="alert"></p>
+
+        <section class="history-index" aria-labelledby="history-list-heading">
+          <div class="history-index-heading">
+            <div><h2 id="history-list-heading">任务记录</h2><span id="history-list-meta">正在读取</span></div>
+            <span class="history-live-indicator" id="history-live-indicator"><i aria-hidden="true"></i>自动刷新</span>
+          </div>
+          <div class="history-table-scroll">
+            <table class="history-table">
+              <thead><tr><th scope="col">状态</th><th scope="col">版本范围</th><th scope="col">进度</th><th scope="col">时间</th><th scope="col">到期</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead>
+              <tbody id="history-task-rows"><tr class="history-loading-row"><td colspan="6"><span class="history-spinner" aria-hidden="true"></span>正在读取历史任务</td></tr></tbody>
+            </table>
+          </div>
+          <div class="history-empty hidden" id="history-empty">
+            <strong id="history-empty-title">暂无历史任务</strong>
+            <span id="history-empty-detail">当前范围内没有任务记录</span>
+            <a class="primary" href="/compare">新建版本对比</a>
+          </div>
+          <div class="history-more"><button class="secondary hidden" id="history-load-more" type="button">加载更多</button></div>
+        </section>
+        </div>
+
+        <div class="history-view-panel hidden" id="history-logs-view">
+          <section class="history-toolbar" aria-labelledby="history-log-filter-heading">
+            <div class="history-toolbar-heading">
+              <div><p class="eyebrow">APPLICATION LOG</p><h2 id="history-log-filter-heading">运行日志</h2></div>
+              <button class="history-refresh" id="history-log-refresh" type="button" title="刷新运行日志"><span aria-hidden="true">↻</span><strong>刷新</strong></button>
+            </div>
+            <form class="history-log-filters" id="history-log-filters">
+              <label><span>级别</span><select id="history-log-level"><option value="">全部级别</option><option value="info">信息</option><option value="warning">警告</option><option value="error">错误</option><option value="debug">调试</option></select></label>
+              <label><span>Task ID</span><input id="history-log-task-id" type="text" autocomplete="off" placeholder="UUID"></label>
+              <label><span>Request ID</span><input id="history-log-request-id" type="text" autocomplete="off" placeholder="UUID"></label>
+              <label class="history-log-search"><span>事件 / 内容</span><input id="history-log-query" type="search" maxlength="128" autocomplete="off" placeholder="输入事件或脱敏内容"></label>
+              <label><span>开始时间</span><input id="history-log-created-from" type="datetime-local"></label>
+              <label><span>结束时间</span><input id="history-log-created-to" type="datetime-local"></label>
+              <div class="history-filter-actions"><button class="primary" type="submit">筛选</button><button class="secondary" id="history-log-reset" type="button">重置</button></div>
+            </form>
+          </section>
+
+          <p class="history-alert hidden" id="history-log-alert" role="alert"></p>
+
+          <section class="history-index" aria-labelledby="history-log-list-heading">
+            <div class="history-index-heading">
+              <div><h2 id="history-log-list-heading">日志记录</h2><span id="history-log-list-meta">正在读取</span></div>
+              <span class="history-log-safety">脱敏视图</span>
+            </div>
+            <div class="history-log-table-scroll">
+              <table class="history-log-table">
+                <thead><tr><th scope="col">时间</th><th scope="col">级别</th><th scope="col">相关性</th><th scope="col">事件</th><th scope="col">内容</th><th scope="col">进程</th></tr></thead>
+                <tbody id="history-log-rows"><tr class="history-loading-row"><td colspan="6"><span class="history-spinner" aria-hidden="true"></span>正在读取运行日志</td></tr></tbody>
+              </table>
+            </div>
+            <div class="history-empty hidden" id="history-log-empty">
+              <strong>当前筛选无日志</strong>
+              <span>调整筛选条件或刷新后重试</span>
+            </div>
+            <div class="history-more"><button class="secondary hidden" id="history-log-load-more" type="button">加载更多</button></div>
+          </section>
+        </div>
+
+        <div class="history-view-panel hidden" id="history-cache-view">
+          <section class="history-cache-panel" aria-labelledby="history-cache-heading">
+            <div class="history-toolbar-heading">
+              <div><p class="eyebrow">GLOBAL REPRODUCIBLE DATA</p><h2 id="history-cache-heading">SVN 全局缓存</h2></div>
+              <button class="history-refresh" id="history-cache-refresh" type="button" title="刷新缓存状态"><span aria-hidden="true">↻</span><strong>刷新</strong></button>
+            </div>
+            <p class="history-alert hidden" id="history-cache-alert" role="alert"></p>
+            <div class="history-cache-status" id="history-cache-status" aria-live="polite">
+              <span class="history-spinner" aria-hidden="true"></span>正在读取缓存状态
+            </div>
+            <dl class="history-cache-metrics hidden" id="history-cache-metrics">
+              <div><dt>磁盘容量</dt><dd id="history-cache-size">—</dd><span id="history-cache-files">—</span></div>
+              <div><dt>会话命中率</dt><dd id="history-cache-hit-rate">—</dd><span id="history-cache-hit-detail">—</span></div>
+              <div><dt>内存索引</dt><dd id="history-cache-memory">—</dd><span>随服务进程重建</span></div>
+              <div><dt>数据属性</dt><dd>全局共享</dd><span>可从 SVN 只读重建</span></div>
+            </dl>
+            <div class="history-cache-boundary hidden" id="history-cache-boundary">
+              <div>
+                <strong>全局清理</strong>
+                <span>仅清理 SVN 可再生缓存；正式任务结果、应用日志和 Replay 夹具不受影响。</span>
+              </div>
+              <button class="history-cache-clear" id="history-cache-clear" type="button">清空缓存</button>
+            </div>
+          </section>
+        </div>
+      </main>
+      <footer class="history-footer">正式任务与结果保留 30 天 · 到期墓碑保留 7 天</footer>
+    </div>
+  </div>
+
+  <dialog class="history-detail-dialog" id="history-detail-dialog" aria-labelledby="history-detail-title">
+    <div class="history-detail-shell">
+      <header class="history-detail-header">
+        <div>
+          <p class="eyebrow">TASK DETAIL / AUDIT</p>
+          <h2 id="history-detail-title">任务详情</h2>
+          <code id="history-detail-task-id">—</code>
+        </div>
+        <button class="history-detail-close" id="history-detail-close" type="button" aria-label="关闭任务详情" title="关闭">×</button>
+      </header>
+
+      <div class="history-detail-loading" id="history-detail-loading">
+        <span class="history-spinner" aria-hidden="true"></span>正在读取任务详情
+      </div>
+      <p class="history-detail-error hidden" id="history-detail-error" role="alert"></p>
+
+      <div class="history-detail-content hidden" id="history-detail-content">
+        <section class="history-detail-summary" aria-labelledby="history-detail-summary-title">
+          <h3 id="history-detail-summary-title">正式结果</h3>
+          <dl>
+            <div><dt>任务状态</dt><dd id="history-detail-status">—</dd></div>
+            <div><dt>结果文件</dt><dd id="history-detail-result-count">—</dd></div>
+            <div><dt>结果大小</dt><dd id="history-detail-result-size">—</dd></div>
+            <div><dt>结果到期</dt><dd id="history-detail-expires-at">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="history-detail-relations" aria-labelledby="history-detail-relations-title">
+          <h3 id="history-detail-relations-title">重试关系</h3>
+          <div id="history-detail-relations">无重试关系</div>
+        </section>
+
+        <section class="history-detail-timeline" aria-labelledby="history-detail-timeline-title">
+          <div class="history-detail-section-heading">
+            <h3 id="history-detail-timeline-title">任务时间线</h3>
+            <span id="history-detail-event-count">0 条事件</span>
+          </div>
+          <ol id="history-detail-events"></ol>
+        </section>
+      </div>
+
+      <footer class="history-detail-actions hidden" id="history-detail-actions">
+        <a class="primary" id="history-detail-open-result" href="/compare/results">打开任务</a>
+        <button class="history-delete-start" id="history-delete-start" type="button">删除任务</button>
+      </footer>
+
+      <div class="history-delete-confirm hidden" id="history-delete-confirm" role="group" aria-label="确认删除任务">
+        <div>
+          <strong>确认删除此任务？</strong>
+          <span>该任务正式结果会立即删除；重试任务、SVN 共享缓存、应用日志和 Replay 不受影响。</span>
+        </div>
+        <div>
+          <button class="secondary" id="history-delete-cancel" type="button">取消</button>
+          <button class="history-delete-confirm-button" id="history-delete-confirm-button" type="button">确认删除</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="history-cache-dialog" id="history-cache-dialog" aria-labelledby="history-cache-dialog-title">
+    <form method="dialog" class="history-cache-dialog-shell">
+      <header>
+        <div><p class="eyebrow">GLOBAL ACTION</p><h2 id="history-cache-dialog-title">清空 SVN 全局缓存</h2></div>
+        <button value="cancel" type="submit" aria-label="关闭缓存清理确认" title="关闭">×</button>
+      </header>
+      <p>现有缓存文件和内存索引将被清空，后续读取会从 SVN 重新生成。正式结果、日志与 Replay 不会删除。</p>
+      <label><span>输入“清空全局 SVN 缓存”确认</span><input id="history-cache-confirmation" type="text" autocomplete="off"></label>
+      <p class="history-detail-error hidden" id="history-cache-clear-error" role="alert"></p>
+      <footer>
+        <button class="secondary" value="cancel" type="submit">取消</button>
+        <button class="history-cache-confirm-button" id="history-cache-confirm-button" value="default" type="button" disabled>确认清空</button>
+      </footer>
+    </form>
+  </dialog>
+</body>
+</html>

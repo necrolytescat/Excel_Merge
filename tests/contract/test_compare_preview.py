@@ -22,7 +22,7 @@ def test_compare_input_is_formalized_and_table_excel_only():
     assert 'id="target-endpoint"' in response.text
     assert 'id="swap-endpoints"' in response.text
     assert 'id="create-snapshot"' in response.text
-    assert 'src="http://testserver/static/compare.js?v=1.1.2"' in response.text
+    assert 'src="http://testserver/static/compare.js?v=1.2.0"' in response.text
     assert "锁定并读取快照" in response.text
     assert "Table" in response.text
     assert "全量 Excel" in response.text
@@ -93,8 +93,8 @@ def test_formal_results_page_calls_m2_diff_api_without_demo_fixture_dependency()
     assert "app.css?v=0.3.3" in page.text
     assert "compare_results_readability.css?v=2.1.5" in page.text
     assert "compare_results_batch.css?v=1.1.2" in page.text
-    assert "compare_results.js?v=2.1.5" in page.text
-    assert "compare_results_batch.js?v=1.2.1" in page.text
+    assert "compare_results.js?v=2.2.0" in page.text
+    assert "compare_results_batch.js?v=1.3.0" in page.text
     assert 'class="result-overview-grid"' in page.text
     assert 'id="batch-task-panel"' in page.text
     assert 'id="result-heading-panel"' in page.text
@@ -399,3 +399,64 @@ def test_compare_demo_is_separate_and_development_only():
     assert production_api.get("/compare/demo/results").status_code == 404
     assert production_api.get("/compare/replay").status_code == 404
     assert production_api.get("/__local_verify/atlas").status_code == 404
+
+def test_history_tasks_page_and_task_url_recovery_contract():
+    api = TestClient(
+        create_app(
+            config={"svn": {"provider": "mock"}},
+            provider=MockSVNProvider(),
+        )
+    )
+
+    history_page = api.get("/compare/history")
+    history_script = api.get("/static/history_tasks.js")
+    history_styles = api.get("/static/history_tasks.css")
+    compare_script = api.get("/static/compare.js")
+    results_script = api.get("/static/compare_results.js")
+    batch_script = api.get("/static/compare_results_batch.js")
+
+    assert history_page.status_code == 200
+    assert "Config Atlas · 历史任务" in history_page.text
+    assert 'href="/compare/history" aria-current="page"' in history_page.text
+    assert 'id="history-task-rows"' in history_page.text
+    assert 'id="history-status-switch"' in history_page.text
+    assert 'id="history-load-more"' in history_page.text
+    assert "history_tasks.css?v=3.0.0" in history_page.text
+    assert "history_tasks.js?v=3.0.0" in history_page.text
+    assert 'id="history-detail-dialog"' in history_page.text
+    assert 'id="history-detail-events"' in history_page.text
+    assert 'id="history-delete-confirm"' in history_page.text
+    assert 'data-history-view="tasks"' in history_page.text
+    assert 'data-history-view="logs"' in history_page.text
+    assert 'data-history-view="cache"' in history_page.text
+    assert 'id="history-log-filters"' in history_page.text
+    assert 'id="history-cache-metrics"' in history_page.text
+    assert 'id="history-cache-dialog"' in history_page.text
+    assert "/api/diff/batches?" in history_script.text
+    assert "m2.batch-list.v1" in history_script.text
+    assert "m2.batch-management.v1" in history_script.text
+    assert "m2.batch-delete.request.v1" in history_script.text
+    assert 'method: "DELETE"' in history_script.text
+    assert "/api/operations/logs" in history_script.text
+    assert "m2.operations-log-list.v1" in history_script.text
+    assert "/api/operations/svn-cache" in history_script.text
+    assert "m2.svn-cache-clear.request.v1" in history_script.text
+    assert 'confirmation !== "清空全局 SVN 缓存"' in history_script.text
+    assert "If-None-Match" in history_script.text
+    assert "data-status-group" in history_page.text
+    assert "@media (max-width: 720px)" in history_styles.text
+    assert ".history-detail-dialog" in history_styles.text
+    assert ".history-delete-confirm" in history_styles.text
+    assert ".history-log-table" in history_styles.text
+    assert ".history-cache-metrics" in history_styles.text
+    assert "formalResultsUrl(task.task_id)" in compare_script.text
+    assert 'get("task_id")' in results_script.text
+    assert "history.replaceState" in results_script.text
+    assert "syncTaskUrl(task.task_id)" in batch_script.text
+    assert "BATCH_TASK_EXPIRED" in batch_script.text
+
+    for path in ("/", "/compare", "/compare/results", "/compare/history"):
+        page = api.get(path)
+        assert "历史任务" in page.text
+        assert "任务与报告" not in page.text
+        assert 'href="/compare/history"' in page.text

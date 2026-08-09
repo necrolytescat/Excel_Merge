@@ -33,11 +33,10 @@
         </a>
 
         <p class="nav-label">结果</p>
-        <button class="nav-item is-disabled" type="button" disabled title="后续开发">
+        <a class="nav-item{% if active_page == 'history' %} active{% endif %}" href="/compare/history"{% if active_page == 'history' %} aria-current="page"{% endif %}>
           <span class="nav-icon" aria-hidden="true">▤</span>
-          <span>任务与报告</span>
-          <span class="nav-status">后续</span>
-        </button>
+          <span>历史任务</span>
+        </a>
       </nav>
 
       <div class="sidebar-footer">

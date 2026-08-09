@@ -12,6 +12,20 @@
   "dummy_change_suppress": true,
   "branch": "fix",
   "net_diff": true,
+  "batch_diff": {
+    "event_retention_days": 90
+  },
+  "operations": {
+    "allow_cache_clear": true,
+    "logging": {
+      "enabled": true,
+      "directory": "var/logs",
+      "max_bytes": 5242880,
+      "retention_days": 14,
+      "max_files": 200,
+      "max_scan_bytes": 67108864
+    }
+  },
   "dataset_layout": {
     "binding_policy": {
       "same_endpoint": true,

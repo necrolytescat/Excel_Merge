@@ -128,6 +128,9 @@
     if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
     return "00000000-0000-4000-8000-" + String(Date.now()).padStart(12, "0").slice(-12);
   }
+  function formalResultsUrl(taskId) {
+    return "/compare/results?task_id=" + encodeURIComponent(taskId);
+  }
 
   function setExecuteDiffLabel(label) {
     const labelNode = $("execute-diff").firstChild;
@@ -435,8 +438,10 @@
     const resultsLink = $("results-page-link");
     try {
       const stored = JSON.parse(sessionStorage.getItem(TASK_CONTEXT_KEY) || "null");
-      if (stored?.candidates?.length) {
-        resultsLink.href = stored.mode === "demo" ? "/compare/demo/results" : "/compare/results";
+      if (stored?.candidates?.length || stored?.batchTaskId) {
+        resultsLink.href = stored.mode === "demo"
+          ? "/compare/demo/results"
+          : (stored.batchTaskId ? formalResultsUrl(stored.batchTaskId) : "/compare/results");
         resultsLink.classList.remove("is-disabled");
         resultsLink.removeAttribute("aria-disabled");
       }
@@ -912,7 +917,7 @@
         });
         context.batchTaskId = task.task_id;
         sessionStorage.setItem(TASK_CONTEXT_KEY, JSON.stringify(context));
-        window.location.assign("/compare/results");
+        window.location.assign(formalResultsUrl(task.task_id));
       } catch (error) {
         const message = errorMessage(error);
         setFormError(message);

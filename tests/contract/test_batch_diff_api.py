@@ -607,6 +607,10 @@ def test_restart_persists_results_and_cleanup_leaves_tombstones(tmp_path):
             "UPDATE tasks SET expires_at=? WHERE task_id=?",
             (isoformat(utc_now() - timedelta(seconds=1)), str(initial.task_id)),
         )
+    with pytest.raises(BatchDiffError) as immediate_error:
+        reopened.get_task(str(initial.task_id))
+    assert immediate_error.value.code == "BATCH_TASK_EXPIRED"
+    assert not reopened.list_tasks(limit=20).items
     assert reopened.cleanup_expired() == 1
     with pytest.raises(BatchDiffError) as task_error:
         reopened.get_task(str(initial.task_id))
@@ -636,5 +640,225 @@ def test_result_store_failure_has_dedicated_error_code(tmp_path):
         assert item.status == "orchestration_failed"
         assert item.orchestration_error.code == "BATCH_ITEM_RESULT_STORE_FAILED"
         assert item.result_ref is None
+    finally:
+        batch_service.close()
+
+def test_history_list_api_supports_cursor_filters_and_etag(tmp_path):
+    resolver = StaticResolver([candidate("History.xlsm", "modified")])
+    runner = MappingRunner({"History.xlsm": WorkbookStatus.MODIFIED})
+    batch_service = service(tmp_path, resolver, runner)
+    app = create_app(
+        config={"svn": {"provider": "mock"}},
+        provider=MockSVNProvider(),
+        batch_diff_service=batch_service,
+    )
+
+    with TestClient(app) as client:
+        task_ids = []
+        for _ in range(3):
+            created = client.post("/api/diff/batches", json=create_json())
+            assert created.status_code == 202
+            task_id = created.json()["task_id"]
+            task_ids.append(task_id)
+            assert wait_for_task(batch_service, task_id).status == "completed"
+
+        first = client.get("/api/diff/batches", params={"limit": 2})
+        assert first.status_code == 200
+        body = first.json()
+        assert body["schema_version"] == "m2.batch-list.v1"
+        assert len(body["items"]) == 2
+        assert body["has_more"] is True
+        assert body["next_cursor"]
+        assert body["items"][0]["progress"]["succeeded_items"] == 1
+        serialized = json.dumps(body)
+        assert "request_id" not in serialized
+        assert "result_ref" not in serialized
+        assert "result_path" not in serialized
+
+        second = client.get(
+            "/api/diff/batches",
+            params={"limit": 2, "cursor": body["next_cursor"]},
+        )
+        assert second.status_code == 200
+        assert len(second.json()["items"]) == 1
+        listed_ids = {item["task_id"] for item in body["items"] + second.json()["items"]}
+        assert listed_ids == set(task_ids)
+
+        filtered = client.get(
+            "/api/diff/batches",
+            params=[("status", "completed"), ("q", "left")],
+        )
+        assert filtered.status_code == 200
+        assert len(filtered.json()["items"]) == 3
+
+        cached = client.get(
+            "/api/diff/batches",
+            params={"limit": 2},
+            headers={"If-None-Match": first.headers["etag"]},
+        )
+        assert cached.status_code == 304
+
+        invalid_cursor = client.get(
+            "/api/diff/batches",
+            params={"cursor": "not-a-cursor"},
+        )
+        assert invalid_cursor.status_code == 400
+        assert invalid_cursor.json()["error"]["code"] == "BATCH_INVALID_CURSOR"
+
+        invalid_range = client.get(
+            "/api/diff/batches",
+            params={
+                "created_from": "2026-08-10T00:00:00Z",
+                "created_to": "2026-08-09T00:00:00Z",
+            },
+        )
+        assert invalid_range.status_code == 400
+        assert invalid_range.json()["error"]["code"] == "BATCH_INVALID_TIME_RANGE"
+
+
+def test_task_management_events_and_manual_delete_api(tmp_path):
+    svn_cache = tmp_path / ".cache" / "svn" / "shared.cache"
+    application_log = tmp_path / "logs" / "app.log"
+    replay_fixture = tmp_path / "replay" / "golden.m2fixture"
+    for sentinel in (svn_cache, application_log, replay_fixture):
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text("keep", encoding="utf-8")
+
+    resolver = StaticResolver([candidate("Managed.xlsm", "modified")])
+    runner = MappingRunner({"Managed.xlsm": WorkbookStatus.MODIFIED})
+    batch_service = service(tmp_path, resolver, runner)
+    app = create_app(
+        config={"svn": {"provider": "mock"}},
+        provider=MockSVNProvider(),
+        batch_diff_service=batch_service,
+    )
+
+    with TestClient(app) as client:
+        created = client.post("/api/diff/batches", json=create_json())
+        task_id = created.json()["task_id"]
+        task = wait_for_task(batch_service, task_id)
+        result_ref = task.items[0].result_ref
+        assert result_ref
+        with batch_service.store._connect() as connection:
+            result_path = connection.execute(
+                "SELECT result_path FROM items WHERE result_ref=?",
+                (result_ref,),
+            ).fetchone()["result_path"]
+        formal_result = batch_service.store.state_directory / result_path
+        assert formal_result.is_file()
+
+        detail = client.get(f"/api/diff/batches/{task_id}/management")
+        assert detail.status_code == 200
+        body = detail.json()
+        assert body["schema_version"] == "m2.batch-management.v1"
+        assert body["can_delete"] is True
+        assert body["results"]["count"] == 1
+        assert body["results"]["size_bytes"] > 0
+        event_types = {event["event_type"] for event in body["events"]}
+        assert {
+            "task.created",
+            "status.preparing",
+            "status.running",
+            "status.completed",
+        } <= event_types
+        assert "result_path" not in json.dumps(body)
+        assert "svn" not in json.dumps(body).lower()
+
+        cached = client.get(
+            f"/api/diff/batches/{task_id}/management",
+            headers={"If-None-Match": detail.headers["etag"]},
+        )
+        assert cached.status_code == 304
+
+        request_id = str(uuid4())
+        delete_payload = {
+            "schema_version": "m2.batch-delete.request.v1",
+            "request_id": request_id,
+            "reason": "history cleanup",
+        }
+        deleted = client.request(
+            "DELETE",
+            f"/api/diff/batches/{task_id}",
+            json=delete_payload,
+        )
+        assert deleted.status_code == 200
+        assert deleted.json()["schema_version"] == "m2.batch-delete.result.v1"
+        assert deleted.json()["deleted_result_count"] == 1
+        assert deleted.json()["deleted_result_size_bytes"] > 0
+
+        replay = client.request(
+            "DELETE",
+            f"/api/diff/batches/{task_id}",
+            json=delete_payload,
+        )
+        assert replay.status_code == 200
+        assert replay.json() == deleted.json()
+        assert client.get(f"/api/diff/batches/{task_id}").status_code == 410
+        assert client.get(f"/api/diff/batch-results/{result_ref}").status_code == 410
+        assert all(
+            item["task_id"] != task_id
+            for item in client.get("/api/diff/batches").json()["items"]
+        )
+        assert not formal_result.exists()
+        assert svn_cache.read_text(encoding="utf-8") == "keep"
+        assert application_log.read_text(encoding="utf-8") == "keep"
+        assert replay_fixture.read_text(encoding="utf-8") == "keep"
+
+        batch_service.store.cleanup_expired()
+        with batch_service.store._connect() as connection:
+            deletion_event = connection.execute(
+                """
+                SELECT 1 FROM task_events
+                WHERE task_id=? AND event_type='command.delete'
+                """,
+                (task_id,),
+            ).fetchone()
+        assert deletion_event is not None
+
+
+def test_manual_delete_rejects_active_task_and_does_not_cascade_retry_child(tmp_path):
+    store = BatchStore(tmp_path / "queued-state")
+    queued_id, _ = store.create_task(
+        request_id=uuid4(),
+        request_hash="queued",
+        source=SOURCE,
+        target=TARGET,
+    )
+    with pytest.raises(BatchDiffError) as active_error:
+        store.delete_task(
+            task_id=queued_id,
+            request_id=uuid4(),
+            reason=None,
+        )
+    assert active_error.value.code == "BATCH_TASK_NOT_DELETABLE"
+
+    resolver = StaticResolver([candidate("Retry.xlsm", "modified")])
+    runner = MappingRunner({"Retry.xlsm": WorkbookStatus.PARTIAL})
+    batch_service = service(tmp_path, resolver, runner)
+    try:
+        parent, _ = batch_service.create_task(create_payload())
+        parent = wait_for_task(batch_service, parent.task_id)
+        child, _ = batch_service.retry_task(
+            parent.task_id,
+            BatchRetryRequestPayload(
+                schema_version="m2.batch-retry.request.v1",
+                request_id=uuid4(),
+                item_ids=[parent.items[0].item_id],
+            ),
+        )
+        child = wait_for_task(batch_service, child.task_id)
+        management = batch_service.get_task_management(parent.task_id)
+        assert management.retry_child_task_ids == [child.task_id]
+
+        batch_service.delete_task(
+            parent.task_id,
+            request_id=uuid4(),
+            reason="delete parent only",
+        )
+        with pytest.raises(BatchDiffError) as deleted_parent:
+            batch_service.get_task(parent.task_id)
+        assert deleted_parent.value.code == "BATCH_TASK_DELETED"
+        assert batch_service.get_task(child.task_id).task_id == child.task_id
+        assert batch_service.load_result(child.items[0].result_ref)[0]
     finally:
         batch_service.close()

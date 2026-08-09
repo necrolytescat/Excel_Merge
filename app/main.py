@@ -8,7 +8,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
+import time
 from typing import Any
+from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -18,7 +21,7 @@ from fastapi.templating import Jinja2Templates
 
 from core.svn_provider import SVNProviderError, provider_from_config
 
-from app.api import batch, diff, health, replay, svn
+from app.api import batch, diff, health, operations, replay, svn
 from app.services.workbook_dataset_service import (
     SVNWorkbookDatasetResolver,
     UnavailableWorkbookDatasetResolver,
@@ -36,11 +39,20 @@ from app.services.batch_diff_service import (
 )
 from app.services.batch_store import BatchDiffError, BatchStore
 from app.services.offline_fixture import OfflineFixtureError, OfflineFixtureService
+from app.services.operations_service import (
+    OperationalLogService,
+    OperationsError,
+    SVNCacheService,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "settings.json"
 DEFAULT_ENDPOINT_REGISTRY: list[dict[str, Any]] = []
+TASK_PATH_PATTERN = re.compile(
+    r"/api/diff/batches/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})(?:/|$)",
+    re.IGNORECASE,
+)
 
 DEFAULT_ENDPOINT_CATALOG = {
     "TC": {"display_name": "港台 TC", "trunk_branch": "Trunk_TC", "fix_pattern": "TC-fix-x.x.x.x"},
@@ -67,8 +79,16 @@ def create_app(
     workbook_diff_service: WorkbookDiffService | None = None,
 ) -> FastAPI:
     config = config if config is not None else load_config()
+    configured_provider = os.environ.get("EXCEL_MERGE_SVN_PROVIDER", "").strip()
+    if configured_provider:
+        config = dict(config)
+        config["svn"] = {
+            **(config.get("svn", {}) if isinstance(config.get("svn", {}), dict) else {}),
+            "provider": configured_provider,
+        }
     svn_config = config.get("svn", {}) if isinstance(config, dict) else {}
     web_config = config.get("web", {}) if isinstance(config, dict) else {}
+    operations_config = config.get("operations", {}) if isinstance(config, dict) else {}
     provider = provider or provider_from_config(config)
     provider_name = str(svn_config.get("provider", "mock")).lower()
     credential_source = str(svn_config.get("credential_source", "svn_cli_cache"))
@@ -88,6 +108,42 @@ def create_app(
     app.state.snapshot_service = SnapshotService(provider, allowed_schemes=allowed_schemes, max_workers=max_workers, preview_limit=preview_limit)
     app.state.offline_fixture_service = (
         OfflineFixtureService() if bool(web_config.get("dev_mode", False)) else None
+    )
+    logging_config = (
+        operations_config.get("logging", {})
+        if isinstance(operations_config.get("logging", {}), dict)
+        else {}
+    )
+    configured_log_dir = os.environ.get("EXCEL_MERGE_LOG_DIR") or str(
+        logging_config.get("directory", "var/logs")
+    ).strip()
+    log_directory = Path(configured_log_dir or "var/logs")
+    if not log_directory.is_absolute():
+        log_directory = PROJECT_ROOT / log_directory
+    app.state.operational_log_service = OperationalLogService(
+        log_directory,
+        max_bytes=int(logging_config.get("max_bytes", 5 * 1024 * 1024)),
+        retention_days=int(logging_config.get("retention_days", 14)),
+        max_files=int(logging_config.get("max_files", 200)),
+        max_scan_bytes=int(logging_config.get("max_scan_bytes", 64 * 1024 * 1024)),
+    )
+    app.state.operations_logging_enabled = bool(logging_config.get("enabled", True))
+
+    configured_cache_dir = os.environ.get("EXCEL_MERGE_SVN_CACHE_DIR")
+    if configured_cache_dir is None:
+        configured_cache_dir = svn_config.get("cache_dir", ".cache/svn")
+    cache_directory = Path(str(configured_cache_dir)) if configured_cache_dir else None
+    if cache_directory is not None and not cache_directory.is_absolute():
+        cache_directory = PROJECT_ROOT / cache_directory
+    svn_client = getattr(provider, "client", None)
+    if svn_client is not None and cache_directory is not None:
+        svn_client.cache_dir = str(cache_directory)
+    app.state.svn_cache_service = SVNCacheService(
+        cache_directory,
+        client=svn_client,
+        enabled=provider_name == "cli" and cache_directory is not None,
+        allow_clear=bool(operations_config.get("allow_cache_clear", True)),
+        excluded_roots=(PROJECT_ROOT / "var" / "m2-fixtures", PROJECT_ROOT / "var" / "m2-batch"),
     )
     dataset_layout = config.get("dataset_layout") if isinstance(config, dict) else None
     app.state.workbook_diff_service = workbook_diff_service or (
@@ -137,7 +193,12 @@ def create_app(
             app.state.workbook_diff_service,
         )
         app.state.batch_diff_service = BatchDiffService(
-            BatchStore(state_directory),
+            BatchStore(
+                state_directory,
+                event_retention_days=int(
+                    batch_config.get("event_retention_days", 90)
+                ),
+            ),
             candidate_resolver,
             workbook_runner,
         )
@@ -149,10 +210,60 @@ def create_app(
         if service is not None:
             service.close()
 
+    def start_operations_logging() -> None:
+        if app.state.operations_logging_enabled:
+            app.state.operational_log_service.start()
+
+    def close_operations_logging() -> None:
+        app.state.operational_log_service.close()
+
+    app.add_event_handler("startup", start_operations_logging)
     app.add_event_handler("shutdown", close_batch_service)
+    app.add_event_handler("shutdown", close_operations_logging)
 
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
+
+    @app.middleware("http")
+    async def operations_request_log(request: Request, call_next):
+        started = time.perf_counter()
+        try:
+            request_id = UUID(request.headers.get("x-request-id", ""))
+        except (ValueError, TypeError):
+            request_id = uuid4()
+        task_id = None
+        match = TASK_PATH_PATTERN.search(request.url.path)
+        candidate = match.group(1) if match else (
+            request.query_params.get("task_id")
+            if request.url.path == "/compare/results"
+            else None
+        )
+        if candidate:
+            try:
+                task_id = UUID(candidate)
+            except (ValueError, TypeError):
+                task_id = None
+        request.state.request_id = request_id
+        request.state.task_id = task_id
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            response.headers["X-Request-ID"] = str(request_id)
+            return response
+        finally:
+            if not (
+                request.method == "GET"
+                and request.url.path.startswith("/api/operations/")
+            ):
+                app.state.operational_log_service.record_request(
+                    method=request.method,
+                    path=request.url.path,
+                    status_code=status_code,
+                    duration_ms=round((time.perf_counter() - started) * 1000),
+                    request_id=request_id,
+                    task_id=task_id,
+                )
 
     @app.get("/", include_in_schema=False)
     def index(request: Request):
@@ -171,6 +282,17 @@ def create_app(
             },
         )
 
+    @app.get("/compare/history", include_in_schema=False)
+    def compare_history(request: Request):
+        """历史批量任务、实时进度和正式结果恢复入口。"""
+        return templates.TemplateResponse(
+            "history_tasks.html",
+            {
+                "request": request,
+                "provider": provider_name,
+                "active_page": "history",
+            },
+        )
     @app.get("/compare/demo", include_in_schema=False)
     def compare_demo(request: Request):
         """开发模式流程示例；不读取本地文件或生成真实语义 Diff。"""
@@ -254,8 +376,24 @@ def create_app(
             status_code=exc.status_code,
             content={"error": {"code": exc.code, "message": exc.message}},
         )
+    @app.exception_handler(OperationsError)
+    async def operations_error_handler(_: Request, exc: OperationsError):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"code": exc.code, "message": exc.message}},
+        )
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError):
+        if request.url.path.startswith("/api/operations/"):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "code": "OPERATIONS_INVALID_REQUEST",
+                        "message": "运维查询请求无效",
+                    }
+                },
+            )
         if request.url.path.startswith(("/api/diff/batches", "/api/diff/batch-results")):
             return JSONResponse(
                 status_code=400,
@@ -294,6 +432,7 @@ def create_app(
     app.include_router(svn.router, prefix="/api")
     app.include_router(diff.router, prefix="/api")
     app.include_router(batch.router, prefix="/api")
+    app.include_router(operations.router, prefix="/api")
     if bool(web_config.get("dev_mode", False)):
         app.include_router(replay.router, prefix="/api")
     return app

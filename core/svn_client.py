@@ -115,6 +115,25 @@ class SVNClient:
         self.cache_dir = cache_dir
         self._lock = threading.Lock()
         self._mem: Dict[Tuple[str, object], Optional[bytes]] = {}
+        self._cache_counters = {
+            "memory_hits": 0,
+            "disk_hits": 0,
+            "misses": 0,
+            "writes": 0,
+        }
+
+    def cache_metrics(self) -> dict:
+        with self._lock:
+            return {
+                **self._cache_counters,
+                "memory_entries": len(self._mem),
+            }
+
+    def clear_memory_cache(self) -> int:
+        with self._lock:
+            count = len(self._mem)
+            self._mem.clear()
+            return count
 
     # ---- 可用性 ----
     def available(self) -> bool:
@@ -214,6 +233,7 @@ class SVNClient:
         key = (url, rev)
         with self._lock:
             if key in self._mem:
+                self._cache_counters["memory_hits"] += 1
                 return self._mem[key]
         if self.cache_dir:
             p = self._cache_path(url, rev)
@@ -222,13 +242,18 @@ class SVNClient:
                     data = f.read()
                 with self._lock:
                     self._mem[key] = data
+                    self._cache_counters["disk_hits"] += 1
                 return data
+        with self._lock:
+            self._cache_counters["misses"] += 1
         data = self._cat(url, rev, peg)
         if data is not None:
             if self.cache_dir:
                 os.makedirs(self.cache_dir, exist_ok=True)
                 with open(self._cache_path(url, rev), "wb") as f:
                     f.write(data)
+                with self._lock:
+                    self._cache_counters["writes"] += 1
             with self._lock:
                 self._mem[key] = data
         return data

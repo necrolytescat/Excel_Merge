@@ -9,9 +9,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 BATCH_SCHEMA_VERSION = "m2.batch.v1"
+BATCH_LIST_SCHEMA_VERSION = "m2.batch-list.v1"
+BATCH_MANAGEMENT_SCHEMA_VERSION = "m2.batch-management.v1"
 BATCH_CREATE_SCHEMA_VERSION = "m2.batch-create.request.v1"
 BATCH_CANCEL_SCHEMA_VERSION = "m2.batch-cancel.request.v1"
 BATCH_RETRY_SCHEMA_VERSION = "m2.batch-retry.request.v1"
+BATCH_DELETE_SCHEMA_VERSION = "m2.batch-delete.request.v1"
+BATCH_DELETE_RESULT_SCHEMA_VERSION = "m2.batch-delete.result.v1"
 
 TaskStatus = Literal[
     "queued",
@@ -99,6 +103,24 @@ class BatchRetryRequestPayload(StrictBatchPayload):
         if len(set(value)) != len(value):
             raise ValueError("item_ids 不能重复")
         return value
+
+
+class BatchDeleteRequestPayload(StrictBatchPayload):
+    schema_version: Literal[BATCH_DELETE_SCHEMA_VERSION]
+    request_id: UUID
+    reason: str | None = Field(default=None, max_length=256, strict=True)
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if any(ord(character) < 32 for character in stripped):
+            raise ValueError("reason 不能包含控制字符")
+        return stripped
 
 
 class BatchReadErrorPayload(StrictBatchPayload):
@@ -344,3 +366,87 @@ class BatchTaskPayload(StrictBatchPayload):
         elif self.items:
             raise ValueError("候选清单 ready 前不能返回 items")
         return self
+
+
+class BatchTaskSummaryPayload(StrictBatchPayload):
+    task_id: UUID
+    retry_of_task_id: UUID | None = None
+    status: TaskStatus
+    source: BatchEndpointPayload
+    target: BatchEndpointPayload
+    progress: BatchProgressPayload
+    task_error_count: int = Field(default=0, ge=0, strict=True)
+    created_at: datetime
+    updated_at: datetime
+    finished_at: datetime | None = None
+    expires_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_terminal_times(self) -> "BatchTaskSummaryPayload":
+        terminal = self.status in {
+            "completed",
+            "completed_with_failures",
+            "cancelled",
+            "failed",
+        }
+        if terminal != (self.finished_at is not None and self.expires_at is not None):
+            raise ValueError("任务摘要终态与完成/过期时间不一致")
+        return self
+
+
+class BatchTaskListPayload(StrictBatchPayload):
+    schema_version: Literal[BATCH_LIST_SCHEMA_VERSION] = BATCH_LIST_SCHEMA_VERSION
+    items: list[BatchTaskSummaryPayload] = Field(default_factory=list)
+    next_cursor: str | None = Field(
+        default=None,
+        max_length=512,
+        pattern=r"^[A-Za-z0-9_-]+$",
+        strict=True,
+    )
+    has_more: bool
+    as_of: datetime
+
+
+class BatchTaskEventPayload(StrictBatchPayload):
+    event_id: int = Field(..., gt=0, strict=True)
+    event_type: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9._-]+$",
+        strict=True,
+    )
+    level: Literal["info", "warning", "error"]
+    message: str = Field(..., min_length=1, max_length=512, strict=True)
+    details: dict[str, str | int | bool | None] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class BatchResultSummaryPayload(StrictBatchPayload):
+    count: int = Field(..., ge=0, strict=True)
+    size_bytes: int = Field(..., ge=0, strict=True)
+    expires_at: datetime | None = None
+
+
+class BatchTaskManagementPayload(StrictBatchPayload):
+    schema_version: Literal[BATCH_MANAGEMENT_SCHEMA_VERSION] = (
+        BATCH_MANAGEMENT_SCHEMA_VERSION
+    )
+    task_id: UUID
+    status: TaskStatus
+    retry_of_task_id: UUID | None = None
+    retry_child_task_ids: list[UUID] = Field(default_factory=list)
+    results: BatchResultSummaryPayload
+    events: list[BatchTaskEventPayload] = Field(default_factory=list)
+    can_delete: bool
+
+
+class BatchTaskDeleteResultPayload(StrictBatchPayload):
+    schema_version: Literal[BATCH_DELETE_RESULT_SCHEMA_VERSION] = (
+        BATCH_DELETE_RESULT_SCHEMA_VERSION
+    )
+    task_id: UUID
+    deleted_at: datetime
+    deleted_result_count: int = Field(..., ge=0, strict=True)
+    deleted_result_size_bytes: int = Field(..., ge=0, strict=True)
+    tombstone_expires_at: datetime

@@ -1,6 +1,8 @@
 """SQLite 元数据与独立 gzip 结果文件组成的 M2 批量任务存储。"""
 from __future__ import annotations
 
+import base64
+import binascii
 from datetime import datetime, timedelta, timezone
 import gzip
 import hashlib
@@ -19,6 +21,12 @@ from app.schemas.batch import (
     BatchItemPayload,
     BatchOrchestrationErrorPayload,
     BatchProgressPayload,
+    BatchResultSummaryPayload,
+    BatchTaskDeleteResultPayload,
+    BatchTaskEventPayload,
+    BatchTaskListPayload,
+    BatchTaskManagementPayload,
+    BatchTaskSummaryPayload,
     BatchTaskPayload,
 )
 
@@ -39,6 +47,7 @@ TERMINAL_ITEM_STATUSES = {
 ACTIVE_ITEM_STATUSES = {"queued", "running"}
 RETENTION_DAYS = 30
 TOMBSTONE_DAYS = 7
+EVENT_RETENTION_DAYS = 90
 LEASE_SECONDS = 60
 
 
@@ -68,10 +77,16 @@ def json_hash(value: Any) -> str:
 
 
 class BatchStore:
-    def __init__(self, state_directory: Path):
+    def __init__(
+        self,
+        state_directory: Path,
+        *,
+        event_retention_days: int = EVENT_RETENTION_DAYS,
+    ):
         self.state_directory = Path(state_directory)
         self.database_path = self.state_directory / "batch.sqlite3"
         self.results_directory = self.state_directory / "results"
+        self.event_retention_days = max(1, int(event_retention_days))
         self._initialize_lock = threading.Lock()
         self._initialized = False
 
@@ -145,6 +160,8 @@ class BatchStore:
                         ON items(status, lease_expires_at, task_id, ordinal);
                     CREATE INDEX IF NOT EXISTS idx_tasks_schedule
                         ON tasks(status, created_at);
+                    CREATE INDEX IF NOT EXISTS idx_tasks_history
+                        ON tasks(owner_scope, created_at DESC, task_id DESC);
                     CREATE TABLE IF NOT EXISTS commands (
                         owner_scope TEXT NOT NULL,
                         request_id TEXT NOT NULL,
@@ -160,6 +177,30 @@ class BatchStore:
                         data_json TEXT NOT NULL,
                         expires_at TEXT NOT NULL,
                         PRIMARY KEY(resource_type, resource_id)
+                    );
+                    CREATE TABLE IF NOT EXISTS task_events (
+                        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        task_id TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        level TEXT NOT NULL,
+                        message TEXT NOT NULL,
+                        details_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_task_events_history
+                        ON task_events(task_id, created_at, event_id);
+                    CREATE INDEX IF NOT EXISTS idx_task_events_retention
+                        ON task_events(created_at);
+                    CREATE TABLE IF NOT EXISTS manual_deletions (
+                        task_id TEXT PRIMARY KEY,
+                        owner_scope TEXT NOT NULL,
+                        request_id TEXT NOT NULL,
+                        reason TEXT,
+                        deleted_at TEXT NOT NULL,
+                        result_count INTEGER NOT NULL,
+                        result_size_bytes INTEGER NOT NULL,
+                        tombstone_expires_at TEXT NOT NULL,
+                        UNIQUE(owner_scope, request_id)
                     );
                     """
                 )
@@ -183,6 +224,82 @@ class BatchStore:
     @staticmethod
     def _row_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
         return dict(row) if row is not None else None
+
+    @staticmethod
+    def _append_event(
+        connection: sqlite3.Connection,
+        *,
+        task_id: str,
+        event_type: str,
+        message: str,
+        created_at: str,
+        level: str = "info",
+        details: dict[str, str | int | bool | None] | None = None,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO task_events (
+                task_id, event_type, level, message, details_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                task_id,
+                event_type,
+                level,
+                message[:512],
+                canonical_json(details or {}),
+                created_at,
+            ),
+        )
+
+    def _ensure_baseline_events(
+        self,
+        connection: sqlite3.Connection,
+        task: sqlite3.Row,
+    ) -> None:
+        created_exists = connection.execute(
+            """
+            SELECT 1 FROM task_events
+            WHERE task_id=? AND event_type='task.created'
+            LIMIT 1
+            """,
+            (task["task_id"],),
+        ).fetchone()
+        if created_exists is None:
+            self._append_event(
+                connection,
+                task_id=task["task_id"],
+                event_type="task.created",
+                message="任务已创建",
+                created_at=task["created_at"],
+                details={"status": "queued"},
+            )
+        if task["finished_at"] and task["status"] in TERMINAL_TASK_STATUSES:
+            terminal_type = f"status.{task['status']}"
+            terminal_exists = connection.execute(
+                """
+                SELECT 1 FROM task_events
+                WHERE task_id=? AND event_type=?
+                LIMIT 1
+                """,
+                (task["task_id"], terminal_type),
+            ).fetchone()
+            if terminal_exists is None:
+                level = "error" if task["status"] == "failed" else "info"
+                self._append_event(
+                    connection,
+                    task_id=task["task_id"],
+                    event_type=terminal_type,
+                    message={
+                        "completed": "任务已完成",
+                        "completed_with_failures": "任务已完成，部分工作簿失败",
+                        "cancelled": "任务已取消",
+                        "failed": "任务失败",
+                    }[task["status"]],
+                    created_at=task["finished_at"],
+                    level=level,
+                    details={"status": task["status"]},
+                )
 
     def create_task(
         self,
@@ -256,14 +373,56 @@ class BatchStore:
                     now,
                 ),
             )
+            self._append_event(
+                connection,
+                task_id=task_id,
+                event_type="task.created",
+                message="任务已创建",
+                created_at=now,
+                details={
+                    "status": "queued",
+                    "retry_of_task_id": (
+                        str(retry_of_task_id) if retry_of_task_id else None
+                    ),
+                },
+            )
+            if retry_of_task_id is not None:
+                self._append_event(
+                    connection,
+                    task_id=str(retry_of_task_id),
+                    event_type="command.retry-created",
+                    message="已创建重试子任务",
+                    created_at=now,
+                    details={"child_task_id": task_id},
+                )
             return task_id, True
 
     def _task_row(self, connection: sqlite3.Connection, task_id: str) -> sqlite3.Row:
+        deletion = connection.execute(
+            "SELECT 1 FROM manual_deletions WHERE task_id=?",
+            (task_id,),
+        ).fetchone()
+        if deletion is not None:
+            raise BatchDiffError(
+                "BATCH_TASK_DELETED",
+                "批量任务已删除",
+                status_code=410,
+            )
         row = connection.execute(
             "SELECT * FROM tasks WHERE task_id=?",
             (task_id,),
         ).fetchone()
         if row is not None:
+            if (
+                row["status"] in TERMINAL_TASK_STATUSES
+                and row["expires_at"]
+                and row["expires_at"] <= isoformat()
+            ):
+                raise BatchDiffError(
+                    "BATCH_TASK_EXPIRED",
+                    "批量任务已过期",
+                    status_code=410,
+                )
             return row
         tombstone = connection.execute(
             "SELECT 1 FROM tombstones WHERE resource_type='task' AND resource_id=?",
@@ -409,6 +568,243 @@ class BatchStore:
                 }
             )
 
+    def get_task_management(self, task_id: str) -> BatchTaskManagementPayload:
+        with self._connect() as connection:
+            task = self._task_row(connection, task_id)
+            self._ensure_baseline_events(connection, task)
+            result_row = connection.execute(
+                """
+                SELECT COUNT(*) AS result_count,
+                       COALESCE(SUM(result_size_bytes), 0) AS result_size_bytes
+                FROM items
+                WHERE task_id=? AND result_ref IS NOT NULL
+                """,
+                (task_id,),
+            ).fetchone()
+            child_rows = connection.execute(
+                """
+                SELECT t.task_id
+                FROM tasks t
+                WHERE t.retry_of_task_id=?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM manual_deletions d WHERE d.task_id=t.task_id
+                  )
+                ORDER BY t.created_at, t.task_id
+                """,
+                (task_id,),
+            ).fetchall()
+            event_rows = connection.execute(
+                """
+                SELECT * FROM task_events
+                WHERE task_id=?
+                ORDER BY created_at, event_id
+                """,
+                (task_id,),
+            ).fetchall()
+            return BatchTaskManagementPayload(
+                task_id=task["task_id"],
+                status=task["status"],
+                retry_of_task_id=task["retry_of_task_id"],
+                retry_child_task_ids=[row["task_id"] for row in child_rows],
+                results=BatchResultSummaryPayload(
+                    count=int(result_row["result_count"]),
+                    size_bytes=int(result_row["result_size_bytes"]),
+                    expires_at=task["expires_at"],
+                ),
+                events=[
+                    BatchTaskEventPayload(
+                        event_id=row["event_id"],
+                        event_type=row["event_type"],
+                        level=row["level"],
+                        message=row["message"],
+                        details=json.loads(row["details_json"]),
+                        created_at=row["created_at"],
+                    )
+                    for row in event_rows
+                ],
+                can_delete=task["status"] in TERMINAL_TASK_STATUSES,
+            )
+
+    @staticmethod
+    def _encode_list_cursor(created_at: str, task_id: str) -> str:
+        raw = canonical_json({"created_at": created_at, "task_id": task_id}).encode(
+            "utf-8"
+        )
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _decode_list_cursor(cursor: str) -> tuple[str, str]:
+        try:
+            allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+            if not cursor or any(character not in allowed for character in cursor):
+                raise ValueError
+            padded = cursor + "=" * (-len(cursor) % 4)
+            data = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+            if not isinstance(data, dict) or set(data) != {"created_at", "task_id"}:
+                raise ValueError
+            task_id = str(UUID(str(data["task_id"])))
+            parsed = datetime.fromisoformat(str(data["created_at"]).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                raise ValueError
+            return isoformat(parsed.astimezone(timezone.utc)), task_id
+        except (
+            ValueError,
+            TypeError,
+            KeyError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            binascii.Error,
+        ):
+            raise BatchDiffError(
+                "BATCH_INVALID_CURSOR",
+                "历史任务游标无效",
+                status_code=400,
+            ) from None
+
+    @staticmethod
+    def _summary_progress(row: sqlite3.Row) -> BatchProgressPayload:
+        if row["candidate_status"] != "ready":
+            return BatchProgressPayload(total_items=None, processed_items=0, ratio=None)
+        counts = {
+            name: int(row[name] or 0)
+            for name in (
+                "queued_items",
+                "running_items",
+                "succeeded_items",
+                "business_failed_items",
+                "orchestration_failed_items",
+                "skipped_items",
+                "cancelled_items",
+            )
+        }
+        processed = sum(
+            counts[name]
+            for name in (
+                "succeeded_items",
+                "business_failed_items",
+                "orchestration_failed_items",
+                "skipped_items",
+                "cancelled_items",
+            )
+        )
+        total = int(row["item_count"] or 0)
+        return BatchProgressPayload(
+            total_items=total,
+            processed_items=processed,
+            ratio=1.0 if total == 0 else processed / total,
+            **counts,
+        )
+
+    def list_tasks(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        statuses: Iterable[str] | None = None,
+        query: str | None = None,
+        created_from: str | None = None,
+        created_to: str | None = None,
+        owner_scope: str = "local",
+    ) -> BatchTaskListPayload:
+        as_of = isoformat()
+        where = [
+            "t.owner_scope=?",
+            "(t.status NOT IN ('completed','completed_with_failures','cancelled','failed') "
+            "OR t.expires_at>?)",
+            "NOT EXISTS (SELECT 1 FROM manual_deletions d WHERE d.task_id=t.task_id)",
+        ]
+        parameters: list[Any] = [owner_scope, as_of]
+        selected_statuses = sorted(set(statuses or []))
+        if selected_statuses:
+            placeholders = ",".join("?" for _ in selected_statuses)
+            where.append(f"t.status IN ({placeholders})")
+            parameters.extend(selected_statuses)
+        normalized_query = (query or "").strip().casefold()
+        if normalized_query:
+            escaped = (
+                normalized_query.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            where.append(
+                "(LOWER(t.task_id) LIKE ? ESCAPE '\\' "
+                "OR LOWER(t.source_endpoint_id) LIKE ? ESCAPE '\\' "
+                "OR LOWER(t.target_endpoint_id) LIKE ? ESCAPE '\\')"
+            )
+            parameters.extend(
+                [escaped + "%", "%" + escaped + "%", "%" + escaped + "%"]
+            )
+        if created_from:
+            where.append("t.created_at>=?")
+            parameters.append(created_from)
+        if created_to:
+            where.append("t.created_at<=?")
+            parameters.append(created_to)
+        if cursor:
+            cursor_created_at, cursor_task_id = self._decode_list_cursor(cursor)
+            where.append("(t.created_at<? OR (t.created_at=? AND t.task_id<?))")
+            parameters.extend([cursor_created_at, cursor_created_at, cursor_task_id])
+
+        statement = f"""
+            SELECT t.*,
+                COUNT(i.item_id) AS item_count,
+                SUM(CASE WHEN i.status='queued' THEN 1 ELSE 0 END) AS queued_items,
+                SUM(CASE WHEN i.status='running' THEN 1 ELSE 0 END) AS running_items,
+                SUM(CASE WHEN i.status='succeeded' THEN 1 ELSE 0 END) AS succeeded_items,
+                SUM(CASE WHEN i.status='business_failed' THEN 1 ELSE 0 END) AS business_failed_items,
+                SUM(CASE WHEN i.status='orchestration_failed' THEN 1 ELSE 0 END) AS orchestration_failed_items,
+                SUM(CASE WHEN i.status='skipped' THEN 1 ELSE 0 END) AS skipped_items,
+                SUM(CASE WHEN i.status='cancelled' THEN 1 ELSE 0 END) AS cancelled_items
+            FROM tasks t
+            LEFT JOIN items i ON i.task_id=t.task_id
+            WHERE {' AND '.join(where)}
+            GROUP BY t.task_id
+            ORDER BY t.created_at DESC, t.task_id DESC
+            LIMIT ?
+        """
+        parameters.append(limit + 1)
+        with self._connect() as connection:
+            rows = list(connection.execute(statement, parameters).fetchall())
+
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        summaries: list[BatchTaskSummaryPayload] = []
+        for row in rows:
+            summaries.append(
+                BatchTaskSummaryPayload.model_validate(
+                    {
+                        "task_id": row["task_id"],
+                        "retry_of_task_id": row["retry_of_task_id"],
+                        "status": row["status"],
+                        "source": {
+                            "endpoint_id": row["source_endpoint_id"],
+                            "revision": row["source_revision"],
+                        },
+                        "target": {
+                            "endpoint_id": row["target_endpoint_id"],
+                            "revision": row["target_revision"],
+                        },
+                        "progress": self._summary_progress(row),
+                        "task_error_count": len(json.loads(row["errors_json"])),
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                        "finished_at": row["finished_at"],
+                        "expires_at": row["expires_at"],
+                    }
+                )
+            )
+        next_cursor = None
+        if has_more and rows:
+            next_cursor = self._encode_list_cursor(
+                rows[-1]["created_at"], rows[-1]["task_id"]
+            )
+        return BatchTaskListPayload(
+            items=summaries,
+            next_cursor=next_cursor,
+            has_more=has_more,
+            as_of=as_of,
+        )
+
     def claim_preparation(self) -> dict[str, Any] | None:
         now = isoformat()
         with self._connect() as connection:
@@ -430,6 +826,14 @@ class BatchStore:
             )
             if updated.rowcount != 1:
                 return None
+            self._append_event(
+                connection,
+                task_id=row["task_id"],
+                event_type="status.preparing",
+                message="正在准备候选清单",
+                created_at=now,
+                details={"status": "preparing"},
+            )
             data = dict(row)
             data["status"] = "preparing"
             data["candidate_status"] = "preparing"
@@ -523,6 +927,14 @@ class BatchStore:
                 """,
                 (manifest, now, now, task_id),
             )
+            self._append_event(
+                connection,
+                task_id=task_id,
+                event_type="status.running",
+                message="候选清单已冻结，任务开始执行",
+                created_at=now,
+                details={"status": "running", "candidate_count": len(candidates)},
+            )
             self._finalize_if_done(connection, task_id, now)
 
     def fail_preparation(
@@ -555,6 +967,24 @@ class BatchStore:
                 WHERE task_id=?
                 """,
                 (error, now, expires, now, task_id),
+            )
+            self._append_event(
+                connection,
+                task_id=task_id,
+                event_type="task.error",
+                message=message,
+                created_at=now,
+                level="error",
+                details={"code": code, "retryable": retryable},
+            )
+            self._append_event(
+                connection,
+                task_id=task_id,
+                event_type="status.failed",
+                message="任务失败",
+                created_at=now,
+                level="error",
+                details={"status": "failed"},
             )
 
     def claim_next_item(self) -> dict[str, Any] | None:
@@ -744,6 +1174,19 @@ class BatchStore:
                 """,
                 (error, now, now, item_id, lease_token),
             )
+            self._append_event(
+                connection,
+                task_id=row["task_id"],
+                event_type="item.error",
+                message=message,
+                created_at=now,
+                level="error",
+                details={
+                    "code": code,
+                    "item_id": item_id,
+                    "retryable": retryable,
+                },
+            )
             self._finalize_if_done(connection, row["task_id"], now)
             return True
 
@@ -790,6 +1233,19 @@ class BatchStore:
             "UPDATE items SET result_expires_at=? WHERE task_id=? AND result_ref IS NOT NULL",
             (expires, task_id),
         )
+        self._append_event(
+            connection,
+            task_id=task_id,
+            event_type=f"status.{status}",
+            message=(
+                "任务已完成，部分工作簿失败"
+                if status == "completed_with_failures"
+                else "任务已完成"
+            ),
+            created_at=now,
+            level="warning" if status == "completed_with_failures" else "info",
+            details={"status": status},
+        )
 
     def _finish_cancelled(
         self,
@@ -810,6 +1266,15 @@ class BatchStore:
         connection.execute(
             "UPDATE items SET result_expires_at=? WHERE task_id=? AND result_ref IS NOT NULL",
             (expires, task_id),
+        )
+        self._append_event(
+            connection,
+            task_id=task_id,
+            event_type="status.cancelled",
+            message="任务已取消",
+            created_at=now,
+            level="warning",
+            details={"status": "cancelled"},
         )
 
     def cancel_task(
@@ -859,6 +1324,15 @@ class BatchStore:
                 """,
                 (now, reason, now, task_id),
             )
+            self._append_event(
+                connection,
+                task_id=task_id,
+                event_type="command.cancel",
+                message="已请求取消任务",
+                created_at=now,
+                level="warning",
+                details={"request_id": str(request_id)},
+            )
             connection.execute(
                 """
                 UPDATE items
@@ -875,11 +1349,181 @@ class BatchStore:
             if not running:
                 self._finish_cancelled(connection, task_id, now)
 
+    @staticmethod
+    def _delete_result_payload(row: sqlite3.Row) -> BatchTaskDeleteResultPayload:
+        return BatchTaskDeleteResultPayload(
+            task_id=row["task_id"],
+            deleted_at=row["deleted_at"],
+            deleted_result_count=row["result_count"],
+            deleted_result_size_bytes=row["result_size_bytes"],
+            tombstone_expires_at=row["tombstone_expires_at"],
+        )
+
+    def delete_task(
+        self,
+        *,
+        task_id: str,
+        request_id: UUID,
+        reason: str | None,
+        owner_scope: str = "local",
+    ) -> BatchTaskDeleteResultPayload:
+        now_value = utc_now()
+        now = isoformat(now_value)
+        tombstone_expires = isoformat(now_value + timedelta(days=TOMBSTONE_DAYS))
+        command_hash = json_hash({"task_id": task_id, "reason": reason})
+        result_paths: list[str] = []
+        with self._connect() as connection:
+            self._begin(connection)
+            existing_command = connection.execute(
+                "SELECT * FROM commands WHERE owner_scope=? AND request_id=?",
+                (owner_scope, str(request_id)),
+            ).fetchone()
+            if existing_command is not None:
+                if (
+                    existing_command["command_type"] != "delete"
+                    or existing_command["target_task_id"] != task_id
+                    or existing_command["command_hash"] != command_hash
+                ):
+                    raise BatchDiffError(
+                        "BATCH_IDEMPOTENCY_CONFLICT",
+                        "request_id 已用于不同的批量命令",
+                        status_code=409,
+                    )
+                deletion = connection.execute(
+                    "SELECT * FROM manual_deletions WHERE task_id=?",
+                    (task_id,),
+                ).fetchone()
+                if deletion is None:
+                    raise BatchDiffError(
+                        "BATCH_TASK_DELETED",
+                        "批量任务已删除",
+                        status_code=410,
+                    )
+                return self._delete_result_payload(deletion)
+
+            deletion = connection.execute(
+                "SELECT 1 FROM manual_deletions WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+            if deletion is not None:
+                raise BatchDiffError(
+                    "BATCH_TASK_DELETED",
+                    "批量任务已删除",
+                    status_code=410,
+                )
+            task = self._task_row(connection, task_id)
+            if task["status"] not in TERMINAL_TASK_STATUSES:
+                raise BatchDiffError(
+                    "BATCH_TASK_NOT_DELETABLE",
+                    "仅终态批量任务可以删除",
+                    status_code=409,
+                )
+
+            items = connection.execute(
+                """
+                SELECT result_ref, result_path, result_size_bytes
+                FROM items WHERE task_id=?
+                """,
+                (task_id,),
+            ).fetchall()
+            result_items = [item for item in items if item["result_ref"]]
+            result_count = len(result_items)
+            result_size_bytes = sum(
+                int(item["result_size_bytes"] or 0) for item in result_items
+            )
+            result_paths = [
+                str(item["result_path"]) for item in result_items if item["result_path"]
+            ]
+
+            connection.execute(
+                "INSERT INTO commands VALUES (?, ?, 'delete', ?, ?, ?)",
+                (owner_scope, str(request_id), task_id, command_hash, now),
+            )
+            for item in result_items:
+                connection.execute(
+                    "INSERT OR REPLACE INTO tombstones VALUES ('result', ?, '{}', ?)",
+                    (item["result_ref"], tombstone_expires),
+                )
+            connection.execute(
+                "INSERT OR REPLACE INTO tombstones VALUES ('task', ?, '{}', ?)",
+                (task_id, tombstone_expires),
+            )
+            connection.execute(
+                "INSERT OR REPLACE INTO tombstones VALUES ('request', ?, ?, ?)",
+                (
+                    f"{task['owner_scope']}:{task['request_id']}",
+                    canonical_json(
+                        {
+                            "request_hash": task["request_hash"],
+                            "task_id": task_id,
+                        }
+                    ),
+                    tombstone_expires,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO manual_deletions (
+                    task_id, owner_scope, request_id, reason, deleted_at,
+                    result_count, result_size_bytes, tombstone_expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    owner_scope,
+                    str(request_id),
+                    reason,
+                    now,
+                    result_count,
+                    result_size_bytes,
+                    tombstone_expires,
+                ),
+            )
+            self._append_event(
+                connection,
+                task_id=task_id,
+                event_type="command.delete",
+                message="任务及其正式结果已删除",
+                created_at=now,
+                level="warning",
+                details={
+                    "request_id": str(request_id),
+                    "result_count": result_count,
+                    "result_size_bytes": result_size_bytes,
+                },
+            )
+            connection.execute(
+                "UPDATE tasks SET expires_at=?, updated_at=? WHERE task_id=?",
+                (now, now, task_id),
+            )
+            connection.execute(
+                """
+                UPDATE items
+                SET result_path=NULL, result_expires_at=?, updated_at=?
+                WHERE task_id=? AND result_ref IS NOT NULL
+                """,
+                (now, now, task_id),
+            )
+            deletion_row = connection.execute(
+                "SELECT * FROM manual_deletions WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+
+        for relative_path in result_paths:
+            self.remove_result_blob(relative_path)
+        return self._delete_result_payload(deletion_row)
+
     def recover(self) -> None:
         self.initialize()
         now = isoformat()
         with self._connect() as connection:
             self._begin(connection)
+            preparing = connection.execute(
+                """
+                SELECT task_id FROM tasks
+                WHERE status='preparing' AND prepared_at IS NULL
+                """
+            ).fetchall()
             connection.execute(
                 """
                 UPDATE tasks
@@ -888,6 +1532,16 @@ class BatchStore:
                 """,
                 (now,),
             )
+            for task in preparing:
+                self._append_event(
+                    connection,
+                    task_id=task["task_id"],
+                    event_type="task.recovered",
+                    message="服务重启后已恢复候选准备",
+                    created_at=now,
+                    level="warning",
+                    details={"phase": "preparing"},
+                )
         self.recover_expired_leases(force=False)
         self._remove_orphan_results()
 
@@ -917,6 +1571,15 @@ class BatchStore:
                         """,
                         (now, row["item_id"]),
                     )
+                    self._append_event(
+                        connection,
+                        task_id=row["task_id"],
+                        event_type="item.recovered",
+                        message="服务重启后已重新排队工作簿",
+                        created_at=now,
+                        level="warning",
+                        details={"item_id": row["item_id"]},
+                    )
                 else:
                     error = canonical_json(
                         {
@@ -933,6 +1596,19 @@ class BatchStore:
                         WHERE item_id=? AND status='running'
                         """,
                         (error, now, now, row["item_id"]),
+                    )
+                    self._append_event(
+                        connection,
+                        task_id=row["task_id"],
+                        event_type="item.error",
+                        message="单工作簿进程恢复次数已用尽",
+                        created_at=now,
+                        level="error",
+                        details={
+                            "code": "BATCH_ITEM_RECOVERY_EXHAUSTED",
+                            "item_id": row["item_id"],
+                            "retryable": True,
+                        },
                     )
             cancelling = connection.execute(
                 "SELECT task_id FROM tasks WHERE status='cancelling'"
@@ -955,7 +1631,7 @@ class BatchStore:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT i.result_path, i.result_sha256, t.expires_at
+                SELECT i.result_path, i.result_sha256, t.expires_at, t.task_id
                 FROM items i JOIN tasks t ON t.task_id=i.task_id
                 WHERE i.result_ref=?
                 """,
@@ -976,6 +1652,16 @@ class BatchStore:
                     "BATCH_RESULT_NOT_FOUND",
                     "批量结果不存在",
                     status_code=404,
+                )
+            deleted = connection.execute(
+                "SELECT 1 FROM manual_deletions WHERE task_id=?",
+                (row["task_id"],),
+            ).fetchone()
+            if deleted is not None:
+                raise BatchDiffError(
+                    "BATCH_RESULT_EXPIRED",
+                    "批量结果已删除",
+                    status_code=410,
                 )
             if row["expires_at"] and row["expires_at"] <= isoformat():
                 raise BatchDiffError(
@@ -1004,6 +1690,9 @@ class BatchStore:
         now_value = utc_now()
         now = isoformat(now_value)
         tombstone_expires = isoformat(now_value + timedelta(days=TOMBSTONE_DAYS))
+        event_cutoff = isoformat(
+            now_value - timedelta(days=self.event_retention_days)
+        )
         result_paths: list[str] = []
         removed = 0
         with self._connect() as connection:
@@ -1045,6 +1734,14 @@ class BatchStore:
                 connection.execute("DELETE FROM tasks WHERE task_id=?", (task["task_id"],))
                 removed += 1
             connection.execute("DELETE FROM tombstones WHERE expires_at<=?", (now,))
+            connection.execute(
+                "DELETE FROM manual_deletions WHERE tombstone_expires_at<=?",
+                (now,),
+            )
+            connection.execute(
+                "DELETE FROM task_events WHERE created_at<=?",
+                (event_cutoff,),
+            )
         for relative_path in result_paths:
             self.remove_result_blob(relative_path)
         self._remove_orphan_results()

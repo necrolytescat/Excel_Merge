@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import logging
 from pathlib import PurePosixPath
@@ -19,6 +20,9 @@ from app.schemas.batch import (
     BatchEndpointPayload,
     BatchOrchestrationErrorPayload,
     BatchRetryRequestPayload,
+    BatchTaskDeleteResultPayload,
+    BatchTaskListPayload,
+    BatchTaskManagementPayload,
     BatchTaskPayload,
 )
 from app.schemas.diff import DiffResultPayload, serialize_diff_json
@@ -330,6 +334,54 @@ class BatchDiffService:
         self.start()
         return self.store.get_task(str(task_id))
 
+    def get_task_management(
+        self,
+        task_id: UUID | str,
+    ) -> BatchTaskManagementPayload:
+        self.start()
+        return self.store.get_task_management(str(task_id))
+
+    def list_tasks(
+        self,
+        *,
+        limit: int,
+        cursor: str | None,
+        statuses: Sequence[str] | None,
+        query: str | None,
+        created_from: datetime | None,
+        created_to: datetime | None,
+    ) -> BatchTaskListPayload:
+        def normalize(value: datetime | None) -> str | None:
+            if value is None:
+                return None
+            if value.tzinfo is None:
+                raise BatchDiffError(
+                    "BATCH_INVALID_TIME_RANGE",
+                    "创建时间范围必须包含时区",
+                    status_code=400,
+                )
+            return value.astimezone(timezone.utc).isoformat(
+                timespec="microseconds"
+            ).replace("+00:00", "Z")
+
+        start = normalize(created_from)
+        end = normalize(created_to)
+        if start and end and start > end:
+            raise BatchDiffError(
+                "BATCH_INVALID_TIME_RANGE",
+                "创建时间起点不能晚于终点",
+                status_code=400,
+            )
+        self.start()
+        return self.store.list_tasks(
+            limit=limit,
+            cursor=cursor,
+            statuses=statuses,
+            query=query,
+            created_from=start,
+            created_to=end,
+        )
+
     def cancel_task(
         self,
         task_id: UUID | str,
@@ -344,6 +396,20 @@ class BatchDiffService:
             reason=reason,
         )
         return self.store.get_task(str(task_id))
+
+    def delete_task(
+        self,
+        task_id: UUID | str,
+        *,
+        request_id: UUID,
+        reason: str | None,
+    ) -> BatchTaskDeleteResultPayload:
+        self.start()
+        return self.store.delete_task(
+            task_id=str(task_id),
+            request_id=request_id,
+            reason=reason,
+        )
 
     @staticmethod
     def _default_retryable(item) -> bool:

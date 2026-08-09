@@ -206,6 +206,11 @@
     if (state.context?.mode !== "replay") sessionStorage.setItem(TASK_CONTEXT_KEY, JSON.stringify(state.context));
   }
 
+  function syncTaskUrl(taskId) {
+    if (state.context?.mode !== "formal" || !taskId) return;
+    const canonical = "/compare/results?task_id=" + encodeURIComponent(taskId);
+    if (location.pathname + location.search !== canonical) history.replaceState(null, "", canonical);
+  }
   function showNoItems(task) {
     bridge.showMissingContext();
     $("results-missing").classList.remove("hidden");
@@ -224,6 +229,19 @@
   }
 
   function syncTask(task) {
+    state.context.source = {
+      endpointId: task.source.endpoint_id,
+      label: task.source.endpoint_id,
+      branch: task.source.endpoint_id,
+      resolvedRevision: task.source.revision,
+    };
+    state.context.target = {
+      endpointId: task.target.endpoint_id,
+      label: task.target.endpoint_id,
+      branch: task.target.endpoint_id,
+      resolvedRevision: task.target.revision,
+    };
+    state.context.capturedAt = task.created_at;
     const previous = state.results;
     const next = new Map();
     (task.items || []).forEach((item) => {
@@ -232,6 +250,7 @@
     });
     state.results = next;
     state.context.batchTaskId = task.task_id;
+    syncTaskUrl(task.task_id);
     state.context.candidates = [...next.values()].map((result) => result.candidate);
     state.context.retryOfBatchTaskId = task.retry_of_task_id || null;
     persistContext();
@@ -264,12 +283,25 @@
       syncTask(task);
       if (!TERMINAL_TASKS.has(task.status)) schedulePoll();
     } catch (error) {
+      const code = error?.error?.code || "";
+      const terminalLookupError = new Set([
+        "BATCH_TASK_EXPIRED",
+        "BATCH_TASK_NOT_FOUND",
+        "BATCH_TASK_FORBIDDEN",
+      ]).has(code);
       $("batch-task-error").textContent = bridge.errorMessage(error);
       $("batch-task-error").classList.remove("hidden");
+      if (terminalLookupError) {
+        bridge.showMissingContext();
+        $("missing-heading").textContent = code === "BATCH_TASK_EXPIRED" ? "任务已过期" : "任务不可用";
+        $("missing-detail").textContent = code === "BATCH_TASK_EXPIRED"
+          ? "任务和正式结果已超过保留期。"
+          : "请从历史任务重新选择任务。";
+        return;
+      }
       schedulePoll(1600);
     }
   }
-
   function resultPath(result, requestedMode) {
     return state.context?.mode === "replay"
       ? "/api/replay/results/" + encodeURIComponent(result.itemId)

@@ -10,8 +10,8 @@
   <link rel="stylesheet" href="{{ url_for('static', path='compare_results_batch.css') }}?v=1.1.2">
   {% if replay_mode %}<link rel="stylesheet" href="{{ url_for('static', path='offline_replay.css') }}?v=1.0.0">{% endif %}
   <script src="{{ url_for('static', path='m2_diff_mapper.js') }}?v=1.1.0" defer></script>
-  <script src="{{ url_for('static', path='compare_results.js') }}?v=2.1.5" defer></script>
-  <script src="{{ url_for('static', path='compare_results_batch.js') }}?v=1.2.1" defer></script>
+  <script src="{{ url_for('static', path='compare_results.js') }}?v=2.2.0" defer></script>
+  <script src="{{ url_for('static', path='compare_results_batch.js') }}?v=1.3.0" defer></script>
   {% if replay_mode %}<script src="{{ url_for('static', path='offline_replay.js') }}?v=1.1.0" defer></script>{% endif %}
 </head>
 <body class="results-readable-page" data-demo-mode="{{ 'true' if demo_mode else 'false' }}" data-replay-mode="{{ 'true' if replay_mode else 'false' }}">
@@ -27,7 +27,7 @@
         <p class="nav-label">对比工具</p>
         <a class="nav-item active" href="/compare" aria-current="page"><span class="nav-icon" aria-hidden="true">⇄</span><span>Excel Diff 工作台</span><span class="nav-current">M2</span></a>
         <p class="nav-label">结果</p>
-        <button class="nav-item is-disabled" type="button" disabled title="后续里程碑开放"><span class="nav-icon" aria-hidden="true">▤</span><span>任务与报告</span><span class="nav-status">后续</span></button>
+        <a class="nav-item" href="/compare/history"><span class="nav-icon" aria-hidden="true">▤</span><span>历史任务</span></a>
       </nav>
       <div class="sidebar-footer">
         <span class="sidebar-readonly"><span class="status-dot status-ok"></span> 只读模式</span>

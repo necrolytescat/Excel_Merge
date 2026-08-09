@@ -1446,20 +1446,46 @@
   }
 
   function loadContext() {
-    let context = null;
-    try {
-      context = JSON.parse(sessionStorage.getItem(TASK_CONTEXT_KEY) || "null");
-    } catch {
-      sessionStorage.removeItem(TASK_CONTEXT_KEY);
-    }
-    const demoPage = document.body.dataset.demoMode === "true";
     if (document.body.dataset.replayMode === "true") {
       showMissingContext();
       return;
     }
+    const demoPage = document.body.dataset.demoMode === "true";
+    const taskIdParam = demoPage ? "" : (new URLSearchParams(location.search).get("task_id") || "").trim();
+    const validTaskId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(taskIdParam);
+    let context = null;
+    if (taskIdParam) {
+      if (!validTaskId) {
+        showMissingContext();
+        $("missing-heading").textContent = "Task ID 格式无效";
+        $("missing-detail").textContent = "请从历史任务重新选择任务。";
+        return;
+      }
+      context = {
+        version: 3,
+        mode: "formal",
+        batchTaskId: taskIdParam.toLowerCase(),
+        capturedAt: "",
+        source: { endpointId: "", label: "左侧", branch: "", resolvedRevision: null },
+        target: { endpointId: "", label: "右侧", branch: "", resolvedRevision: null },
+        candidates: [],
+        results: [],
+      };
+      sessionStorage.setItem(TASK_CONTEXT_KEY, JSON.stringify(context));
+    } else {
+      try {
+        context = JSON.parse(sessionStorage.getItem(TASK_CONTEXT_KEY) || "null");
+      } catch {
+        sessionStorage.removeItem(TASK_CONTEXT_KEY);
+      }
+    }
     if ((!context?.candidates?.length && !context?.batchTaskId) || (demoPage && context.mode !== "demo") || (!demoPage && context.mode === "demo")) {
       showMissingContext();
       return;
+    }
+    if (!demoPage && context.mode === "formal" && context.batchTaskId) {
+      const canonical = "/compare/results?task_id=" + encodeURIComponent(context.batchTaskId);
+      if (location.pathname + location.search !== canonical) history.replaceState(null, "", canonical);
     }
     state.context = context;
     state.results = buildResults(context);
@@ -1471,7 +1497,6 @@
       showMissingContext();
     }
   }
-
   $("compare-current-workbook").addEventListener("click", compareCurrentWorkbook);
   $("show-diff-fields").addEventListener("click", () => setFieldViewMode("diff"));
   $("show-original-fields").addEventListener("click", () => setFieldViewMode("original"));
