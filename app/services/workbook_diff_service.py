@@ -266,6 +266,12 @@ class WorkbookDiffService:
                 FieldDefinitionPayload(
                     name=field.name,
                     status=field_status[field.status],
+                    source_display_name=(
+                        field.source.display_name if field.source is not None else None
+                    ),
+                    target_display_name=(
+                        field.target.display_name if field.target is not None else None
+                    ),
                     source_type=field.source.declared_type if field.source is not None else None,
                     target_type=field.target.declared_type if field.target is not None else None,
                     source_scope=field.source.scope if field.source is not None else None,

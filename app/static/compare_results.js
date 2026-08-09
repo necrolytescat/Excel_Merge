@@ -7,6 +7,15 @@
     right_only: "仅右侧",
     read_error: "读取失败",
   };
+  const DIFF_ROW_HEIGHT = 48;
+  const DIFF_HEADER_HEIGHT = 52;
+  const DIFF_OVERSCAN = 8;
+  const TARGET_DIFF_MAX_MATRIX_CELLS = 250000;
+  const ROW_STATUS_LABELS = {
+    modified: "修改",
+    target_only: "右侧新增",
+    source_only: "右侧删除",
+  };
 
   const state = {
     context: null,
@@ -16,11 +25,14 @@
     showUnchanged: false,
     showConfirmed: false,
     showAllSheets: false,
+    fieldViewMode: "diff",
     confirmedPaths: new Set(),
     reviewScope: "",
+    selectedDiffCell: null,
     busy: false,
   };
   const $ = (id) => document.getElementById(id);
+  let activeSheetView = null;
 
   async function request(path, options = {}) {
     const response = await fetch(path, {
@@ -106,6 +118,14 @@
   function resetDetail() {
     const result = state.results.get(state.selectedPath);
     if (result) $("workbench-caption").textContent = workbookCaption(result);
+    state.selectedDiffCell = null;
+    const detail = $("diff-selection-detail");
+    if (!detail) return;
+    detail.classList.add("is-empty");
+    $("diff-selection-heading").textContent = "未选择";
+    $("diff-selection-meta").textContent = "选择任一侧单元格查看完整值";
+    $("diff-selection-source").textContent = "—";
+    $("diff-selection-target").textContent = "—";
   }
 
   function renderEmptySheetNavigation(detail = "当前工作簿没有可用的 Sheet 结果。", result = null) {
@@ -140,14 +160,685 @@
     if (sides.length) parts.push(sides.join(" / "));
     return parts.join(" · ");
   }
-  function updateDetail(field, button) {
-    document.querySelectorAll(".field-diff-button.is-selected").forEach((current) => current.classList.remove("is-selected"));
+
+  function detailValue(field, side) {
+    if (field[side + "MissingRow"]) return "该侧无此行";
+    if (field[side + "MissingField"]) return "该侧无此字段";
+    const value = field[side + "Value"];
+    return value === "" ? "（空字符串）" : String(value ?? "");
+  }
+
+  function updateDetail(field, buttons = []) {
+    document.querySelectorAll(".diff-grid-cell.is-selected").forEach((current) => current.classList.remove("is-selected"));
     if (!field) {
       resetDetail();
       return;
     }
-    button?.classList.add("is-selected");
+    buttons.forEach((button) => button.classList.add("is-selected"));
+    state.selectedDiffCell = {
+      sheetId: state.selectedSheet?.id || "",
+      selectionKey: field.selectionKey,
+      rowIndex: field.rowIndex,
+      fieldIndex: field.fieldIndex,
+      fieldName: field.name,
+    };
     $("workbench-caption").textContent = selectedFieldCaption(field);
+    $("diff-selection-detail").classList.remove("is-empty");
+    $("diff-selection-heading").textContent = field.name;
+    $("diff-selection-meta").textContent = "主键 " + field.key
+      + (field.sourceRowNumber ? " · 左侧第 " + field.sourceRowNumber + " 行" : "")
+      + (field.targetRowNumber ? " · 右侧第 " + field.targetRowNumber + " 行" : "");
+    $("diff-selection-source").textContent = detailValue(field, "source");
+    $("diff-selection-target").textContent = detailValue(field, "target");
+  }
+
+  function normalizedRowStatus(row) {
+    if (row.status) return row.status;
+    return {
+      modified: "modified",
+      added: "target_only",
+      deleted: "source_only",
+    }[row.change] || row.change;
+  }
+
+  function legacySideValues(row, side, primaryKey, status) {
+    if ((status === "target_only" && side === "source") || (status === "source_only" && side === "target")) {
+      return null;
+    }
+    const values = { [primaryKey]: row.key };
+    (row.fields || []).forEach((field) => {
+      const value = sideValue(field, side);
+      if (value !== "—") values[field.name] = value;
+    });
+    return values;
+  }
+
+  function normalizeSheetRow(row, primaryKey) {
+    const status = normalizedRowStatus(row);
+    const sourceValues = Object.prototype.hasOwnProperty.call(row, "sourceValues")
+      ? row.sourceValues
+      : legacySideValues(row, "source", primaryKey, status);
+    const targetValues = Object.prototype.hasOwnProperty.call(row, "targetValues")
+      ? row.targetValues
+      : legacySideValues(row, "target", primaryKey, status);
+    const firstField = (row.fields || [])[0] || null;
+    return {
+      ...row,
+      status,
+      sourceRowNumber: row.sourceRowNumber ?? firstField?.sourceRowNumber ?? null,
+      targetRowNumber: row.targetRowNumber ?? firstField?.targetRowNumber ?? null,
+      sourceValues,
+      targetValues,
+      changedFields: new Map((row.fields || []).map((field) => [field.name, field])),
+    };
+  }
+
+  function sheetColumnModel(sheet, rows, fieldViewMode) {
+    const primaryKey = sheet.primaryKey || "Id";
+    const definitions = [...(sheet.fieldDefinitions || [])];
+    const known = new Set(definitions.map((field) => field.name));
+    rows.forEach((row) => {
+      [row.sourceValues, row.targetValues].forEach((values) => {
+        Object.keys(values || {}).forEach((name) => {
+          if (known.has(name)) return;
+          known.add(name);
+          definitions.push({ name, status: "common" });
+        });
+      });
+      (row.fields || []).forEach((field) => {
+        if (known.has(field.name)) return;
+        known.add(field.name);
+        definitions.push({ name: field.name, status: field.status || "modified" });
+      });
+    });
+    const showAllFields = fieldViewMode === "original"
+      || rows.some((row) => row.status === "source_only" || row.status === "target_only");
+    const requested = new Set();
+    if (showAllFields) {
+      definitions.forEach((field) => requested.add(field.name));
+    } else {
+      rows.forEach((row) => row.changedFields.forEach((_field, name) => requested.add(name)));
+    }
+    requested.delete(primaryKey);
+    const fields = definitions.filter((field) => requested.has(field.name));
+    const ordered = new Set(fields.map((field) => field.name));
+    requested.forEach((name) => {
+      if (ordered.has(name)) return;
+      fields.push({ name, status: "modified" });
+    });
+    return {
+      primaryKey,
+      fields,
+      definitions: new Map(definitions.map((field) => [field.name, field])),
+      showAllFields,
+    };
+  }
+
+  function sideCellValue(row, side, fieldName) {
+    const values = row[side + "Values"];
+    if (!values) return { value: "", missingRow: true, missingField: false };
+    if (!Object.prototype.hasOwnProperty.call(values, fieldName)) {
+      return { value: "", missingRow: false, missingField: true };
+    }
+    return { value: String(values[fieldName] ?? ""), missingRow: false, missingField: false };
+  }
+
+  function selectedCellData(view, row, rowIndex, fieldName, fieldIndex) {
+    const source = sideCellValue(row, "source", fieldName);
+    const target = sideCellValue(row, "target", fieldName);
+    return {
+      name: fieldName,
+      key: row.key,
+      rowIndex,
+      fieldIndex,
+      selectionKey: rowIndex + ":" + fieldIndex,
+      sourceValue: source.value,
+      targetValue: target.value,
+      sourceMissingRow: source.missingRow,
+      targetMissingRow: target.missingRow,
+      sourceMissingField: source.missingField,
+      targetMissingField: target.missingField,
+      sourceRowNumber: row.sourceRowNumber,
+      targetRowNumber: row.targetRowNumber,
+      definition: view.columns.definitions.get(fieldName) || null,
+    };
+  }
+
+  function selectDiffCell(view, row, rowIndex, fieldName, fieldIndex) {
+    const field = selectedCellData(view, row, rowIndex, fieldName, fieldIndex);
+    const peers = Array.from(document.querySelectorAll(
+      '.diff-grid-cell[data-selection-key="' + field.selectionKey + '"]',
+    ));
+    updateDetail(field, peers);
+  }
+
+  function modifiedFieldTargets(view, row) {
+    const fieldNames = [view.columns.primaryKey, ...view.columns.fields.map((field) => field.name)];
+    return fieldNames.flatMap((fieldName, fieldIndex) => (
+      row.changedFields.has(fieldName) ? [{ fieldName, fieldIndex }] : []
+    ));
+  }
+
+  function centerDiffField(view, rowIndex, fieldIndex) {
+    if (fieldIndex === 0) return;
+    const selectionKey = rowIndex + ":" + fieldIndex;
+    const cell = view.sourceRows.querySelector(
+      '.diff-grid-cell[data-selection-key="' + selectionKey + '"]',
+    );
+    if (!cell) return;
+    const frozenWidth = 52 + 144;
+    const visibleWidth = Math.max(0, view.sourceScroll.clientWidth - frozenWidth);
+    const centeredOffset = Math.max(0, (visibleWidth - cell.offsetWidth) / 2);
+    const maxScrollLeft = Math.max(0, view.sourceScroll.scrollWidth - view.sourceScroll.clientWidth);
+    const nextScrollLeft = Math.min(
+      maxScrollLeft,
+      Math.max(0, cell.offsetLeft - frozenWidth - centeredOffset),
+    );
+    view.sourceScroll.scrollLeft = nextScrollLeft;
+    view.targetScroll.scrollLeft = nextScrollLeft;
+  }
+
+  function navigateModifiedField(view, row, rowIndex) {
+    const targets = modifiedFieldTargets(view, row);
+    if (!targets.length) return;
+    const selected = state.selectedDiffCell;
+    const currentIndex = selected?.sheetId === view.sheet.id && selected.rowIndex === rowIndex
+      ? targets.findIndex((target) => target.fieldIndex === selected.fieldIndex)
+      : -1;
+    const next = targets[(currentIndex + 1) % targets.length];
+    selectDiffCell(view, row, rowIndex, next.fieldName, next.fieldIndex);
+    centerDiffField(view, rowIndex, next.fieldIndex);
+  }
+
+  function diffGridTemplate(fieldCount) {
+    return "52px 144px" + (fieldCount ? " repeat(" + fieldCount + ", minmax(160px, 1fr))" : "");
+  }
+
+  function fieldMissingOnSide(definition, side) {
+    if (!definition) return false;
+    return (definition.status === "source_only" && side === "target")
+      || (definition.status === "target_only" && side === "source");
+  }
+
+  function fieldDisplayName(definition, side) {
+    const preferredKey = side === "source" ? "source_display_name" : "target_display_name";
+    const fallbackKey = side === "source" ? "target_display_name" : "source_display_name";
+    const preferred = String(definition?.[preferredKey] ?? "").trim();
+    return preferred || String(definition?.[fallbackKey] ?? "").trim();
+  }
+
+  function createHeaderCell(definition, side, className = "", singleLine = false) {
+    const fieldName = definition?.name || "";
+    const displayName = singleLine ? "" : fieldDisplayName(definition, side);
+    const cell = document.createElement("div");
+    cell.className = "diff-grid-header-cell" + (className ? " " + className : "");
+    cell.setAttribute("role", "columnheader");
+    if (singleLine) {
+      cell.classList.add("is-single-line");
+      const label = document.createElement("span");
+      label.className = "diff-grid-header-single-label";
+      label.textContent = fieldName;
+      cell.appendChild(label);
+    } else {
+      const display = document.createElement("span");
+      display.className = "diff-grid-header-display-name";
+      display.textContent = displayName;
+      const name = document.createElement("span");
+      name.className = "diff-grid-header-field-name";
+      name.textContent = fieldName;
+      cell.append(display, name);
+    }
+    cell.title = displayName ? displayName + "\n" + fieldName : fieldName;
+    cell.setAttribute("aria-label", displayName ? displayName + "，字段 " + fieldName : fieldName);
+    return cell;
+  }
+
+  function renderDiffHeader(view, side) {
+    const header = side === "source" ? view.sourceHeader : view.targetHeader;
+    const primaryKeyDefinition = view.columns.definitions.get(view.columns.primaryKey)
+      || { name: view.columns.primaryKey };
+    header.textContent = "";
+    header.style.gridTemplateColumns = view.gridTemplate;
+    header.appendChild(createHeaderCell({ name: "行号" }, side, "is-row-number", true));
+    header.appendChild(createHeaderCell(primaryKeyDefinition, side, "is-primary-key"));
+    view.columns.fields.forEach((field) => {
+      const cell = createHeaderCell(field, side);
+      if (fieldMissingOnSide(field, side)) {
+        cell.classList.add("is-missing-field");
+        cell.title += "\n该字段仅" + (side === "source" ? "右侧" : "左侧") + "存在";
+      }
+      header.appendChild(cell);
+    });
+  }
+
+  function sideLabel(side) {
+    return side === "source" ? "左侧" : "右侧";
+  }
+
+  function appendTargetDiffSegment(segments, text, changed) {
+    if (!text) return;
+    const previous = segments[segments.length - 1];
+    if (previous && previous.changed === changed) {
+      previous.text += text;
+      return;
+    }
+    segments.push({ text, changed });
+  }
+
+  function targetDiffSegments(sourceValue, targetValue) {
+    const sourceText = String(sourceValue ?? "");
+    const targetText = String(targetValue ?? "");
+    if (sourceText === targetText) return targetText ? [{ text: targetText, changed: false }] : [];
+
+    const source = Array.from(sourceText);
+    const target = Array.from(targetText);
+    let prefixLength = 0;
+    const maxPrefix = Math.min(source.length, target.length);
+    while (prefixLength < maxPrefix && source[prefixLength] === target[prefixLength]) {
+      prefixLength += 1;
+    }
+
+    let suffixLength = 0;
+    const maxSuffix = Math.min(source.length - prefixLength, target.length - prefixLength);
+    while (
+      suffixLength < maxSuffix
+      && source[source.length - 1 - suffixLength] === target[target.length - 1 - suffixLength]
+    ) {
+      suffixLength += 1;
+    }
+
+    const segments = [];
+    appendTargetDiffSegment(segments, target.slice(0, prefixLength).join(""), false);
+    const sourceMiddle = source.slice(prefixLength, source.length - suffixLength);
+    const targetMiddle = target.slice(prefixLength, target.length - suffixLength);
+    if (!sourceMiddle.length || sourceMiddle.length * targetMiddle.length > TARGET_DIFF_MAX_MATRIX_CELLS) {
+      appendTargetDiffSegment(segments, targetMiddle.join(""), true);
+    } else if (targetMiddle.length) {
+      const sourceLength = sourceMiddle.length;
+      const targetLength = targetMiddle.length;
+      const matrix = Array.from(
+        { length: sourceLength + 1 },
+        () => new Uint32Array(targetLength + 1),
+      );
+      for (let sourceIndex = sourceLength - 1; sourceIndex >= 0; sourceIndex -= 1) {
+        for (let targetIndex = targetLength - 1; targetIndex >= 0; targetIndex -= 1) {
+          matrix[sourceIndex][targetIndex] = sourceMiddle[sourceIndex] === targetMiddle[targetIndex]
+            ? matrix[sourceIndex + 1][targetIndex + 1] + 1
+            : Math.max(matrix[sourceIndex + 1][targetIndex], matrix[sourceIndex][targetIndex + 1]);
+        }
+      }
+
+      let sourceIndex = 0;
+      let targetIndex = 0;
+      while (sourceIndex < sourceLength && targetIndex < targetLength) {
+        if (sourceMiddle[sourceIndex] === targetMiddle[targetIndex]) {
+          appendTargetDiffSegment(segments, targetMiddle[targetIndex], false);
+          sourceIndex += 1;
+          targetIndex += 1;
+        } else if (matrix[sourceIndex + 1][targetIndex] >= matrix[sourceIndex][targetIndex + 1]) {
+          sourceIndex += 1;
+        } else {
+          appendTargetDiffSegment(segments, targetMiddle[targetIndex], true);
+          targetIndex += 1;
+        }
+      }
+      appendTargetDiffSegment(segments, targetMiddle.slice(targetIndex).join(""), true);
+    }
+    appendTargetDiffSegment(
+      segments,
+      suffixLength ? target.slice(target.length - suffixLength).join("") : "",
+      false,
+    );
+    return segments;
+  }
+
+  function renderTargetDiff(button, sourceValue, targetValue) {
+    targetDiffSegments(sourceValue, targetValue).forEach((segment) => {
+      if (!segment.changed) {
+        button.appendChild(document.createTextNode(segment.text));
+        return;
+      }
+      const highlight = document.createElement("span");
+      highlight.className = "diff-target-change";
+      highlight.textContent = segment.text;
+      button.appendChild(highlight);
+    });
+  }
+
+  function createGridCell(view, row, rowIndex, side, fieldName, fieldIndex) {
+    const info = sideCellValue(row, side, fieldName);
+    const button = document.createElement("button");
+    const selectionKey = rowIndex + ":" + fieldIndex;
+    const definition = view.columns.definitions.get(fieldName);
+    button.type = "button";
+    button.className = "diff-grid-cell" + (fieldIndex === 0 ? " is-primary-key" : "");
+    button.dataset.selectionKey = selectionKey;
+    const changed = row.status === "modified" && row.changedFields.has(fieldName);
+    if (side === "target" && changed) {
+      button.classList.add("has-target-diff");
+      renderTargetDiff(button, sideCellValue(row, "source", fieldName).value, info.value);
+    } else {
+      button.textContent = info.value;
+    }
+    if (info.missingRow) button.classList.add("is-missing-row");
+    if (info.missingField || fieldMissingOnSide(definition, side)) button.classList.add("is-missing-field");
+    if (changed) button.classList.add("is-changed");
+    if (row.status === "target_only" && side === "target") button.classList.add("is-added");
+    if (row.status === "source_only" && side === "source") button.classList.add("is-deleted");
+    if (
+      state.selectedDiffCell?.sheetId === view.sheet.id
+      && state.selectedDiffCell.selectionKey === selectionKey
+    ) {
+      button.classList.add("is-selected");
+    }
+    const valueLabel = info.missingRow
+      ? "该侧无此行"
+      : (info.missingField ? "该侧无此字段" : (info.value === "" ? "空字符串" : info.value));
+    button.title = fieldName + "：" + valueLabel;
+    button.setAttribute(
+      "aria-label",
+      sideLabel(side) + "，主键 " + row.key + "，字段 " + fieldName + "，" + valueLabel,
+    );
+    button.addEventListener("click", () => {
+      if (view.suppressClick) return;
+      selectDiffCell(view, row, rowIndex, fieldName, fieldIndex);
+    });
+    return button;
+  }
+
+  function createSideRow(view, row, rowIndex, side) {
+    const rowElement = document.createElement("div");
+    rowElement.className = "diff-grid-row is-" + row.status;
+    if (!row[side + "Values"]) rowElement.classList.add("is-placeholder");
+    rowElement.setAttribute("role", "row");
+    rowElement.setAttribute("aria-rowindex", String(rowIndex + 2));
+    rowElement.setAttribute("aria-label", "主键 " + row.key + "，" + (ROW_STATUS_LABELS[row.status] || row.status));
+    rowElement.style.top = (rowIndex * DIFF_ROW_HEIGHT) + "px";
+    rowElement.style.gridTemplateColumns = view.gridTemplate;
+    const rowNumber = document.createElement("div");
+    rowNumber.className = "diff-row-number";
+    rowNumber.setAttribute("role", "rowheader");
+    rowNumber.textContent = row[side + "RowNumber"] || "";
+    rowNumber.title = row[side + "RowNumber"]
+      ? sideLabel(side) + "第 " + row[side + "RowNumber"] + " 行"
+      : sideLabel(side) + "无对应行";
+    rowElement.appendChild(rowNumber);
+    rowElement.appendChild(createGridCell(view, row, rowIndex, side, view.columns.primaryKey, 0));
+    view.columns.fields.forEach((field, index) => {
+      rowElement.appendChild(createGridCell(view, row, rowIndex, side, field.name, index + 1));
+    });
+    return rowElement;
+  }
+
+  function createStatusRow(view, row, rowIndex) {
+    const navigable = row.status === "modified" && row.changedFields.size > 0;
+    const status = document.createElement(navigable ? "button" : "div");
+    if (navigable) {
+      status.type = "button";
+      status.title = "定位下一个修改字段";
+      status.setAttribute("aria-label", "主键 " + row.key + "，循环定位修改字段");
+      status.addEventListener("click", () => navigateModifiedField(view, row, rowIndex));
+    }
+    status.className = "diff-status-row is-" + row.status;
+    if (navigable) status.classList.add("is-navigable");
+    status.style.top = (rowIndex * DIFF_ROW_HEIGHT) + "px";
+    status.textContent = ROW_STATUS_LABELS[row.status] || row.status;
+    return status;
+  }
+
+  function renderDiffWindow(view, force = false) {
+    const viewportHeight = Math.max(
+      view.sourceScroll.clientHeight - DIFF_HEADER_HEIGHT,
+      view.targetScroll.clientHeight - DIFF_HEADER_HEIGHT,
+      320,
+    );
+    const offset = Math.max(0, view.sourceScroll.scrollTop - DIFF_HEADER_HEIGHT);
+    const start = Math.max(0, Math.floor(offset / DIFF_ROW_HEIGHT) - DIFF_OVERSCAN);
+    const end = Math.min(
+      view.rows.length,
+      Math.ceil((offset + viewportHeight) / DIFF_ROW_HEIGHT) + DIFF_OVERSCAN,
+    );
+    const rangeKey = start + ":" + end;
+    if (!force && view.rangeKey === rangeKey) return;
+    view.rangeKey = rangeKey;
+    const sourceFragment = document.createDocumentFragment();
+    const statusFragment = document.createDocumentFragment();
+    const targetFragment = document.createDocumentFragment();
+    for (let index = start; index < end; index += 1) {
+      const row = view.rows[index];
+      sourceFragment.appendChild(createSideRow(view, row, index, "source"));
+      statusFragment.appendChild(createStatusRow(view, row, index));
+      targetFragment.appendChild(createSideRow(view, row, index, "target"));
+    }
+    view.sourceRows.textContent = "";
+    view.statusRows.textContent = "";
+    view.targetRows.textContent = "";
+    view.sourceRows.appendChild(sourceFragment);
+    view.statusRows.appendChild(statusFragment);
+    view.targetRows.appendChild(targetFragment);
+  }
+
+  function scheduleDiffWindow(view, force = false) {
+    if (force) view.rangeKey = "";
+    if (view.renderFrame) return;
+    view.renderFrame = window.requestAnimationFrame(() => {
+      view.renderFrame = 0;
+      renderDiffWindow(view, force);
+    });
+  }
+
+  function syncDiffScroll(view, origin) {
+    if (view.syncing) return;
+    view.syncing = true;
+    const peer = origin === view.sourceScroll ? view.targetScroll : view.sourceScroll;
+    peer.scrollTop = origin.scrollTop;
+    peer.scrollLeft = origin.scrollLeft;
+    view.statusScroll.scrollTop = origin.scrollTop;
+    scheduleDiffWindow(view);
+    if (view.syncFrame) window.cancelAnimationFrame(view.syncFrame);
+    view.syncFrame = window.requestAnimationFrame(() => {
+      view.syncing = false;
+      view.syncFrame = 0;
+    });
+  }
+
+  function bindDragPan(view, scroller) {
+    let drag = null;
+    const onPointerDown = (event) => {
+      if (event.pointerType !== "mouse" || event.button !== 0) return;
+      drag = {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        left: scroller.scrollLeft,
+        top: scroller.scrollTop,
+        moved: false,
+      };
+    };
+    const finish = (event) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      if (drag.moved) {
+        view.suppressClick = true;
+        window.clearTimeout(view.clickTimer);
+        view.clickTimer = window.setTimeout(() => { view.suppressClick = false; }, 0);
+      }
+      scroller.classList.remove("is-dragging");
+      if (scroller.hasPointerCapture?.(event.pointerId)) scroller.releasePointerCapture(event.pointerId);
+      drag = null;
+    };
+    const onPointerMove = (event) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      const deltaX = event.clientX - drag.x;
+      const deltaY = event.clientY - drag.y;
+      if (!drag.moved) {
+        if (Math.hypot(deltaX, deltaY) < 5) return;
+        drag.moved = true;
+        scroller.setPointerCapture?.(event.pointerId);
+        scroller.classList.add("is-dragging");
+      }
+      scroller.scrollLeft = drag.left - deltaX;
+      scroller.scrollTop = drag.top - deltaY;
+      event.preventDefault();
+    };
+    scroller.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+    return () => {
+      scroller.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+    };
+  }
+
+  function setPairedDiffEmpty(message = "") {
+    const empty = $("paired-diff-empty");
+    const hasMessage = Boolean(message);
+    empty.textContent = message;
+    empty.classList.toggle("hidden", !hasMessage);
+    $("paired-diff-shell").classList.toggle("hidden", hasMessage);
+    $("diff-selection-detail").classList.toggle("hidden", hasMessage);
+  }
+
+  function destroySheetView() {
+    activeSheetView?.destroy();
+    activeSheetView = null;
+    syncFieldViewControls(false);
+  }
+
+  function createSheetView(sheet, restoredView = null) {
+    const primaryKey = sheet.primaryKey || "Id";
+    const rows = (sheet.rows || []).map((row) => normalizeSheetRow(row, primaryKey));
+    const columns = sheetColumnModel(sheet, rows, state.fieldViewMode);
+    const gridTemplate = diffGridTemplate(columns.fields.length);
+    const canvasWidth = 52 + 144 + (columns.fields.length * 160);
+    const bodyHeight = rows.length * DIFF_ROW_HEIGHT;
+    const view = {
+      sheet,
+      rows,
+      columns,
+      gridTemplate,
+      sourceScroll: $("diff-source-scroll"),
+      targetScroll: $("diff-target-scroll"),
+      statusScroll: $("diff-status-scroll"),
+      sourceHeader: $("diff-source-header"),
+      targetHeader: $("diff-target-header"),
+      sourceRows: $("diff-source-rows"),
+      targetRows: $("diff-target-rows"),
+      statusRows: $("diff-status-rows"),
+      rangeKey: "",
+      syncing: false,
+      suppressClick: false,
+      renderFrame: 0,
+      syncFrame: 0,
+      clickTimer: 0,
+    };
+    $("diff-source-label").textContent = state.context?.source?.branch || state.context?.source?.label || "左侧";
+    $("diff-target-label").textContent = state.context?.target?.branch || state.context?.target?.label || "右侧";
+    [view.sourceScroll, view.targetScroll].forEach((scroller) => {
+      scroller.scrollTop = 0;
+      scroller.scrollLeft = 0;
+      scroller.setAttribute("aria-rowcount", String(rows.length + 1));
+      scroller.setAttribute("aria-colcount", String(columns.fields.length + 2));
+    });
+    view.statusScroll.scrollTop = 0;
+    [$("diff-source-canvas"), $("diff-target-canvas")].forEach((canvas) => {
+      canvas.style.minWidth = canvasWidth + "px";
+    });
+    [view.sourceRows, view.targetRows, view.statusRows].forEach((container) => {
+      container.style.height = bodyHeight + "px";
+    });
+    renderDiffHeader(view, "source");
+    renderDiffHeader(view, "target");
+    const restoredScrollTop = Math.max(0, Number(restoredView?.scrollTop || 0));
+    const restoredScrollLeft = Math.max(0, Number(restoredView?.scrollLeft || 0));
+    view.sourceScroll.scrollTop = restoredScrollTop;
+    view.targetScroll.scrollTop = restoredScrollTop;
+    view.statusScroll.scrollTop = restoredScrollTop;
+    view.sourceScroll.scrollLeft = restoredScrollLeft;
+    view.targetScroll.scrollLeft = restoredScrollLeft;
+    renderDiffWindow(view, true);
+    const onSourceScroll = () => syncDiffScroll(view, view.sourceScroll);
+    const onTargetScroll = () => syncDiffScroll(view, view.targetScroll);
+    const onResize = () => scheduleDiffWindow(view, true);
+    view.sourceScroll.addEventListener("scroll", onSourceScroll, { passive: true });
+    view.targetScroll.addEventListener("scroll", onTargetScroll, { passive: true });
+    window.addEventListener("resize", onResize);
+    const dragCleanups = [bindDragPan(view, view.sourceScroll), bindDragPan(view, view.targetScroll)];
+    view.destroy = () => {
+      view.sourceScroll.removeEventListener("scroll", onSourceScroll);
+      view.targetScroll.removeEventListener("scroll", onTargetScroll);
+      window.removeEventListener("resize", onResize);
+      dragCleanups.forEach((cleanup) => cleanup());
+      if (view.renderFrame) window.cancelAnimationFrame(view.renderFrame);
+      if (view.syncFrame) window.cancelAnimationFrame(view.syncFrame);
+      window.clearTimeout(view.clickTimer);
+    };
+    activeSheetView = view;
+    syncFieldViewControls(true);
+    resetDetail();
+    const restoredSelection = restoredView?.selection;
+    const restoredRowIndex = Number(restoredSelection?.rowIndex);
+    const selectedRowIndex = Number.isInteger(restoredRowIndex)
+      && restoredRowIndex >= 0
+      && restoredRowIndex < rows.length
+      ? restoredRowIndex
+      : 0;
+    const selectedRow = rows[selectedRowIndex];
+    if (selectedRow) {
+      const visibleFieldNames = new Set([
+        columns.primaryKey,
+        ...columns.fields.map((field) => field.name),
+      ]);
+      const preferredField = visibleFieldNames.has(restoredSelection?.fieldName)
+        ? restoredSelection.fieldName
+        : (selectedRow.changedFields.keys().next().value || columns.primaryKey);
+      const fieldIndex = preferredField === columns.primaryKey
+        ? 0
+        : Math.max(0, columns.fields.findIndex((field) => field.name === preferredField) + 1);
+      const fieldName = fieldIndex === 0 ? columns.primaryKey : columns.fields[fieldIndex - 1].name;
+      const field = selectedCellData(view, selectedRow, selectedRowIndex, fieldName, fieldIndex);
+      const peers = Array.from(document.querySelectorAll(
+        '.diff-grid-cell[data-selection-key="' + field.selectionKey + '"]',
+      ));
+      updateDetail(field, peers);
+    }
+  }
+
+  function syncFieldViewControls(enabled) {
+    const diffButton = $("show-diff-fields");
+    const originalButton = $("show-original-fields");
+    const showingOriginal = state.fieldViewMode === "original";
+    diffButton.disabled = !enabled;
+    originalButton.disabled = !enabled;
+    diffButton.setAttribute("aria-pressed", String(!showingOriginal));
+    originalButton.setAttribute("aria-pressed", String(showingOriginal));
+    diffButton.classList.toggle("is-selected", !showingOriginal);
+    originalButton.classList.toggle("is-selected", showingOriginal);
+  }
+
+  function setFieldViewMode(mode) {
+    if (mode !== "diff" && mode !== "original") return;
+    if (state.fieldViewMode === mode) {
+      syncFieldViewControls(Boolean(activeSheetView));
+      return;
+    }
+    const restoredView = activeSheetView
+      ? {
+        scrollTop: activeSheetView.sourceScroll.scrollTop,
+        scrollLeft: activeSheetView.sourceScroll.scrollLeft,
+        selection: state.selectedDiffCell ? { ...state.selectedDiffCell } : null,
+      }
+      : null;
+    const sheet = state.selectedSheet;
+    state.fieldViewMode = mode;
+    if (!activeSheetView || !sheet) {
+      syncFieldViewControls(false);
+      return;
+    }
+    destroySheetView();
+    createSheetView(sheet, restoredView);
   }
 
   function sheetMetrics(sheet) {
@@ -227,85 +918,31 @@
   }
 
   function renderSheet(result, sheetId) {
+    destroySheetView();
     const visible = visibleSheetResults(result);
     const sheet = visible.find((item) => item.id === sheetId) || preferredVisibleSheet(result);
-    const tableBody = $("semantic-table-body");
-    tableBody.textContent = "";
     if (!sheet) {
       state.selectedSheet = null;
       renderEmptySheetNavigation("当前筛选没有可显示的 Sheet。", result);
-      const empty = document.createElement("div");
-      empty.className = "semantic-table-empty";
-      empty.textContent = "切换到“显示全部”查看无变化 Sheet。";
-      tableBody.appendChild(empty);
+      setPairedDiffEmpty("切换到“显示全部”查看无变化 Sheet。");
       resetDetail();
       return;
     }
     state.selectedSheet = sheet;
     renderSheetNavigation(result, sheet.id);
     if (!sheet.rows.length) {
-      const empty = document.createElement("div");
-      empty.className = "semantic-table-empty";
       if (sheet.status === "failed") {
-        empty.textContent = "该 Sheet 执行失败；结构化错误保留在当前工作簿状态中。";
+        setPairedDiffEmpty("该 Sheet 执行失败；结构化错误保留在当前工作簿状态中。");
       } else {
-        empty.textContent = state.context.mode === "demo"
+        setPairedDiffEmpty(state.context?.mode === "demo"
           ? "UI 示例：该 Sheet 已完成且没有差异。"
-          : "该 Sheet 没有行级差异。";
+          : "该 Sheet 没有行级差异。");
       }
-      tableBody.appendChild(empty);
       resetDetail();
       return;
     }
-
-    const changeLabels = { modified: "修改", added: "右侧新增", deleted: "左侧删除" };
-    let firstField = null;
-    let firstButton = null;
-    sheet.rows.forEach((row) => {
-      const rowElement = document.createElement("div");
-      rowElement.className = "semantic-diff-row";
-      const key = document.createElement("div");
-      key.className = "semantic-key";
-      const keyValue = document.createElement("strong");
-      keyValue.textContent = row.key;
-      const keyLabel = document.createElement("small");
-      keyLabel.textContent = row.label;
-      key.append(keyValue, keyLabel);
-      const status = document.createElement("span");
-      status.className = "row-change-status is-" + row.change;
-      status.textContent = changeLabels[row.change] || row.change;
-      const fields = document.createElement("div");
-      fields.className = "field-diff-list";
-      (row.fields || []).forEach((field) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "field-diff-button";
-        button.setAttribute(
-          "aria-label",
-          row.key + " " + field.name + "：左侧 " + sideValue(field, "source") + "，右侧 " + sideValue(field, "target"),
-        );
-        const name = document.createElement("strong");
-        name.textContent = field.name;
-        const values = document.createElement("span");
-        values.textContent = sideValue(field, "source") + " → " + sideValue(field, "target");
-        button.append(name, values);
-        button.addEventListener("click", () => updateDetail(field, button));
-        fields.appendChild(button);
-        if (!firstField) {
-          firstField = field;
-          firstButton = button;
-        }
-      });
-      if (!row.fields?.length) {
-        const empty = document.createElement("span");
-        empty.className = "field-diff-empty";
-        empty.textContent = "该行没有可展示的字段值";
-        fields.appendChild(empty);
-      }
-      rowElement.append(key, status, fields);
-      tableBody.appendChild(rowElement);
-    });
-    updateDetail(firstField, firstButton);
+    setPairedDiffEmpty();
+    createSheetView(sheet);
   }
   function setSheetFilterMode(showAll) {
     if (state.showAllSheets === showAll) return;
@@ -593,6 +1230,7 @@
       path = result.candidate.path;
     }
     state.selectedPath = path;
+    destroySheetView();
     state.selectedSheet = null;
     renderWorkbookNavigation();
     renderFileContext(result);
@@ -831,6 +1469,8 @@
   }
 
   $("compare-current-workbook").addEventListener("click", compareCurrentWorkbook);
+  $("show-diff-fields").addEventListener("click", () => setFieldViewMode("diff"));
+  $("show-original-fields").addEventListener("click", () => setFieldViewMode("original"));
   $("show-modified-sheets").addEventListener("click", () => setSheetFilterMode(false));
   $("show-all-sheets").addEventListener("click", () => setSheetFilterMode(true));
   $("toggle-unchanged-workbooks").addEventListener("click", toggleUnchangedWorkbooks);

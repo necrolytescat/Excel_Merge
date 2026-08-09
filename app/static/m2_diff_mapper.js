@@ -95,6 +95,10 @@
         label: "主键：" + (sheet.primary_key || "未提供"),
         status: row.status,
         change: rowChange[row.status] || row.status,
+        sourceRowNumber: row.source?.row_number ?? null,
+        targetRowNumber: row.target?.row_number ?? null,
+        sourceValues: row.source ? { ...(row.source.values || {}) } : null,
+        targetValues: row.target ? { ...(row.target.values || {}) } : null,
         fields: mapRowFields(sheet, row, definitions),
       })),
     };

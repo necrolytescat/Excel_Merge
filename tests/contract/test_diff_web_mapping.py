@@ -78,6 +78,8 @@ def payload(status: str = "modified") -> dict:
                     {
                         "name": "Id",
                         "status": "common",
+                        "source_display_name": "流水ID",
+                        "target_display_name": "流水编号",
                         "source_type": "int",
                         "target_type": "int",
                         "source_scope": "all",
@@ -86,6 +88,8 @@ def payload(status: str = "modified") -> dict:
                     {
                         "name": "Name",
                         "status": "common",
+                        "source_display_name": "源名称",
+                        "target_display_name": "目标名称",
                         "source_type": "string",
                         "target_type": "string",
                         "source_scope": "client",
@@ -137,6 +141,13 @@ def test_mapper_uses_server_summary_and_real_one_sided_row_values():
     assert mapped["state"] == "diff_ready"
     assert mapped["summary"]["modified_fields"] == 1
     assert mapped["sheets"][0]["primaryKey"] == "Id"
+    assert mapped["sheets"][0]["fieldDefinitions"][0]["source_display_name"] == "流水ID"
+    assert mapped["sheets"][0]["fieldDefinitions"][1]["target_display_name"] == "目标名称"
+    modified = mapped["sheets"][0]["rows"][0]
+    assert modified["sourceRowNumber"] == 8
+    assert modified["targetRowNumber"] == 9
+    assert modified["sourceValues"] == {"Id": "1", "Name": "左值"}
+    assert modified["targetValues"] == {"Id": "1", "Name": "右值"}
     assert mapped["sheets"][0]["rows"][0]["fields"][0] == {
         "name": "Name",
         "status": "modified",
@@ -148,6 +159,8 @@ def test_mapper_uses_server_summary_and_real_one_sided_row_values():
         "definition": {
             "name": "Name",
             "status": "common",
+            "source_display_name": "源名称",
+            "target_display_name": "目标名称",
             "source_type": "string",
             "target_type": "string",
             "source_scope": "client",
@@ -156,6 +169,10 @@ def test_mapper_uses_server_summary_and_real_one_sided_row_values():
     }
     source_only = mapped["sheets"][0]["rows"][1]
     assert source_only["change"] == "deleted"
+    assert source_only["sourceRowNumber"] == 10
+    assert source_only["targetRowNumber"] is None
+    assert source_only["sourceValues"] == {"Id": "2", "Name": "仅左侧"}
+    assert source_only["targetValues"] is None
     assert [field["name"] for field in source_only["fields"]] == ["Id", "Name"]
     assert source_only["fields"][1]["sourceValue"] == "仅左侧"
     assert source_only["fields"][1]["targetValue"] == "—"
@@ -235,6 +252,97 @@ def test_failed_maps_to_error_instead_of_empty():
     assert mapped["partial"] is False
     assert mapped["sheets"] == []
     assert "M2_MANIFEST_PARSE_FAILED" in mapped["error"]
+
+
+def test_sheet_column_model_supports_original_view_without_changing_scheme_a():
+    script = r"""
+const fs = require("node:fs");
+const source = fs.readFileSync("./app/static/compare_results.js", "utf8");
+const start = source.indexOf("  function sheetColumnModel(sheet, rows, fieldViewMode)");
+const end = source.indexOf("\n\n  function sideCellValue", start);
+if (start < 0 || end < 0) throw new Error("sheetColumnModel source missing");
+eval(source.slice(start, end));
+const sheet = {
+  primaryKey: "Id",
+  fieldDefinitions: [
+    { name: "Id", status: "common" },
+    { name: "Name", status: "common" },
+    { name: "Score", status: "common" },
+  ],
+};
+const modifiedRows = [{
+  status: "modified",
+  sourceValues: { Id: "1", Name: "A", Score: "10" },
+  targetValues: { Id: "1", Name: "B", Score: "10" },
+  fields: [{ name: "Name", status: "modified" }],
+  changedFields: new Map([["Name", {}]]),
+}];
+const oneSidedRows = [
+  ...modifiedRows,
+  {
+    status: "target_only",
+    sourceValues: null,
+    targetValues: { Id: "2", Name: "C", Score: "20" },
+    fields: [],
+    changedFields: new Map(),
+  },
+];
+const names = model => [model.primaryKey, ...model.fields.map(field => field.name)];
+process.stdout.write(JSON.stringify({
+  diff: names(sheetColumnModel(sheet, modifiedRows, "diff")),
+  original: names(sheetColumnModel(sheet, modifiedRows, "original")),
+  schemeA: names(sheetColumnModel(sheet, oneSidedRows, "diff")),
+}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        cwd=PROJECT_ROOT,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=True,
+    )
+
+    assert json.loads(completed.stdout) == {
+        "diff": ["Id", "Name"],
+        "original": ["Id", "Name", "Score"],
+        "schemeA": ["Id", "Name", "Score"],
+    }
+
+
+def test_header_display_name_prefers_current_side_and_falls_back_to_peer():
+    script = r"""
+const fs = require("node:fs");
+const source = fs.readFileSync("./app/static/compare_results.js", "utf8");
+const start = source.indexOf("  function fieldDisplayName(definition, side)");
+const end = source.indexOf("\n\n  function createHeaderCell", start);
+if (start < 0 || end < 0) throw new Error("fieldDisplayName source missing");
+eval(source.slice(start, end));
+const cases = [
+  [{ source_display_name: "源名称", target_display_name: "目标名称" }, "source"],
+  [{ source_display_name: "源名称", target_display_name: "目标名称" }, "target"],
+  [{ source_display_name: "   ", target_display_name: "目标名称" }, "source"],
+  [{ source_display_name: "源名称", target_display_name: null }, "target"],
+  [{ source_display_name: null, target_display_name: null }, "source"],
+];
+process.stdout.write(JSON.stringify(cases.map(([definition, side]) => fieldDisplayName(definition, side))));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        cwd=PROJECT_ROOT,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=True,
+    )
+
+    assert json.loads(completed.stdout) == [
+        "源名称",
+        "目标名称",
+        "目标名称",
+        "源名称",
+        "",
+    ]
 
 
 def test_frontend_scripts_are_valid_javascript():

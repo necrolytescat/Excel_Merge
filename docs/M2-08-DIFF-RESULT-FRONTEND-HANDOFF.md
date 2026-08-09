@@ -1,11 +1,11 @@
 # M2-08 差异结果前端改造交接
 
-> 状态：进行中；Batch Task、工作簿导航、比对结果标题区、Sheet 标题与导航已锁定
-> 更新日期：2026-08-09
+> 状态：已验收并归档
+> 归档日期：2026-08-09
 > 阶段归属：M2，不进入 M3
-> 执行方式：由用户在下一对话逐项指定，不得自动开始写前端代码
-> 自动化基线：`212 passed, 1350 warnings`
-> 下一模块：`M2-08-ROW-FIELD-DIFF-HANDOFF.md`
+> 归档范围：Batch Task、工作簿导航、标题与 Sheet 导航、行与字段差异
+> 归档记录：`docs/archive/M2-08-ROW-FIELD-DIFF-ARCHIVE.md`
+> 说明：第 1 至 13 节保留阶段过程与历史启动上下文；后续状态以第 14 节为准。
 
 ## 1. 阶段定位
 
@@ -70,7 +70,7 @@ var/m2-fixtures/d3c-6e501824.m2fixture
 Task: 6e501824-ac7d-49d4-bd7f-6d7136a958f1
 source revision: 26438
 target revision: 26438
-SHA-256: 31353872bde2ab53fee8e0d6dfda31196117564361a0d51dfbfc0921487d0380
+SHA-256: bde0ff57c39cf53c9370ab76b5c496f9d2129b06b9336695204b8662c501e296
 ```
 
 当前黄金任务：
@@ -283,3 +283,13 @@ Batch Task、工作簿导航、比对结果标题区、Sheet 标题与导航已�
 和无 Merge/写回语义。不要修改 core 解析与 Diff 规则，不新增第二套前端 Diff
 JSON，不把正式结果页接到 Demo 假数据。
 ```
+
+## 14. M2-08 归档结论
+
+M2-08 用户指定的前端改造已经逐项完成并通过验收，当前页面结构和交互转为冻结基线。
+行与字段模块最终实现和真实 Replay 证据见
+`archive/M2-08-ROW-FIELD-DIFF-ARCHIVE.md`。
+
+本归档不等于整个 M2 已完成。M2 仍需补齐正式任务 Task ID、冻结 Revision、候选与
+终态审计记录，并在输入完整的最终离线夹具上完成评审。上述事项完成前，路线图继续
+停留在 M2，不进入 M3。

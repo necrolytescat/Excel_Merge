@@ -12,8 +12,8 @@
 | Task | `6e501824-ac7d-49d4-bd7f-6d7136a958f1` |
 | Source | `KR_FIX_KR-Fix-1.0.0.0` @ r26438 |
 | Target | `KR_FIX_KR-Fix-1.0.1.0` @ r26438 |
-| 归档 SHA-256 | `31353872bde2ab53fee8e0d6dfda31196117564361a0d51dfbfc0921487d0380` |
-| 归档大小 | `46,168,684 bytes` |
+| 归档 SHA-256 | `bde0ff57c39cf53c9370ab76b5c496f9d2129b06b9336695204b8662c501e296` |
+| 归档大小 | `46,210,882 bytes` |
 | 原始输入 | 726 个 Excel/CSV 索引项，按 SHA-256 内容寻址去重 |
 | 显式缺失 | 2 个 |
 | 黄金结果 | 55 个 `m2.diff.v1` |
@@ -33,6 +33,10 @@
 `PetConfig/ValueQuality` 和 `ShopConfig/RefreshShop` 已纳入新基线；旧基线保存在
 `var/m2-fixtures/d3c-6e501824.pre-first-column-key.m2fixture`，SHA-256 为
 `f62564f37f9101c116cf910224f1234bc2869b5df9d269d707e7684e8f509fc0`。
+
+2026-08-09 经用户授权，为双行字段表头保留 CSV 第 1 条逻辑记录的 `display_name`，
+并从夹具内冻结输入重算 55 个黄金结果。输入字节、Task、Revision、候选范围和
+`54 succeeded / 1 business_failed` 摘要未变化；当前归档哈希和大小以上表为准。
 
 ## 2. 为什么同时保存 Excel、CSV 和 Diff
 

@@ -5,12 +5,12 @@ from core.semantic_diff import diff_table_csv
 from core.table_csv_parser import parse_table_csv
 
 
-def _table(headers, types, rows, name="sample.csv"):
+def _table(headers, types, rows, name="sample.csv", display_names=None):
     buffer = StringIO(newline="")
     writer = csv.writer(buffer, lineterminator="\n")
     writer.writerows(
         [
-            headers,
+            display_names or headers,
             headers,
             types,
             ["All"] * len(headers),
@@ -75,3 +75,25 @@ def test_semantic_diff_keeps_source_order_then_target_only_order():
         ("4", "target_only"),
     ]
     assert result.summary.modified_fields == 1
+
+
+def test_semantic_diff_ignores_display_name_changes():
+    source = _table(
+        ["Id", "Name"],
+        ["uint32", "string"],
+        [["1", "Alpha"]],
+        display_names=["流水ID", "源名称"],
+    )
+    target = _table(
+        ["Id", "Name"],
+        ["uint32", "string"],
+        [["1", "Alpha"]],
+        display_names=["流水编号", "目标名称"],
+    )
+
+    result = diff_table_csv(source, target)
+
+    assert result.status == "unchanged"
+    assert [field.status for field in result.fields] == ["common", "common"]
+    assert result.fields[1].source.display_name == "源名称"
+    assert result.fields[1].target.display_name == "目标名称"

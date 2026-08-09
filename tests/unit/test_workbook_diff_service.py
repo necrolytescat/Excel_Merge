@@ -1,3 +1,5 @@
+import csv
+from io import StringIO
 from pathlib import Path
 
 from app.schemas.diff import SheetStatus, WorkbookStatus
@@ -53,3 +55,50 @@ def test_missing_csv_is_a_structured_failure(tmp_path, monkeypatch):
     ]
     assert {error.side for error in result.errors} == {"source", "target"}
     assert all(str(tmp_path) not in error.message for error in result.errors)
+
+
+def _table_csv(display_names, field_names, values):
+    buffer = StringIO(newline="")
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerows(
+        [
+            display_names,
+            field_names,
+            ["uint32", "string"],
+            ["All", "Client"],
+            ["meta", "meta"],
+            ["meta", "meta"],
+            ["meta", "meta"],
+            values,
+        ]
+    )
+    return buffer.getvalue().encode("utf-8")
+
+
+def test_field_payload_preserves_both_display_names_without_changing_diff_status(tmp_path):
+    source = tmp_path / "left"
+    target = tmp_path / "right"
+    source.mkdir()
+    target.mkdir()
+    (source / "Base.csv").write_bytes(
+        _table_csv(["流水ID", "源名称"], ["Id", "Name"], ["1", "Alpha"])
+    )
+    (target / "Base.csv").write_bytes(
+        _table_csv(["流水编号", "目标名称"], ["Id", "Name"], ["1", "Alpha"])
+    )
+    entry = ManifestEntry(sheet_name="Base", tbx_name="Base", is_export="1", row_number=2)
+
+    sheet = WorkbookDiffService(_layout())._sheet_payload(
+        sheet_name="Base",
+        source_entry=entry,
+        target_entry=entry,
+        source_directory=source,
+        target_directory=target,
+        workbook_name="AtlasConfig.xlsm",
+    )
+
+    assert sheet.status == SheetStatus.UNCHANGED
+    assert [field.status.value for field in sheet.fields] == ["common", "common"]
+    assert [
+        (field.source_display_name, field.target_display_name) for field in sheet.fields
+    ] == [("流水ID", "流水编号"), ("源名称", "目标名称")]

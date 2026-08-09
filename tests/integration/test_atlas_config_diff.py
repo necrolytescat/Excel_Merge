@@ -39,7 +39,7 @@ def test_atlas_config_produces_stable_expected_diff():
     assert first_json == second_json
     assert (
         hashlib.sha256(first_json).hexdigest()
-        == "fd15a0f07d490b76bc64a1c406782324caae6de9a08c56cfe12eba1db0777190"
+        == "060b1fdbf11c1d08798c17f527a184a3417662882a93763a48dccb26b6bc62e1"
     )
     assert DiffResultPayload.model_validate_json(first_json) == first
     assert first.summary.model_dump() == {

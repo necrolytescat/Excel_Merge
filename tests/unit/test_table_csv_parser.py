@@ -51,6 +51,10 @@ def test_table_csv_parser_uses_logical_record_numbers():
     )
 
     assert parsed.primary_key == "Id"
+    assert [(field.display_name, field.name) for field in parsed.fields] == [
+        ("显示名", "Id"),
+        ("描述", "Name"),
+    ]
     assert [row.row_number for row in parsed.rows] == [8, 9]
     assert parsed.rows[0].key == "001"
     assert parsed.rows[0].values["Name"] == " Alpha "

@@ -2,7 +2,7 @@
 
 ## 1. 当前状态
 
-M0.1 与 M1 均已归档。M1 已交付“版本对比”页面、端点注册表、Table Excel 快照、文件级差异候选和只读 Provider；真实 KR FIX 验证结果为两端各 197 个 Excel、53 个文件级差异候选，Table 物理路径已正式绑定为 `Source/table`。M2 单工作簿链路、冻结 Revision 的 SVN 数据适配和 M2-07 单机批量运行时均已完成。D3 真实数据兼容性分类与引擎加固已完成，离线 Replay 为 55/55 matched、0 mismatched，全量自动化为 `212 passed`。当前进入 M2-08 差异结果前端逐项改造，仍停留在 M2。
+M0.1 与 M1 均已归档。M1 已交付“版本对比”页面、端点注册表、Table Excel 快照、文件级差异候选和只读 Provider；真实 KR FIX 验证结果为两端各 197 个 Excel、53 个文件级差异候选，Table 物理路径已正式绑定为 `Source/table`。M2 单工作簿链路、冻结 Revision 的 SVN 数据适配、M2-07 单机批量运行时和 M2-08 差异结果前端改造均已完成。当前离线 Replay 保持 55/55 matched、0 mismatched；M2 仍需补齐正式任务审计记录和输入完整的最终夹具评审，因此尚不进入 M3。
 
 ## 2. 已确定方向
 
@@ -88,15 +88,14 @@ M2 采用“单工作簿数据集先行、SVN 后接入”的顺序。首个验�
 
 D2 真实试跑发现 29 个业务失败、0 个编排失败，并冻结为五类错误语料。D3 已完成对应分类与引擎加固，包括 TableCsv 文件名唯一大小写匹配和受限的物理第一列主键兜底；不扩展批量调度，不接 Merge/写回。归档交接见 `M2-05-STAGE-D3-COMPATIBILITY-HANDOFF.md`。
 
-### M2-08 差异结果前端逐项改造
+### M2-08 差异结果前端逐项改造（已归档）
 
-- 基于真实 Replay 和测试数据，按用户逐项指定改造差异结果页；
-- 每项先展示现状、代表样本、方案、影响范围和验收用例，用户确认后再实施；
-- Batch Task、工作簿导航、比对结果标题区和 Sheet 标题与导航已完成并锁定；
-- 下一模块只处理行与字段差异，入口见 `M2-08-ROW-FIELD-DIFF-HANDOFF.md`；
-- 保持正式、Replay、Demo 三种模式共享渲染契约；
-- 不修改 `m2.diff.v1`、`m2.batch.v1`、解析规则、冻结 Revision、SVN 只读或无 Merge/写回边界；
-- 当前入口见 `M2-08-DIFF-RESULT-FRONTEND-HANDOFF.md`。
+- Batch Task、工作簿导航、比对结果标题区和 Sheet 标题与导航已逐项完成并锁定；
+- 行与字段差异已改造成左右工作簿对照，支持四向拖拽、空侧占位、选择详情、修改字段循环导航和 TARGET 字符级标红；
+- 字段表头显示 `display_name + field_name`，字段视图支持“显示差异 / 显示原表”；
+- 正式、Replay、Demo 继续共享渲染契约，未新增第二套前端 Diff JSON；
+- `m2.diff.v1`、`m2.batch.v1`、冻结 Revision、SVN 只读和无 Merge/写回边界保持不变；
+- 归档记录见 `archive/M2-08-ROW-FIELD-DIFF-ARCHIVE.md`。
 
 ## 6. M3 及以后
 

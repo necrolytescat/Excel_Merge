@@ -6,11 +6,11 @@
   <link rel="icon" href="data:,">
   <title>Config Atlas · {{ '离线数据矫正' if replay_mode else ('示例差异结果' if demo_mode else '差异结果') }}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.3">
-  <link rel="stylesheet" href="{{ url_for('static', path='compare_results_readability.css') }}?v=1.9.3">
+  <link rel="stylesheet" href="{{ url_for('static', path='compare_results_readability.css') }}?v=2.1.3">
   <link rel="stylesheet" href="{{ url_for('static', path='compare_results_batch.css') }}?v=1.1.0">
   {% if replay_mode %}<link rel="stylesheet" href="{{ url_for('static', path='offline_replay.css') }}?v=1.0.0">{% endif %}
-  <script src="{{ url_for('static', path='m2_diff_mapper.js') }}?v=1.0.0" defer></script>
-  <script src="{{ url_for('static', path='compare_results.js') }}?v=1.9.3" defer></script>
+  <script src="{{ url_for('static', path='m2_diff_mapper.js') }}?v=1.1.0" defer></script>
+  <script src="{{ url_for('static', path='compare_results.js') }}?v=2.1.3" defer></script>
   <script src="{{ url_for('static', path='compare_results_batch.js') }}?v=1.2.0" defer></script>
   {% if replay_mode %}<script src="{{ url_for('static', path='offline_replay.js') }}?v=1.1.0" defer></script>{% endif %}
 </head>
@@ -124,6 +124,10 @@
               <p id="workbench-caption">从左侧选择工作簿查看结果状态。</p>
             </div>
             <div class="workbench-heading-actions">
+              <div class="field-view-switch" id="field-view-switch" role="group" aria-label="字段显示范围">
+                <button class="field-view-button is-selected" id="show-diff-fields" type="button" aria-pressed="true" disabled>显示差异</button>
+                <button class="field-view-button" id="show-original-fields" type="button" aria-pressed="false" disabled>显示原表</button>
+              </div>
               <button id="compare-current-workbook" type="button" class="primary" disabled>比对当前工作簿</button>
             </div>
           </div>
@@ -156,8 +160,46 @@
               <div class="diff-state-view" data-state="diff_empty"><div class="state-illustration state-success" aria-hidden="true">✓</div><h3>语义 Diff 已完成，无差异</h3><p>该工作簿已完成解析与比对，差异数为 0。</p></div>
               <div class="diff-state-view" data-state="diff_error"><div class="state-illustration state-error" aria-hidden="true">!</div><h3>语义 Diff 失败</h3><p id="diff-error-detail">失败信息将在此显示，不会降级为空差异。</p><ul class="diff-error-list" id="diff-error-list"></ul></div>
               <div class="diff-state-view diff-ready-view" data-state="diff_ready">
-                <div class="semantic-table-header"><span>业务主键</span><span>变更类型</span><span>字段差异</span></div>
-                <div id="semantic-table-body"><div class="semantic-table-empty">等待工作簿结果。</div></div>
+                <div class="paired-diff-empty hidden" id="paired-diff-empty">等待工作簿结果。</div>
+                <div class="paired-diff-shell" id="paired-diff-shell">
+                  <div class="paired-diff-grid">
+                    <section class="diff-side-pane is-source" aria-labelledby="diff-source-heading">
+                      <div class="diff-side-heading" id="diff-source-heading"><span>左侧 · SOURCE</span><strong id="diff-source-label">左侧</strong></div>
+                      <div class="diff-side-scroll" id="diff-source-scroll" role="grid" aria-label="左侧工作簿差异表格" tabindex="0">
+                        <div class="diff-side-canvas" id="diff-source-canvas">
+                          <div class="diff-grid-header" id="diff-source-header" role="row"></div>
+                          <div class="diff-grid-rows" id="diff-source-rows" role="rowgroup"></div>
+                        </div>
+                      </div>
+                    </section>
+                    <section class="diff-status-pane" aria-label="差异状态">
+                      <div class="diff-status-heading">状态</div>
+                      <div class="diff-status-scroll" id="diff-status-scroll">
+                        <div class="diff-status-header">变更</div>
+                        <div class="diff-status-rows" id="diff-status-rows"></div>
+                      </div>
+                    </section>
+                    <section class="diff-side-pane is-target" aria-labelledby="diff-target-heading">
+                      <div class="diff-side-heading" id="diff-target-heading"><span>右侧 · TARGET</span><strong id="diff-target-label">右侧</strong></div>
+                      <div class="diff-side-scroll" id="diff-target-scroll" role="grid" aria-label="右侧工作簿差异表格" tabindex="0">
+                        <div class="diff-side-canvas" id="diff-target-canvas">
+                          <div class="diff-grid-header" id="diff-target-header" role="row"></div>
+                          <div class="diff-grid-rows" id="diff-target-rows" role="rowgroup"></div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+                <section class="diff-selection-detail is-empty" id="diff-selection-detail" aria-labelledby="diff-selection-heading" aria-live="polite">
+                  <div class="diff-selection-heading">
+                    <div><span>选中字段</span><strong id="diff-selection-heading">未选择</strong></div>
+                    <small id="diff-selection-meta">选择任一侧单元格查看完整值</small>
+                  </div>
+                  <div class="diff-selection-values">
+                    <div><span>左侧 · SOURCE</span><pre id="diff-selection-source">—</pre></div>
+                    <div><span>右侧 · TARGET</span><pre id="diff-selection-target">—</pre></div>
+                  </div>
+                </section>
               </div>
             </div>
 

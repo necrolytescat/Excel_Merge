@@ -88,10 +88,10 @@ def test_formal_results_page_calls_m2_diff_api_without_demo_fixture_dependency()
     offline_script = api.get("/static/offline_replay.js")
 
     assert page.status_code == 200
-    assert "m2_diff_mapper.js?v=1.0.0" in page.text
+    assert "m2_diff_mapper.js?v=1.1.0" in page.text
     assert "app.css?v=0.3.3" in page.text
-    assert "compare_results_readability.css?v=1.9.3" in page.text
-    assert "compare_results.js?v=1.9.3" in page.text
+    assert "compare_results_readability.css?v=2.1.3" in page.text
+    assert "compare_results.js?v=2.1.3" in page.text
     assert "compare_results_batch.js?v=1.2.0" in page.text
     assert 'id="batch-task-panel"' in page.text
     assert "语义 Diff 服务尚未接入" not in page.text
@@ -138,6 +138,78 @@ def test_formal_results_page_calls_m2_diff_api_without_demo_fixture_dependency()
     assert 'id="toggle-detail"' not in page.text
     assert '$("detail-location")' not in script.text
     assert '$("toggle-detail")' not in script.text
+    assert 'id="paired-diff-shell"' in page.text
+    assert 'id="diff-source-scroll"' in page.text
+    assert 'id="diff-status-scroll"' in page.text
+    assert 'id="diff-status-scroll" aria-hidden="true"' not in page.text
+    assert 'id="diff-target-scroll"' in page.text
+    assert 'id="diff-selection-detail"' in page.text
+    assert 'id="field-view-switch"' in page.text
+    assert 'aria-label="字段显示范围"' in page.text
+    assert 'id="show-diff-fields"' in page.text
+    assert 'id="show-original-fields"' in page.text
+    assert page.text.index('id="workbench-heading"') < page.text.index('id="field-view-switch"')
+    assert page.text.index('id="field-view-switch"') < page.text.index('id="compare-current-workbook"')
+    assert 'id="semantic-table-body"' not in page.text
+    assert 'class="semantic-table-header"' not in page.text
+    assert "function sheetColumnModel(sheet, rows, fieldViewMode)" in script.text
+    assert 'fieldViewMode: "diff"' in script.text
+    assert "function syncFieldViewControls(enabled)" in script.text
+    assert "function setFieldViewMode(mode)" in script.text
+    assert "sheetColumnModel(sheet, rows, state.fieldViewMode)" in script.text
+    assert '"show-diff-fields").addEventListener' in script.text
+    assert '"show-original-fields").addEventListener' in script.text
+    assert "function fieldDisplayName(definition, side)" in script.text
+    assert "diff-grid-header-display-name" in script.text
+    assert "diff-grid-header-field-name" in script.text
+    assert "source_display_name" in script.text
+    assert "target_display_name" in script.text
+    assert 'row.status === "source_only" || row.status === "target_only"' in script.text
+    assert "function createSideRow(view, row, rowIndex, side)" in script.text
+    assert "function modifiedFieldTargets(view, row)" in script.text
+    assert "function centerDiffField(view, rowIndex, fieldIndex)" in script.text
+    assert "function navigateModifiedField(view, row, rowIndex)" in script.text
+    assert "function targetDiffSegments(sourceValue, targetValue)" in script.text
+    assert "function renderTargetDiff(button, sourceValue, targetValue)" in script.text
+    assert 'side === "target" && changed' in script.text
+    assert 'document.createTextNode(segment.text)' in script.text
+    assert 'highlight.className = "diff-target-change"' in script.text
+    assert "TARGET_DIFF_MAX_MATRIX_CELLS" in script.text
+    assert "innerHTML" not in script.text
+    assert 'row.status === "modified" && row.changedFields.size > 0' in script.text
+    assert 'document.createElement(navigable ? "button" : "div")' in script.text
+    assert 'status.addEventListener("click", () => navigateModifiedField(view, row, rowIndex));' in script.text
+    assert "targets[(currentIndex + 1) % targets.length]" in script.text
+    assert "function renderDiffWindow(view, force = false)" in script.text
+    assert "function syncDiffScroll(view, origin)" in script.text
+    assert "function bindDragPan(view, scroller)" in script.text
+    assert 'event.pointerType !== "mouse"' in script.text
+    drag_pan = script.text.split("function bindDragPan(view, scroller)", 1)[1].split(
+        "function setPairedDiffEmpty", 1
+    )[0]
+    assert drag_pan.index("drag.moved = true;") < drag_pan.index(
+        "scroller.setPointerCapture?.(event.pointerId);"
+    )
+    assert 'window.addEventListener("pointermove", onPointerMove);' in drag_pan
+    assert 'scroller.addEventListener("pointermove", onPointerMove);' not in drag_pan
+    assert 'target_only: "右侧新增"' in script.text
+    assert 'source_only: "右侧删除"' in script.text
+    assert ".paired-diff-grid" in readability.text
+    assert ".field-view-switch" in readability.text
+    assert ".field-view-button" in readability.text
+    assert "grid-template-columns: minmax(0, 1fr) 88px minmax(0, 1fr)" in readability.text
+    assert ".diff-grid-cell.is-primary-key" in readability.text
+    assert ".diff-grid-cell.is-selected" in readability.text
+    assert "button.diff-status-row.is-navigable" in readability.text
+    assert ".diff-grid-cell.is-changed.has-target-diff" in readability.text
+    assert ".diff-target-change" in readability.text
+    target_change_rule = readability.text.split(".diff-target-change", 1)[1].split("}", 1)[0]
+    assert "color: #b42318" in target_change_rule
+    focus_rule = readability.text.split(".diff-grid-cell:focus-visible", 1)[1].split("}", 1)[0]
+    selected_rule = readability.text.split(".diff-grid-cell.is-selected", 1)[1].split("}", 1)[0]
+    assert "z-index" not in focus_rule
+    assert "z-index" not in selected_rule
+    assert ".diff-selection-values pre" in readability.text
     assert "grid-template-columns: minmax(0, 1fr);" in readability.text
     assert 'class="sheet-strip"' in page.text
     assert page.text.index('id="workbench-caption"') < page.text.index('id="sheet-navigation"')
@@ -280,12 +352,12 @@ def test_compare_demo_is_separate_and_development_only():
     assert "Excel Diff 流程示例" in demo_response.text
     assert results_response.status_code == 200
     assert 'class="results-readable-page"' in results_response.text
-    assert "compare_results_readability.css?v=1.9.3" in results_response.text
+    assert "compare_results_readability.css?v=2.1.3" in results_response.text
     assert "差异结果" in results_response.text
     assert demo_results_response.status_code == 200
     assert 'data-demo-mode="true"' in demo_results_response.text
     assert 'class="results-readable-page"' in demo_results_response.text
-    assert "compare_results_readability.css?v=1.9.3" in demo_results_response.text
+    assert "compare_results_readability.css?v=2.1.3" in demo_results_response.text
     assert "示例差异结果" in demo_results_response.text
 
     assert replay_response.status_code == 200

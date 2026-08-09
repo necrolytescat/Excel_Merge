@@ -18,6 +18,7 @@ _DECIMAL_TYPE = re.compile(r"^(?:float|double|decimal|number)$", re.IGNORECASE)
 @dataclass(frozen=True)
 class CsvField:
     name: str
+    display_name: str
     declared_type: str
     scope: str
     position: int
@@ -163,6 +164,7 @@ def parse_table_csv(
         fields.append(
             CsvField(
                 name=name,
+                display_name=display_name,
                 declared_type=declared_type,
                 scope=scope,
                 position=index,

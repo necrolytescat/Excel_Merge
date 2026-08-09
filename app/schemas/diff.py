@@ -92,6 +92,8 @@ class SheetSummaryPayload(StrictPayload):
 class FieldDefinitionPayload(StrictPayload):
     name: str
     status: FieldStatus
+    source_display_name: str | None = None
+    target_display_name: str | None = None
     source_type: str | None = None
     target_type: str | None = None
     source_scope: str | None = None

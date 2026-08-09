@@ -1,6 +1,6 @@
 # 项目文档目录与有效性说明
 
-> 更新日期：2026-08-06
+> 更新日期：2026-08-09
 > 目的：按“当前契约、阶段交接、并行工作、历史参考”归类现有文档。
 > 说明：本次只建立索引，不移动旧文件，避免破坏已有链接。
 
@@ -10,7 +10,7 @@
 
 1. `ROADMAP.md`：产品阶段和下一里程碑；
 2. `ENGINEERING-BASELINE.md`：已冻结的工程边界；
-3. `M2-08-DIFF-RESULT-FRONTEND-HANDOFF.md`：当前前端逐项改造入口；
+3. `archive/M2-08-ROW-FIELD-DIFF-ARCHIVE.md`：已验收的 M2-08 前端归档基线；
 4. `M2-HANDOFF.md`：M2 总体流程；
 5. `M2-BACKEND-STATUS-HANDOFF.md`：单工作簿与 SVN 接入完成状态；
 6. `M2-05-WEB-DIFF-INTEGRATION-CONTRACT.md`：已完成的阶段 A/B/C 契约；
@@ -38,8 +38,9 @@
 | `M2-05-STAGE-D2-REAL-DATA-TRIAL-REPORT.md` | 真实试跑报告 | 冻结 54 项结果、五类失败统计和证据位置 |
 | `M2-05-STAGE-D3-COMPATIBILITY-HANDOFF.md` | 已完成阶段交接 | D3 真实数据分类、兼容规则和 Replay 验收结果 |
 | `M2-OFFLINE-FIXTURE-RUNBOOK.md` | Replay 操作规范 | 离线夹具生成、校验、黄金更新和禁止事项 |
-| `M2-08-DIFF-RESULT-FRONTEND-HANDOFF.md` | 当前阶段交接 | 用户逐项指定的差异结果前端改造边界和启动提示词 |
-| `M2-08-ROW-FIELD-DIFF-HANDOFF.md` | 当前模块交接 | 已锁定上游区域，下一对话只处理行与字段差异模块 |
+| `M2-08-DIFF-RESULT-FRONTEND-HANDOFF.md` | 已完成阶段交接 | M2-08 前端逐项改造过程、锁定边界和归档结论 |
+| `M2-08-ROW-FIELD-DIFF-HANDOFF.md` | 已归档模块交接 | 行与字段差异模块的历史启动上下文和最终状态 |
+| `archive/M2-08-ROW-FIELD-DIFF-ARCHIVE.md` | 已验收归档 | M2-08 行与字段模块交付能力、验证证据和剩余 M2 边界 |
 | `M2-01-EXCEL-SAMPLE-VALIDATION.md` | 已完成验证 | AtlasConfig 固定样例、规则和真值 |
 | `M2-02-TO-M2-04-STABLE-DIFF-JSON-PLAN.md` | 已完成实施 | JSON 契约、解析器、Diff、测试和输出结果 |
 | `SVN-ENDPOINT-MODEL.md` | 端点契约 | M1 端点模型及 M2 同端点同 Revision 配对 |
@@ -59,8 +60,8 @@
 | `M2-05-STAGE-D1-REVIEW-HANDOFF.md` | 阶段 D1 已评审通过 | 已形成批量契约、示例和验收用例 |
 | `M2-05-STAGE-D2-REVIEW-HANDOFF.md` | 阶段 D2 已验收 | 单机批量运行时、正式页面和 54 工作簿编排链路已完成 |
 | `M2-05-STAGE-D3-COMPATIBILITY-HANDOFF.md` | 阶段 D3 已完成 | 真实数据分类、文件名兼容和第一列主键受限兜底已验收 |
-| `M2-08-DIFF-RESULT-FRONTEND-HANDOFF.md` | 当前阶段进行中 | Batch Task、工作簿、结果标题和 Sheet 区域已完成并锁定 |
-| `M2-08-ROW-FIELD-DIFF-HANDOFF.md` | 下一模块待启动 | 新对话只处理行与字段差异，每项确认后实施 |
+| `M2-08-DIFF-RESULT-FRONTEND-HANDOFF.md` | 已验收归档 | 全部用户确认的 M2-08 前端改造已完成并锁定 |
+| `M2-08-ROW-FIELD-DIFF-HANDOFF.md` | 已验收归档 | 左右对照、字段表头、字符标红和字段视图切换已完成 |
 
 M2-05 接入可以修改契约规定的 Web、API 和测试文件，但不能重新定义以下规则：
 
@@ -70,7 +71,7 @@ M2-05 接入可以修改契约规定的 Web、API 和测试文件，但不能重
 - 完整工作簿明细使用 `m2.diff.v1`；
 - 全量比对是对 M1 候选逐工作簿执行，不是扫描全部 CSV。
 
-## 4. M0/M1 运维与验收资料
+## 4. 阶段归档、运维与验收资料
 
 | 文档 | 用途 |
 |---|---|
@@ -79,6 +80,7 @@ M2-05 接入可以修改契约规定的 Web、API 和测试文件，但不能重
 | `MVP-PRD.md` | M1 已归档产品需求 |
 | `acceptance-cases.md` | M0/M1 验收用例和历史基线 |
 | `archive/M0.1-ARCHIVE.md` | M0.1 归档记录 |
+| `archive/M2-08-ROW-FIELD-DIFF-ARCHIVE.md` | M2-08 行与字段差异模块归档记录 |
 
 这些文档用于维护已交付能力，不作为新增 M2 语义规则的来源。
 
@@ -117,4 +119,4 @@ M2-05 接入可以修改契约规定的 Web、API 和测试文件，但不能重
 - M2-05 执行期间，其他对话不要并行修改同一批 Web/API 文件；
 - 阶段 C 完成后停止，批量任务必须在独立的阶段 D 契约下实施；
 - 阶段 D1 已评审通过，D2 已按冻结契约完成并通过真实编排验收；
-- D3 已完成真实数据兼容性分类和引擎加固；当前 M2-08 只按用户确认项修改结果页，不修改批量调度、Diff 契约、方向语义或 SVN 只读边界。
+- D3 已完成真实数据兼容性分类和引擎加固；M2-08 已按用户逐项确认完成并归档，未修改批量调度、方向语义或 SVN 只读边界。

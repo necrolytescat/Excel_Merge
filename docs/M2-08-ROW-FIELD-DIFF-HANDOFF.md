@@ -1,10 +1,10 @@
 # M2-08 行与字段差异模块交接
 
-> 状态：待在新对话逐项启动
-> 更新日期：2026-08-09
+> 状态：已验收并归档
+> 归档日期：2026-08-09
 > 阶段归属：M2-08，仍属于 M2
-> 自动化基线：`212 passed, 1350 warnings`
-> Replay 入口：`http://127.0.0.1:5566/compare/replay`
+> 归档记录：`docs/archive/M2-08-ROW-FIELD-DIFF-ARCHIVE.md`
+> 说明：第 1 至 8 节保留为历史启动上下文；后续状态以第 9 节和归档记录为准。
 
 ## 1. 下一阶段目标
 
@@ -180,3 +180,13 @@ Batch Task、工作簿导航、比对结果标题区、Sheet 标题与导航已�
 保持 m2.diff.v1、m2.batch.v1、source=left/target=right、冻结 Revision、SVN 只读、
 无 Merge/写回、不修改 core Diff 语义、不新增第二套前端 JSON，且正式页不依赖 Demo 数据。
 ```
+
+## 9. 归档状态
+
+行与字段差异模块已经按用户逐项确认完成，并于 2026-08-09 验收通过。最终实现包括
+左右工作簿对照、四向拖拽、行与字段选择、修改状态循环导航、TARGET 字符级标红、
+双行字段表头，以及“显示差异 / 显示原表”字段视图切换。
+
+本交接不再作为“待启动”入口。实现目标、风险和逐项验收见
+`M2-08-ROW-FIELD-SIDE-BY-SIDE-PLAN.md`，冻结结果与剩余 M2 边界见
+`archive/M2-08-ROW-FIELD-DIFF-ARCHIVE.md`。

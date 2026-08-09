@@ -9,6 +9,7 @@ from app.schemas.diff import (
     DiffDirectionPayload,
     DiffResultPayload,
     FieldChangePayload,
+    FieldDefinitionPayload,
     FieldStatus,
     RowDiffPayload,
     RowSidePayload,
@@ -42,6 +43,14 @@ def _sample_result() -> DiffResultPayload:
                 sheet_name="Base",
                 status=SheetStatus.MODIFIED,
                 primary_key="Id",
+                fields=[
+                    FieldDefinitionPayload(
+                        name="Name",
+                        status=FieldStatus.COMMON,
+                        source_display_name="源名称",
+                        target_display_name="目标名称",
+                    )
+                ],
                 rows=[
                     RowDiffPayload(
                         key="1",
@@ -73,7 +82,10 @@ def test_diff_json_serialization_is_stable_utf8():
     assert hashlib.sha256(first).hexdigest() == hashlib.sha256(second).hexdigest()
     assert first.endswith(b"\n")
     assert b"\\u5de6" not in first
-    assert json.loads(first)["schema_version"] == "m2.diff.v1"
+    data = json.loads(first)
+    assert data["schema_version"] == "m2.diff.v1"
+    assert data["sheets"][0]["fields"][0]["source_display_name"] == "源名称"
+    assert data["sheets"][0]["fields"][0]["target_display_name"] == "目标名称"
 
 
 def test_diff_contract_rejects_unknown_fields_and_statuses():
