@@ -12,6 +12,65 @@
   display: none;
 }
 
+.result-overview-grid > .batch-task-panel {
+  min-width: 0;
+  height: 100%;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.result-overview-grid .batch-task-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.result-overview-grid .batch-task-heading code {
+  max-width: 24ch;
+  margin-top: 3px;
+  font-size: 10px;
+}
+
+.result-overview-grid .batch-task-actions {
+  display: grid;
+  width: auto;
+  grid-template-columns: auto auto auto;
+  justify-content: end;
+  gap: 6px;
+}
+
+.result-overview-grid .batch-task-actions strong {
+  align-self: center;
+  margin-right: 0;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.result-overview-grid .batch-task-actions button {
+  min-height: 34px;
+  padding: 6px 9px;
+  font-size: 11px;
+}
+
+.result-overview-grid .batch-task-progress-meta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.result-overview-grid .batch-task-progress-meta strong {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.result-overview-grid .batch-task-progress-meta span {
+  text-align: left;
+}
+
 .batch-task-heading {
   display: flex;
   align-items: center;
@@ -159,6 +218,24 @@
 }
 
 @media (max-width: 560px) {
+  .result-overview-grid .batch-task-heading {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .result-overview-grid .batch-task-actions {
+    width: 100%;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .result-overview-grid .batch-task-actions strong {
+    grid-column: 1 / -1;
+  }
+
+  .result-overview-grid .batch-task-progress-meta {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
   .batch-task-actions {
     grid-template-columns: 1fr 1fr;
   }

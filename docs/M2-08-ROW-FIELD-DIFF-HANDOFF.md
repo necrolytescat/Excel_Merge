@@ -116,9 +116,10 @@
 
 ```text
 app.css                          0.3.3
-compare_results_readability.css 1.9.3
-compare_results.js              1.9.3
-compare_results_batch.js        1.2.0
+compare_results_readability.css 2.1.5
+compare_results_batch.css       1.1.2
+compare_results.js              2.1.5
+compare_results_batch.js        1.2.1
 offline_replay.js               1.1.0
 ```
 

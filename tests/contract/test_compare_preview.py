@@ -85,15 +85,28 @@ def test_formal_results_page_calls_m2_diff_api_without_demo_fixture_dependency()
     mapper = api.get("/static/m2_diff_mapper.js")
     batch_script = api.get("/static/compare_results_batch.js")
     readability = api.get("/static/compare_results_readability.css")
+    batch_styles = api.get("/static/compare_results_batch.css")
     offline_script = api.get("/static/offline_replay.js")
 
     assert page.status_code == 200
     assert "m2_diff_mapper.js?v=1.1.0" in page.text
     assert "app.css?v=0.3.3" in page.text
-    assert "compare_results_readability.css?v=2.1.3" in page.text
-    assert "compare_results.js?v=2.1.3" in page.text
-    assert "compare_results_batch.js?v=1.2.0" in page.text
+    assert "compare_results_readability.css?v=2.1.5" in page.text
+    assert "compare_results_batch.css?v=1.1.2" in page.text
+    assert "compare_results.js?v=2.1.5" in page.text
+    assert "compare_results_batch.js?v=1.2.1" in page.text
+    assert 'class="result-overview-grid"' in page.text
     assert 'id="batch-task-panel"' in page.text
+    assert 'id="result-heading-panel"' in page.text
+    assert page.text.index('id="batch-task-panel"') < page.text.index('id="result-heading-panel"')
+    assert page.text.index('id="result-heading-panel"') < page.text.index('id="diff-workbench"')
+    assert "repeat(auto-fit, minmax(min(100%, 360px), 1fr))" in readability.text
+    assert ".diff-workbench > .sheet-strip" in readability.text
+    assert ".result-overview-grid .batch-task-heading" in batch_styles.text
+    assert "padding: 12px 14px;" in batch_styles.text
+    assert "grid-template-columns: minmax(0, 1fr) auto;" in batch_styles.text
+    assert ".result-heading-panel .section-heading > div:first-child" in readability.text
+    assert "flex-wrap: nowrap;" in readability.text
     assert "语义 Diff 服务尚未接入" not in page.text
     assert "左侧 · SOURCE" in page.text
     assert "右侧 · TARGET" in page.text
@@ -150,6 +163,7 @@ def test_formal_results_page_calls_m2_diff_api_without_demo_fixture_dependency()
     assert 'id="show-original-fields"' in page.text
     assert page.text.index('id="workbench-heading"') < page.text.index('id="field-view-switch"')
     assert page.text.index('id="field-view-switch"') < page.text.index('id="compare-current-workbook"')
+    assert '$("result-heading-panel").classList.toggle("hidden", !visible);' in script.text
     assert 'id="semantic-table-body"' not in page.text
     assert 'class="semantic-table-header"' not in page.text
     assert "function sheetColumnModel(sheet, rows, fieldViewMode)" in script.text
@@ -269,6 +283,15 @@ def test_formal_results_page_calls_m2_diff_api_without_demo_fixture_dependency()
     assert "path.textContent = result.candidate.path" not in script.text
     assert "summaryLoadingRefs" in batch_script.text
     assert "Math.min(4, queue.length)" in batch_script.text
+    assert 'result.itemStatus === "queued"' in script.text
+    assert 'return "待处理"' in script.text
+    assert 'result.itemStatus === "running"' in script.text
+    assert 'result.itemStatus === "succeeded" && !result.summary' in script.text
+    assert "function loadAvailableSummaries()" in batch_script.text
+    assert "void loadAvailableSummaries();" in batch_script.text
+    assert "let navigationChanged = false;" in batch_script.text
+    assert "if (navigationChanged) bridge.renderWorkbookNavigation();" in batch_script.text
+    assert "loadCompletedSummaries" not in batch_script.text
     assert ".workbook-row-summary .is-modified" in readability.text
     assert "color: #087c6d" in readability.text
     assert ".workbook-row-summary .is-deleted" in readability.text
@@ -352,12 +375,12 @@ def test_compare_demo_is_separate_and_development_only():
     assert "Excel Diff 流程示例" in demo_response.text
     assert results_response.status_code == 200
     assert 'class="results-readable-page"' in results_response.text
-    assert "compare_results_readability.css?v=2.1.3" in results_response.text
+    assert "compare_results_readability.css?v=2.1.5" in results_response.text
     assert "差异结果" in results_response.text
     assert demo_results_response.status_code == 200
     assert 'data-demo-mode="true"' in demo_results_response.text
     assert 'class="results-readable-page"' in demo_results_response.text
-    assert "compare_results_readability.css?v=2.1.3" in demo_results_response.text
+    assert "compare_results_readability.css?v=2.1.5" in demo_results_response.text
     assert "示例差异结果" in demo_results_response.text
 
     assert replay_response.status_code == 200

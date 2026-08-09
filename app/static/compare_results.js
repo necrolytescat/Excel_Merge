@@ -995,7 +995,10 @@
     if (result.itemStatus === "orchestration_failed") return "编排失败";
     if (result.itemStatus === "cancelled") return "已取消";
     if (result.itemStatus === "skipped") return "已跳过";
+    if (result.itemStatus === "queued") return "待处理";
+    if (result.itemStatus === "running") return "处理中";
     if (result.summaryError) return "统计不可用";
+    if (result.itemStatus === "succeeded" && !result.summary) return "统计读取中";
     if (result.state === "diff_loading") return "处理中";
     if (result.state === "diff_pending" && !result.summary) return "统计读取中";
     if (result.state === "diff_unavailable") return "未执行";
@@ -1415,6 +1418,7 @@
   function syncWorkbookSidebarVisibility() {
     const visible = !$("diff-workbench").classList.contains("hidden");
     $("workbook-sidebar").classList.toggle("hidden", !visible);
+    $("result-heading-panel").classList.toggle("hidden", !visible);
     $("result-page-body").classList.toggle("has-workbook-sidebar", visible);
   }
 

@@ -51,6 +51,100 @@
   overflow-y: auto;
 }
 
+.results-readable-page .result-overview-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  align-items: stretch;
+  gap: 16px;
+}
+
+.results-readable-page .result-heading-panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #d9dee8;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+}
+
+.results-readable-page .result-heading-panel.hidden {
+  display: none;
+}
+
+.results-readable-page .result-heading-panel .section-heading {
+  height: 100%;
+  align-items: stretch;
+  justify-content: space-between;
+  flex-direction: column;
+  gap: 10px;
+  border-bottom: 0;
+  padding: 12px 14px;
+}
+
+.results-readable-page .result-heading-panel .section-heading > div:first-child {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 3px;
+}
+
+.results-readable-page .result-heading-panel .section-heading .eyebrow {
+  grid-column: 1;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.results-readable-page .result-heading-panel .section-heading h2 {
+  min-width: 0;
+  grid-column: 2;
+  margin: 0;
+  font-size: 18px;
+}
+
+.results-readable-page .result-heading-panel .section-heading p:not(.eyebrow) {
+  min-width: 0;
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.results-readable-page .result-heading-panel .workbench-heading-actions {
+  width: 100%;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  margin-left: 0;
+}
+
+.results-readable-page .result-heading-panel .field-view-switch {
+  min-width: 0;
+  flex: 1 1 196px;
+}
+
+.results-readable-page .result-heading-panel .field-view-button {
+  min-height: 34px !important;
+  padding: 6px 10px !important;
+}
+
+.results-readable-page .result-heading-panel .workbench-heading-actions button {
+  min-height: 36px;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.results-readable-page .result-heading-panel .workbench-heading-actions > .primary {
+  min-width: 150px;
+  flex: 1 1 150px;
+}
+
+.results-readable-page .diff-workbench > .sheet-strip {
+  border-top: 0;
+}
+
 .results-readable-page .workbook-sidebar {
   display: grid;
   width: 280px;

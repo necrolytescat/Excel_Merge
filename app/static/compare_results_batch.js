@@ -248,7 +248,7 @@
     $("diff-workbench").classList.remove("hidden");
     const selected = next.has(state.selectedPath) ? state.selectedPath : next.keys().next().value;
     bridge.selectWorkbook(selected);
-    if (COMPLETED_TASKS.has(task.status)) void loadCompletedSummaries();
+    void loadAvailableSummaries();
   }
 
   function schedulePoll(delay = 700) {
@@ -280,6 +280,7 @@
   async function loadResultSummary(result) {
     const requestedMode = activeResultMode();
     const loadingKey = result?.resultRef + ":" + requestedMode;
+    let navigationChanged = false;
     if (
       !result?.resultRef
       || result.resultLoaded
@@ -301,6 +302,7 @@
           summaryLoaded: true,
           summaryError: false,
         });
+        navigationChanged = true;
       }
     } catch {
       const current = state.results.get(result.candidate.path);
@@ -309,13 +311,15 @@
           ...current,
           summaryError: true,
         });
+        navigationChanged = true;
       }
     } finally {
       summaryLoadingRefs.delete(loadingKey);
+      if (navigationChanged) bridge.renderWorkbookNavigation();
     }
   }
 
-  async function loadCompletedSummaries() {
+  async function loadAvailableSummaries() {
     const queue = [...state.results.values()].filter((result) => (
       result.resultRef && !result.resultLoaded && !result.summaryLoaded
     ));
@@ -329,7 +333,6 @@
     }
     const workerCount = Math.min(4, queue.length);
     await Promise.all(Array.from({ length: workerCount }, worker));
-    bridge.renderWorkbookNavigation();
   }
 
   async function loadResult(result) {

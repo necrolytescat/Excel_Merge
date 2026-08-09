@@ -6,12 +6,12 @@
   <link rel="icon" href="data:,">
   <title>Config Atlas · {{ '离线数据矫正' if replay_mode else ('示例差异结果' if demo_mode else '差异结果') }}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.3">
-  <link rel="stylesheet" href="{{ url_for('static', path='compare_results_readability.css') }}?v=2.1.3">
-  <link rel="stylesheet" href="{{ url_for('static', path='compare_results_batch.css') }}?v=1.1.0">
+  <link rel="stylesheet" href="{{ url_for('static', path='compare_results_readability.css') }}?v=2.1.5">
+  <link rel="stylesheet" href="{{ url_for('static', path='compare_results_batch.css') }}?v=1.1.2">
   {% if replay_mode %}<link rel="stylesheet" href="{{ url_for('static', path='offline_replay.css') }}?v=1.0.0">{% endif %}
   <script src="{{ url_for('static', path='m2_diff_mapper.js') }}?v=1.1.0" defer></script>
-  <script src="{{ url_for('static', path='compare_results.js') }}?v=2.1.3" defer></script>
-  <script src="{{ url_for('static', path='compare_results_batch.js') }}?v=1.2.0" defer></script>
+  <script src="{{ url_for('static', path='compare_results.js') }}?v=2.1.5" defer></script>
+  <script src="{{ url_for('static', path='compare_results_batch.js') }}?v=1.2.1" defer></script>
   {% if replay_mode %}<script src="{{ url_for('static', path='offline_replay.js') }}?v=1.1.0" defer></script>{% endif %}
 </head>
 <body class="results-readable-page" data-demo-mode="{{ 'true' if demo_mode else 'false' }}" data-replay-mode="{{ 'true' if replay_mode else 'false' }}">
@@ -99,38 +99,43 @@
           <p class="batch-task-error hidden" id="offline-fixture-error" role="alert"></p>
         </section>
         {% endif %}
-        <section class="batch-task-panel hidden" id="batch-task-panel" aria-labelledby="batch-task-heading">
-          <div class="batch-task-heading">
-            <div><p class="eyebrow">M2 BATCH TASK</p><h2 id="batch-task-heading">全部工作簿比对</h2><code id="batch-task-id">—</code></div>
-            <div class="batch-task-actions"><strong id="batch-task-status">等待任务</strong><button id="cancel-batch-task" type="button" class="secondary" disabled>取消</button><button id="retry-batch-task" type="button" class="primary" disabled>重试失败项</button></div>
-          </div>
-          <div class="batch-task-progress-track" aria-hidden="true"><span id="batch-task-progress-bar"></span></div>
-          <div class="batch-task-progress-meta" role="status" aria-live="polite">
-            <strong id="batch-task-progress">正在读取任务</strong>
-            <span id="batch-task-detail">等待服务端状态</span>
-          </div>
-          <p class="batch-task-error hidden" id="batch-task-error" role="alert"></p>
-        </section>
+        <div class="result-overview-grid">
+          <section class="batch-task-panel hidden" id="batch-task-panel" aria-labelledby="batch-task-heading">
+            <div class="batch-task-heading">
+              <div><p class="eyebrow">M2 BATCH TASK</p><h2 id="batch-task-heading">全部工作簿比对</h2><code id="batch-task-id">—</code></div>
+              <div class="batch-task-actions"><strong id="batch-task-status">等待任务</strong><button id="cancel-batch-task" type="button" class="secondary" disabled>取消</button><button id="retry-batch-task" type="button" class="primary" disabled>重试失败项</button></div>
+            </div>
+            <div class="batch-task-progress-track" aria-hidden="true"><span id="batch-task-progress-bar"></span></div>
+            <div class="batch-task-progress-meta" role="status" aria-live="polite">
+              <strong id="batch-task-progress">正在读取任务</strong>
+              <span id="batch-task-detail">等待服务端状态</span>
+            </div>
+            <p class="batch-task-error hidden" id="batch-task-error" role="alert"></p>
+          </section>
+
+          <section class="result-heading-panel hidden" id="result-heading-panel" aria-labelledby="workbench-heading">
+            <div class="section-heading workbench-heading-row">
+              <div>
+                <p class="eyebrow">比对结果</p>
+                <h2 id="workbench-heading">单工作簿差异</h2>
+                <p id="workbench-caption">从左侧选择工作簿查看结果状态。</p>
+              </div>
+              <div class="workbench-heading-actions">
+                <div class="field-view-switch" id="field-view-switch" role="group" aria-label="字段显示范围">
+                  <button class="field-view-button is-selected" id="show-diff-fields" type="button" aria-pressed="true" disabled>显示差异</button>
+                  <button class="field-view-button" id="show-original-fields" type="button" aria-pressed="false" disabled>显示原表</button>
+                </div>
+                <button id="compare-current-workbook" type="button" class="primary" disabled>比对当前工作簿</button>
+              </div>
+            </div>
+          </section>
+        </div>
 
         <section class="workspace-section results-missing hidden" id="results-missing" aria-labelledby="missing-heading">
           <div class="results-gate"><div class="state-illustration" aria-hidden="true">!</div><strong id="missing-heading">没有可恢复的差异任务</strong><span id="missing-detail">请返回“版本与快照”生成文件候选并执行差异比对。</span><a class="secondary result-back-link" href="{{ '/compare/demo' if demo_mode else '/compare' }}">返回版本与快照</a></div>
         </section>
 
         <section class="workspace-section diff-workbench hidden" id="diff-workbench" data-diff-state="diff_unavailable" aria-labelledby="workbench-heading">
-          <div class="section-heading workbench-heading-row">
-            <div>
-              <p class="eyebrow">比对结果</p>
-              <h2 id="workbench-heading">单工作簿差异</h2>
-              <p id="workbench-caption">从左侧选择工作簿查看结果状态。</p>
-            </div>
-            <div class="workbench-heading-actions">
-              <div class="field-view-switch" id="field-view-switch" role="group" aria-label="字段显示范围">
-                <button class="field-view-button is-selected" id="show-diff-fields" type="button" aria-pressed="true" disabled>显示差异</button>
-                <button class="field-view-button" id="show-original-fields" type="button" aria-pressed="false" disabled>显示原表</button>
-              </div>
-              <button id="compare-current-workbook" type="button" class="primary" disabled>比对当前工作簿</button>
-            </div>
-          </div>
           <nav class="sheet-strip" aria-label="Sheet 导航">
             <div class="sheet-strip-header">
               <div class="sheet-strip-title"><strong>Sheet</strong><span id="sheet-count">0 / 0</span></div>
