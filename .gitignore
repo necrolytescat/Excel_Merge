@@ -38,8 +38,8 @@ reference/smartdiff/
 *.sqlite3-shm
 *.sqlite3-wal
 
-# M2 runtime data. Keep only the frozen golden Replay fixture.
+# Version comparison runtime data. Keep only the current frozen golden Replay fixture.
 var/*
 !var/m2-fixtures/
 var/m2-fixtures/*
-!var/m2-fixtures/d3c-6e501824.m2fixture
+!var/m2-fixtures/d3c-be317423.m2fixture

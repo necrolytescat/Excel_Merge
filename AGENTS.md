@@ -3,3 +3,10 @@
 ## 项目
 
 本项目用于搭建一个进行Excel的DIff/Merge平台。协助游戏项目策划进行版本比对与差异判断
+
+## 文档路由
+
+- 维护左侧导航“版本对比”模块时，先读取 `docs/VERSION-COMPARISON-HANDBOOK.md`。
+- 数据契约以 `docs/contracts/`、`docs/adr/ADR-006-m1-head-freeze-table-excel.md` 和 `docs/adr/ADR-007-m2-table-tablecsv-pairing.md` 为准。
+- `docs/archive/m2-history/` 是已完成阶段的历史材料。除历史审计、回归根因或契约迁移外，不默认读取或扫描。
+- 不因契约名仍为 `m2.diff.v1`、`m2.batch.v1` 而恢复旧阶段工作流；模块后续统一称为“版本对比”。

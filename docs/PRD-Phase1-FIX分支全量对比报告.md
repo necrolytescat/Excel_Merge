@@ -1,6 +1,6 @@
 # PRD · Phase 1：FIX 分支跨版本全量对比与按人归因报告
 
-> 适用性声明（2026-08-05）：本文档是早期调研方案，仅保留作 SmartDiff、语义 Diff 和报告设计参考。其中 CSV/TBX、同 URL 双 Revision、日期输入、逐提交回放及 CLI 主流程均不是当前实现契约，不得覆盖已归档的 M1 和当前 M2 方案。当前有效定义以 `M1-HANDOFF.md`、`M2-HANDOFF.md`、`ROADMAP.md` 和相关 ADR 为准。
+> 适用性声明（2026-08-09）：本文档是早期调研方案，仅保留作 SmartDiff、语义 Diff 和报告设计参考。其中 CSV/TBX、同 URL 双 Revision、日期输入、逐提交回放及 CLI 主流程均不是当前实现契约，不得覆盖已交付的版本对比模块。当前有效定义以 `VERSION-COMPARISON-HANDBOOK.md`、`ROADMAP.md`、`contracts/` 和相关 ADR 为准。
 
 | 项 | 值 |
 |---|---|
