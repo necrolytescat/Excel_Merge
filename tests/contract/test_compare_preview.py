@@ -16,6 +16,7 @@ def test_compare_input_is_formalized_and_table_excel_only():
 
     assert response.status_code == 200
     assert "Config Atlas · 版本对比" in response.text
+    assert '<span>版本比对</span><span class="nav-current">M2</span>' in response.text
     assert "确认两个端点" in response.text
     assert "端点注册表" in response.text
     assert 'id="source-endpoint"' in response.text
@@ -89,6 +90,7 @@ def test_formal_results_page_calls_m2_diff_api_without_demo_fixture_dependency()
     offline_script = api.get("/static/offline_replay.js")
 
     assert page.status_code == 200
+    assert '<span>版本比对</span><span class="nav-current">M2</span>' in page.text
     assert "m2_diff_mapper.js?v=1.1.0" in page.text
     assert "app.css?v=0.3.3" in page.text
     assert "compare_results_readability.css?v=2.1.5" in page.text
@@ -417,6 +419,7 @@ def test_history_tasks_page_and_task_url_recovery_contract():
 
     assert history_page.status_code == 200
     assert "Config Atlas · 历史任务" in history_page.text
+    assert '<span>版本比对</span><span class="nav-current">M2</span>' in history_page.text
     assert 'href="/compare/history" aria-current="page"' in history_page.text
     assert 'id="history-task-rows"' in history_page.text
     assert 'id="history-status-switch"' in history_page.text
