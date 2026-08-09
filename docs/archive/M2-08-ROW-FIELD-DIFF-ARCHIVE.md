@@ -61,7 +61,7 @@
 
 - 字段视图针对性契约测试：11 passed；
 - 临时工作树排除 5 个依赖缺失 config/settings.json 的模块后：88 passed；
-- MAIN 工作树全量 pytest：__MAIN_PYTEST__；
+- MAIN 工作树全量 pytest：216 passed, 1350 warnings；
 - node --check app/static/compare_results.js：通过；
 - git diff --check：通过。
 
