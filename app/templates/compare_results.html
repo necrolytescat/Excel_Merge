@@ -5,14 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" href="data:,">
   <title>Config Atlas · {{ '离线数据矫正' if replay_mode else ('示例差异结果' if demo_mode else '差异结果') }}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.1">
-  <link rel="stylesheet" href="{{ url_for('static', path='compare_results_readability.css') }}?v=1.0.0">
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.3">
+  <link rel="stylesheet" href="{{ url_for('static', path='compare_results_readability.css') }}?v=1.9.3">
   <link rel="stylesheet" href="{{ url_for('static', path='compare_results_batch.css') }}?v=1.1.0">
   {% if replay_mode %}<link rel="stylesheet" href="{{ url_for('static', path='offline_replay.css') }}?v=1.0.0">{% endif %}
   <script src="{{ url_for('static', path='m2_diff_mapper.js') }}?v=1.0.0" defer></script>
-  <script src="{{ url_for('static', path='compare_results.js') }}?v=1.2.0" defer></script>
-  <script src="{{ url_for('static', path='compare_results_batch.js') }}?v=1.1.0" defer></script>
-  {% if replay_mode %}<script src="{{ url_for('static', path='offline_replay.js') }}?v=1.0.0" defer></script>{% endif %}
+  <script src="{{ url_for('static', path='compare_results.js') }}?v=1.9.3" defer></script>
+  <script src="{{ url_for('static', path='compare_results_batch.js') }}?v=1.2.0" defer></script>
+  {% if replay_mode %}<script src="{{ url_for('static', path='offline_replay.js') }}?v=1.1.0" defer></script>{% endif %}
 </head>
 <body class="results-readable-page" data-demo-mode="{{ 'true' if demo_mode else 'false' }}" data-replay-mode="{{ 'true' if replay_mode else 'false' }}">
   <div class="app-shell">
@@ -49,12 +49,25 @@
         </div>
       </header>
 
-      <nav class="task-page-nav" aria-label="Diff 任务页面">
-        <a class="task-page-tab" id="input-page-link" href="{{ '/compare/replay' if replay_mode else ('/compare/demo' if demo_mode else '/compare') }}"><span>1</span><strong>{{ '夹具输入' if replay_mode else '版本与快照' }}</strong></a>
-        <a class="task-page-tab is-active" href="{{ '/compare/replay' if replay_mode else ('/compare/demo/results' if demo_mode else '/compare/results') }}" aria-current="page"><span>2</span><strong>{{ '离线结果' if replay_mode else '差异结果' }}</strong></a>
-      </nav>
+      <div class="result-page-body" id="result-page-body">
+        <nav class="task-page-nav" aria-label="Diff 任务页面">
+          <a class="task-page-tab" id="input-page-link" href="{{ '/compare/replay' if replay_mode else ('/compare/demo' if demo_mode else '/compare') }}"><span>1</span><strong>{{ '夹具输入' if replay_mode else '版本与快照' }}</strong></a>
+          <a class="task-page-tab is-active" href="{{ '/compare/replay' if replay_mode else ('/compare/demo/results' if demo_mode else '/compare/results') }}" aria-current="page"><span>2</span><strong>{{ '离线结果' if replay_mode else '差异结果' }}</strong></a>
+        </nav>
 
-      <main class="layout compare-layout result-layout">
+        <aside class="workbook-pane workbook-sidebar hidden" id="workbook-sidebar" aria-label="工作簿导航">
+          <div class="workbook-sidebar-header">
+            <div class="workbook-sidebar-title-row"><strong>工作簿</strong><span id="workbook-count">0 / 0</span></div>
+            <div class="workbook-sidebar-actions">
+              <button class="workbook-visibility-toggle" id="toggle-unchanged-workbooks" type="button" aria-controls="workbook-navigation" aria-pressed="false" disabled>显示无变化 0</button>
+              <button class="workbook-visibility-toggle" id="toggle-confirmed-workbooks" type="button" aria-controls="workbook-navigation" aria-pressed="false" disabled>显示已确认 0</button>
+            </div>
+          </div>
+          <div class="workbook-empty" id="workbook-navigation"><span aria-hidden="true">▤</span><strong>暂无工作簿</strong><small>需要先从版本页执行差异比对。</small></div>
+        </aside>
+
+        <div class="result-page-main">
+          <main class="layout compare-layout result-layout">
         {% if replay_mode %}
         <section class="offline-fixture-panel" id="offline-fixture-panel" aria-labelledby="offline-fixture-heading">
           <div class="offline-fixture-heading">
@@ -106,16 +119,25 @@
         <section class="workspace-section diff-workbench hidden" id="diff-workbench" data-diff-state="diff_unavailable" aria-labelledby="workbench-heading">
           <div class="section-heading workbench-heading-row">
             <div>
-              <p class="eyebrow">WORKBOOK DIFF RESULTS</p>
+              <p class="eyebrow">比对结果</p>
               <h2 id="workbench-heading">单工作簿差异</h2>
               <p id="workbench-caption">从左侧选择工作簿查看结果状态。</p>
             </div>
             <div class="workbench-heading-actions">
               <button id="compare-current-workbook" type="button" class="primary" disabled>比对当前工作簿</button>
-              <button id="toggle-detail" class="secondary icon-text-button" type="button" aria-expanded="true"><span aria-hidden="true">▥</span>详情</button>
             </div>
           </div>
-          <p class="result-action-message" id="result-action-message" role="status" aria-live="polite">选择左侧工作簿后可执行单工作簿比对。</p>
+          <nav class="sheet-strip" aria-label="Sheet 导航">
+            <div class="sheet-strip-header">
+              <div class="sheet-strip-title"><strong>Sheet</strong><span id="sheet-count">0 / 0</span></div>
+              <div class="sheet-filter" role="group" aria-label="Sheet 显示范围">
+                <button class="sheet-filter-button is-selected" id="show-modified-sheets" type="button" aria-pressed="true" disabled>显示修改</button>
+                <button class="sheet-filter-button" id="show-all-sheets" type="button" aria-pressed="false" disabled>显示全部</button>
+              </div>
+            </div>
+            <div class="sheet-empty" id="sheet-navigation"><span aria-hidden="true">▦</span><strong>暂无 Sheet 数据</strong><small>选择工作簿后显示结果状态。</small></div>
+          </nav>
+          <p class="result-action-message" id="result-action-message" role="status" aria-live="polite"></p>
 
           <div class="file-context" id="file-context">
             <div class="file-context-side"><span>左侧 · SOURCE</span><strong id="context-old-file">未选择文件</strong><small id="context-old-source">等待候选</small></div>
@@ -126,15 +148,6 @@
           <div class="mock-result-notice hidden" id="mock-result-notice" role="status"><strong>UI 示例假数据</strong><span>仅用于确认结果页布局和交互，不是 Excel 解析或语义 Diff 结果。</span></div>
 
           <div class="workbench-grid">
-            <aside class="workbook-pane" aria-label="工作簿导航">
-              <div class="pane-heading"><strong>工作簿</strong><span id="workbook-count">0</span></div>
-              <div class="workbook-empty" id="workbook-navigation"><span aria-hidden="true">▤</span><strong>暂无工作簿</strong><small>需要先从版本页执行差异比对。</small></div>
-            </aside>
-            <aside class="sheet-pane" aria-label="Sheet 导航">
-              <div class="pane-heading"><strong>Sheet</strong><span id="sheet-count">0</span></div>
-              <div class="sheet-empty" id="sheet-navigation"><span aria-hidden="true">▦</span><strong>暂无 Sheet 数据</strong><small>选择工作簿后显示结果状态。</small></div>
-            </aside>
-
             <div class="diff-main-pane">
               <div class="diff-toolbar"><div><strong>行与字段差异</strong><small>按业务主键组织</small></div><span class="table-status" id="diff-state-badge">未执行</span></div>
               <div class="diff-partial-warning hidden" id="diff-partial-warning" role="alert"><strong>部分 Sheet 处理失败，可用结果已保留</strong><ul id="diff-partial-errors"></ul></div>
@@ -148,25 +161,13 @@
               </div>
             </div>
 
-            <aside class="detail-pane" id="detail-pane" aria-label="当前差异详情">
-              <div class="pane-heading"><strong>当前差异详情</strong><span id="detail-state">未选择</span></div>
-              <dl class="detail-list">
-                <div><dt>主键字段</dt><dd id="detail-primary-key">—</dd></div>
-                <div><dt>字段</dt><dd id="detail-field">—</dd></div>
-                <div><dt>字段状态</dt><dd id="detail-field-status">—</dd></div>
-                <div><dt>左侧值</dt><dd id="detail-source-value">—</dd></div>
-                <div><dt>右侧值</dt><dd id="detail-target-value">—</dd></div>
-                <div><dt>左侧定义</dt><dd id="detail-source-definition">—</dd></div>
-                <div><dt>右侧定义</dt><dd id="detail-target-definition">—</dd></div>
-                <div><dt>定位</dt><dd id="detail-location">—</dd></div>
-              </dl>
-              <p id="detail-caption">选择字段差异后显示详情。</p>
-            </aside>
           </div>
         </section>
-      </main>
+          </main>
 
-      <footer>M2-07 · 批量只读差异结果，不执行 Excel 写回或 SVN 写操作</footer>
+          <footer>M2-07 · 批量只读差异结果，不执行 Excel 写回或 SVN 写操作</footer>
+        </div>
+      </div>
     </div>
   </div>
 </body>

@@ -100,9 +100,10 @@ def test_m2_workbench_exposes_layout_and_all_page_states_with_real_diff_api():
         "workbook-navigation",
         "diff-workbench",
         "sheet-navigation",
-        "detail-pane",
     ):
         assert f'id="{element_id}"' in results_html
+    assert 'id="detail-pane"' not in results_html
+    assert 'id="toggle-detail"' not in results_html
 
     assert "COMPARISON OUTPUT" not in results_html
     assert "result-execution-state" not in results_html
@@ -165,7 +166,7 @@ def test_m2_mock_diff_is_a_labeled_development_only_ui_fixture():
     assert "MOCK_WORKBOOKS" in compare_js
     assert "openMockPreview" in compare_js
     assert "renderSheet" in results_js
-    assert "当前内容来自开发模式 UI 假数据" in results_js
+    assert 'id="mock-result-notice"' in results_html
     assert "FileReader" not in compare_js
     assert "/api/diff/batches" in compare_js
     assert "/api/diff/workbooks/compare" not in compare_js

@@ -121,6 +121,7 @@
     try {
       session = await requestJson("/api/replay/recompute", { method: "POST" });
       renderSession(session, { mode: "current" });
+      bridge.clearWorkbookConfirmations();
       $("result-action-message").textContent = session.current.mismatched_count
         ? session.current.mismatched_count + " 个工作簿与黄金结果不一致"
         : "当前代码重算结果与黄金结果全部一致";
@@ -143,6 +144,7 @@
         { method: "POST" },
       );
       renderSession(session, { mode: "current" });
+      bridge.clearWorkbookConfirmations(result.candidate.path);
       const comparison = session.current.comparisons[result.itemId];
       $("result-action-message").textContent = comparison?.matches_golden
         ? bridge.fileName(result.candidate.path) + " 与黄金结果一致"

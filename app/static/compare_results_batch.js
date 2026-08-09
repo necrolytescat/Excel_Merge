@@ -4,6 +4,7 @@
 
   const TASK_CONTEXT_KEY = "excelDiffTaskContext";
   const TERMINAL_TASKS = new Set(["completed", "completed_with_failures", "cancelled", "failed"]);
+  const COMPLETED_TASKS = new Set(["completed", "completed_with_failures"]);
   const TASK_LABELS = {
     queued: "等待准备",
     preparing: "正在重建候选",
@@ -16,6 +17,7 @@
   };
   const state = bridge.state;
   const loadingRefs = new Set();
+  const summaryLoadingRefs = new Set();
   let pollTimer = 0;
   let commandBusy = false;
 
@@ -69,7 +71,7 @@
     const candidate = candidateFromItem(item);
     if (
       item.result_ref
-      && previous?.resultLoaded
+      && (previous?.resultLoaded || previous?.summaryLoaded)
       && previous.resultRef === item.result_ref
       && previous.resultMode === activeResultMode()
     ) {
@@ -90,6 +92,8 @@
       diffErrorCount: Number(item.diff_error_count || 0),
       resultRef: item.result_ref || "",
       resultLoaded: false,
+      summaryLoaded: false,
+      summaryError: false,
       resultMode: activeResultMode(),
       error: "",
       errors: [],
@@ -154,6 +158,18 @@
     ));
   }
 
+  function completedDiffDetail(task) {
+    if (!COMPLETED_TASKS.has(task.status)) return "";
+    let unchanged = 0;
+    let modified = 0;
+    (task.items || []).forEach((item) => {
+      if (item.status !== "succeeded") return;
+      if (item.diff_status === "unchanged") unchanged += 1;
+      if (item.diff_status === "modified") modified += 1;
+    });
+    return "无差异文件 " + unchanged + " · 有差异文件 " + modified + " · ";
+  }
+
   function renderBatchTask(task) {
     const panel = $("batch-task-panel");
     panel.classList.remove("hidden");
@@ -171,7 +187,8 @@
       : processed + " / " + total + " 已处理";
     $("batch-task-detail").textContent = total === null || total === undefined
       ? "候选由服务端在固定 Revision 上重新构建"
-      : "成功 " + Number(progress.succeeded_items || 0)
+      : completedDiffDetail(task)
+        + "成功 " + Number(progress.succeeded_items || 0)
         + " · 业务失败 " + Number(progress.business_failed_items || 0)
         + (Number(progress.business_failed_items || 0) ? "（点击左侧失败工作簿查看原因）" : "")
         + " · 编排失败 " + Number(progress.orchestration_failed_items || 0)
@@ -231,6 +248,7 @@
     $("diff-workbench").classList.remove("hidden");
     const selected = next.has(state.selectedPath) ? state.selectedPath : next.keys().next().value;
     bridge.selectWorkbook(selected);
+    if (COMPLETED_TASKS.has(task.status)) void loadCompletedSummaries();
   }
 
   function schedulePoll(delay = 700) {
@@ -252,17 +270,75 @@
     }
   }
 
+  function resultPath(result, requestedMode) {
+    return state.context?.mode === "replay"
+      ? "/api/replay/results/" + encodeURIComponent(result.itemId)
+        + "?mode=" + encodeURIComponent(requestedMode)
+      : "/api/diff/batch-results/" + encodeURIComponent(result.resultRef);
+  }
+
+  async function loadResultSummary(result) {
+    const requestedMode = activeResultMode();
+    const loadingKey = result?.resultRef + ":" + requestedMode;
+    if (
+      !result?.resultRef
+      || result.resultLoaded
+      || result.summaryLoaded
+      || loadingRefs.has(loadingKey)
+      || summaryLoadingRefs.has(loadingKey)
+    ) return;
+    summaryLoadingRefs.add(loadingKey);
+    try {
+      const payload = await bridge.request(resultPath(result, requestedMode));
+      if (payload?.schema_version !== "m2.diff.v1" || !payload.summary) {
+        throw new Error("工作簿结果缺少 m2.diff.v1 summary");
+      }
+      const current = state.results.get(result.candidate.path);
+      if (current?.resultRef === result.resultRef && current.resultMode === requestedMode) {
+        state.results.set(result.candidate.path, {
+          ...current,
+          summary: { ...payload.summary },
+          summaryLoaded: true,
+          summaryError: false,
+        });
+      }
+    } catch {
+      const current = state.results.get(result.candidate.path);
+      if (current?.resultRef === result.resultRef && current.resultMode === requestedMode) {
+        state.results.set(result.candidate.path, {
+          ...current,
+          summaryError: true,
+        });
+      }
+    } finally {
+      summaryLoadingRefs.delete(loadingKey);
+    }
+  }
+
+  async function loadCompletedSummaries() {
+    const queue = [...state.results.values()].filter((result) => (
+      result.resultRef && !result.resultLoaded && !result.summaryLoaded
+    ));
+    let cursor = 0;
+    async function worker() {
+      while (cursor < queue.length) {
+        const result = queue[cursor];
+        cursor += 1;
+        await loadResultSummary(result);
+      }
+    }
+    const workerCount = Math.min(4, queue.length);
+    await Promise.all(Array.from({ length: workerCount }, worker));
+    bridge.renderWorkbookNavigation();
+  }
+
   async function loadResult(result) {
     const requestedMode = activeResultMode();
     const loadingKey = result?.resultRef + ":" + requestedMode;
     if (!result?.resultRef || result.resultLoaded || loadingRefs.has(loadingKey)) return;
     loadingRefs.add(loadingKey);
     try {
-      const resultPath = state.context?.mode === "replay"
-        ? "/api/replay/results/" + encodeURIComponent(result.itemId)
-          + "?mode=" + encodeURIComponent(requestedMode)
-        : "/api/diff/batch-results/" + encodeURIComponent(result.resultRef);
-      const payload = await bridge.request(resultPath);
+      const payload = await bridge.request(resultPath(result, requestedMode));
       const mapped = globalThis.M2DiffMapper.mapDiffPayload(payload, result.candidate);
       state.results.set(result.candidate.path, {
         ...mapped,
@@ -270,6 +346,8 @@
         itemStatus: result.itemStatus,
         resultRef: result.resultRef,
         resultLoaded: true,
+        summaryLoaded: true,
+        summaryError: false,
         resultMode: requestedMode,
       });
     } catch (error) {

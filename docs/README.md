@@ -39,6 +39,7 @@
 | `M2-05-STAGE-D3-COMPATIBILITY-HANDOFF.md` | 已完成阶段交接 | D3 真实数据分类、兼容规则和 Replay 验收结果 |
 | `M2-OFFLINE-FIXTURE-RUNBOOK.md` | Replay 操作规范 | 离线夹具生成、校验、黄金更新和禁止事项 |
 | `M2-08-DIFF-RESULT-FRONTEND-HANDOFF.md` | 当前阶段交接 | 用户逐项指定的差异结果前端改造边界和启动提示词 |
+| `M2-08-ROW-FIELD-DIFF-HANDOFF.md` | 当前模块交接 | 已锁定上游区域，下一对话只处理行与字段差异模块 |
 | `M2-01-EXCEL-SAMPLE-VALIDATION.md` | 已完成验证 | AtlasConfig 固定样例、规则和真值 |
 | `M2-02-TO-M2-04-STABLE-DIFF-JSON-PLAN.md` | 已完成实施 | JSON 契约、解析器、Diff、测试和输出结果 |
 | `SVN-ENDPOINT-MODEL.md` | 端点契约 | M1 端点模型及 M2 同端点同 Revision 配对 |
@@ -58,7 +59,8 @@
 | `M2-05-STAGE-D1-REVIEW-HANDOFF.md` | 阶段 D1 已评审通过 | 已形成批量契约、示例和验收用例 |
 | `M2-05-STAGE-D2-REVIEW-HANDOFF.md` | 阶段 D2 已验收 | 单机批量运行时、正式页面和 54 工作簿编排链路已完成 |
 | `M2-05-STAGE-D3-COMPATIBILITY-HANDOFF.md` | 阶段 D3 已完成 | 真实数据分类、文件名兼容和第一列主键受限兜底已验收 |
-| `M2-08-DIFF-RESULT-FRONTEND-HANDOFF.md` | 当前阶段待逐项启动 | 等待用户指定问题，每项确认后才实施，不自动展开改造 |
+| `M2-08-DIFF-RESULT-FRONTEND-HANDOFF.md` | 当前阶段进行中 | Batch Task、工作簿、结果标题和 Sheet 区域已完成并锁定 |
+| `M2-08-ROW-FIELD-DIFF-HANDOFF.md` | 下一模块待启动 | 新对话只处理行与字段差异，每项确认后实施 |
 
 M2-05 接入可以修改契约规定的 Web、API 和测试文件，但不能重新定义以下规则：
 

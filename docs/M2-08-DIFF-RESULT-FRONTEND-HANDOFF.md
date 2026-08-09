@@ -1,10 +1,11 @@
 # M2-08 差异结果前端改造交接
 
-> 状态：待启动
-> 更新日期：2026-08-06
+> 状态：进行中；Batch Task、工作簿导航、比对结果标题区、Sheet 标题与导航已锁定
+> 更新日期：2026-08-09
 > 阶段归属：M2，不进入 M3
 > 执行方式：由用户在下一对话逐项指定，不得自动开始写前端代码
 > 自动化基线：`212 passed, 1350 warnings`
+> 下一模块：`M2-08-ROW-FIELD-DIFF-HANDOFF.md`
 
 ## 1. 阶段定位
 
@@ -44,7 +45,8 @@ Task ID，因此功能验证已完成，审计记录尚未补齐。
 
 ### 3.1 当前主任务
 
-- 按用户逐项要求改造差异结果页；
+- Batch Task、工作簿导航、比对结果标题区和 Sheet 标题与导航已经逐项完成并锁定；
+- 下一对话只按用户逐项要求改造“行与字段差异”模块；
 - 使用真实 Replay 和测试数据验证每项交互；
 - 保持正式、Replay、Demo 三种结果模式的共享渲染契约；
 - 为确认后的改造补充自动化和浏览器验收。
@@ -259,18 +261,20 @@ node --check app/static/offline_replay.js
 ## 13. 下一对话启动提示词
 
 ```text
-开始 M2-08 差异结果前端逐项改造，仍属于 M2。
+继续 M2-08，开始“行与字段差异”模块逐项改造，仍属于 M2。
 
 工作目录：D:\Excel_Merge
 
 先完整读取：
-1. docs/M2-08-DIFF-RESULT-FRONTEND-HANDOFF.md
-2. docs/M2-05-STAGE-D3-COMPATIBILITY-HANDOFF.md
-3. docs/M2-OFFLINE-FIXTURE-RUNBOOK.md
-4. 当前 compare_results 模板、JS、CSS、mapper 和对应测试
+1. docs/M2-08-ROW-FIELD-DIFF-HANDOFF.md
+2. docs/M2-08-DIFF-RESULT-FRONTEND-HANDOFF.md
+3. docs/M2-05-STAGE-D3-COMPATIBILITY-HANDOFF.md
+4. docs/M2-OFFLINE-FIXTURE-RUNBOOK.md
+5. 当前 compare_results 模板、JS、CSS、mapper 和对应测试
 
-先恢复上下文并等待我指定第一项前端问题。不要自主开始设计或修改代码。
-我会逐项告诉你需要检查或改造的内容。
+先恢复上下文并等待我指定第一项行与字段问题。不要自主开始设计或修改代码。
+
+Batch Task、工作簿导航、比对结果标题区、Sheet 标题与导航已经锁定，不得修改。
 
 每一项先使用真实 Replay 数据展示当前行为、代表样本、拟议方案、影响文件和验收
 用例，等待我明确确认后再实施。只修改我确认的这一项，不顺带扩大改造范围。

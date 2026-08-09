@@ -1,24 +1,11 @@
 (() => {
   const TASK_CONTEXT_KEY = "excelDiffTaskContext";
+  const REVIEW_STATE_KEY_PREFIX = "excelDiffConfirmedWorkbooks:";
   const FILE_STATUS = {
     modified: "内容变化",
     left_only: "仅左侧",
     right_only: "仅右侧",
     read_error: "读取失败",
-  };
-  const RESULT_LABELS = {
-    diff_unavailable: "未执行",
-    diff_loading: "处理中",
-    diff_pending: "已完成",
-    diff_ready: "有差异",
-    diff_empty: "无差异",
-    diff_error: "执行失败",
-  };
-  const FIELD_STATUS = {
-    common: "两侧共有",
-    modified: "值已修改",
-    source_only: "仅左侧",
-    target_only: "仅右侧",
   };
 
   const state = {
@@ -26,6 +13,11 @@
     results: new Map(),
     selectedPath: "",
     selectedSheet: null,
+    showUnchanged: false,
+    showConfirmed: false,
+    showAllSheets: false,
+    confirmedPaths: new Set(),
+    reviewScope: "",
     busy: false,
   };
   const $ = (id) => document.getElementById(id);
@@ -48,6 +40,10 @@
 
   function fileName(path) {
     return String(path || "").replace(/\\/g, "/").split("/").pop() || "—";
+  }
+
+  function workbookDisplayName(path) {
+    return fileName(path).replace(/\.(?:xlsm|xlsx)$/i, "");
   }
 
   function revisionText(value) {
@@ -107,20 +103,13 @@
     if (nextState === "diff_error" && detail) $("diff-error-detail").textContent = detail;
   }
 
-  function resetDetail(caption = "选择字段差异后显示详情。") {
-    $("detail-state").textContent = "未选择";
-    $("detail-primary-key").textContent = state.selectedSheet?.primaryKey || "—";
-    $("detail-field").textContent = "—";
-    $("detail-field-status").textContent = "—";
-    $("detail-source-value").textContent = "—";
-    $("detail-target-value").textContent = "—";
-    $("detail-source-definition").textContent = "—";
-    $("detail-target-definition").textContent = "—";
-    $("detail-location").textContent = "—";
-    $("detail-caption").textContent = caption;
+  function resetDetail() {
+    const result = state.results.get(state.selectedPath);
+    if (result) $("workbench-caption").textContent = workbookCaption(result);
   }
 
-  function renderEmptySheetNavigation(detail = "当前工作簿没有可用的 Sheet 结果。") {
+  function renderEmptySheetNavigation(detail = "当前工作簿没有可用的 Sheet 结果。", result = null) {
+    syncSheetFilterControls(result);
     const navigation = $("sheet-navigation");
     navigation.className = "sheet-empty";
     navigation.textContent = "";
@@ -139,47 +128,71 @@
     return field.targetValue ?? field.newValue ?? "—";
   }
 
-  function definitionText(definition, side) {
-    if (!definition) return "未提供字段定义";
-    const type = definition[side + "_type"] || "未声明类型";
-    const scope = definition[side + "_scope"] || "未声明范围";
-    return type + " · " + scope;
+  function selectedFieldCaption(field) {
+    const result = state.results.get(state.selectedPath);
+    if (!result) return "";
+    const parts = [workbookCaption(result)];
+    if (!field) return parts[0];
+    if (state.selectedSheet?.label) parts.push(state.selectedSheet.label);
+    const sides = [];
+    if (field.sourceRowNumber) sides.push("左侧第 " + field.sourceRowNumber + " 行");
+    if (field.targetRowNumber) sides.push("右侧第 " + field.targetRowNumber + " 行");
+    if (sides.length) parts.push(sides.join(" / "));
+    return parts.join(" · ");
   }
-
   function updateDetail(field, button) {
     document.querySelectorAll(".field-diff-button.is-selected").forEach((current) => current.classList.remove("is-selected"));
     if (!field) {
-      resetDetail("当前行没有可选择的字段值。");
+      resetDetail();
       return;
     }
     button?.classList.add("is-selected");
-    $("detail-state").textContent = state.context.mode === "demo" ? "UI 示例" : "已选择";
-    $("detail-primary-key").textContent = state.selectedSheet?.primaryKey || "—";
-    $("detail-field").textContent = field.name;
-    $("detail-field-status").textContent = FIELD_STATUS[field.status] || field.status || "—";
-    $("detail-source-value").textContent = sideValue(field, "source");
-    $("detail-target-value").textContent = sideValue(field, "target");
-    $("detail-source-definition").textContent = definitionText(field.definition, "source");
-    $("detail-target-definition").textContent = definitionText(field.definition, "target");
-    $("detail-location").textContent = field.location || "—";
-    $("detail-caption").textContent = state.context.mode === "demo"
-      ? "当前内容来自开发模式 UI 假数据，不代表实际工作簿结果。"
-      : "定位使用 Sheet、字段和左右 CSV 逻辑行号。";
+    $("workbench-caption").textContent = selectedFieldCaption(field);
   }
 
-  function sheetMeta(sheet) {
-    if (sheet.status === "failed") return "失败";
-    if (sheet.status === "unchanged") return "无差异";
-    const rows = sheetChangedRows(sheet);
-    const fields = sheetDiffCount(sheet);
-    return rows + " 行 · " + fields + " 修改字段";
+  function sheetMetrics(sheet) {
+    if (sheet.status === "failed" || !sheet.summary) return null;
+    const addedFields = (sheet.rows || []).reduce(
+      (count, row) => count + (row.status === "target_only" ? (row.fields || []).length : 0),
+      0,
+    );
+    return {
+      modified: Number(sheet.summary.modified_fields || 0) + addedFields,
+      deleted: Number(sheet.summary.source_only_rows || 0),
+    };
   }
 
+  function visibleSheetResults(result) {
+    return (result?.sheets || []).filter((sheet) => state.showAllSheets || sheet.status !== "unchanged");
+  }
+
+  function syncSheetFilterControls(result) {
+    const sheets = result?.sheets || [];
+    const visible = visibleSheetResults(result);
+    const enabled = sheets.length > 0;
+    const modifiedButton = $("show-modified-sheets");
+    const allButton = $("show-all-sheets");
+    modifiedButton.disabled = !enabled;
+    allButton.disabled = !enabled;
+    modifiedButton.setAttribute("aria-pressed", String(!state.showAllSheets));
+    allButton.setAttribute("aria-pressed", String(state.showAllSheets));
+    modifiedButton.classList.toggle("is-selected", !state.showAllSheets);
+    allButton.classList.toggle("is-selected", state.showAllSheets);
+    $("sheet-count").textContent = visible.length + " / " + sheets.length;
+  }
+
+  function preferredVisibleSheet(result) {
+    const sheets = visibleSheetResults(result);
+    return sheets.find((sheet) => sheet.status !== "failed")
+      || sheets[0]
+      || null;
+  }
   function renderSheetNavigation(result, activeSheetId) {
+    syncSheetFilterControls(result);
     const navigation = $("sheet-navigation");
     navigation.className = "sheet-list";
     navigation.textContent = "";
-    result.sheets.forEach((sheet) => {
+    visibleSheetResults(result).forEach((sheet) => {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "sheet-nav-item" + (sheet.id === activeSheetId ? " is-selected" : "");
@@ -187,8 +200,26 @@
       const name = document.createElement("strong");
       name.textContent = sheet.label;
       const meta = document.createElement("span");
-      meta.className = "sheet-status" + (sheet.status !== "unchanged" ? " is-changed" : "");
-      meta.textContent = sheetMeta(sheet);
+      meta.className = "sheet-status";
+      const metrics = sheetMetrics(sheet);
+      if (!metrics) {
+        meta.classList.add("is-failed");
+        meta.textContent = "失败";
+      } else {
+        const modified = document.createElement("span");
+        modified.className = "is-modified";
+        modified.textContent = "+" + metrics.modified;
+        meta.append(modified);
+        if (metrics.deleted > 0) {
+          const separator = document.createElement("span");
+          separator.className = "is-separator";
+          separator.textContent = "/";
+          const deleted = document.createElement("span");
+          deleted.className = "is-deleted";
+          deleted.textContent = "-" + metrics.deleted;
+          meta.append(separator, deleted);
+        }
+      }
       button.append(name, meta);
       button.addEventListener("click", () => renderSheet(result, sheet.id));
       navigation.appendChild(button);
@@ -196,13 +227,22 @@
   }
 
   function renderSheet(result, sheetId) {
-    const sheet = result.sheets.find((item) => item.id === sheetId) || result.sheets[0];
-    if (!sheet) return;
-    state.selectedSheet = sheet;
-    renderSheetNavigation(result, sheet.id);
-    $("sheet-count").textContent = String(result.sheets.length);
+    const visible = visibleSheetResults(result);
+    const sheet = visible.find((item) => item.id === sheetId) || preferredVisibleSheet(result);
     const tableBody = $("semantic-table-body");
     tableBody.textContent = "";
+    if (!sheet) {
+      state.selectedSheet = null;
+      renderEmptySheetNavigation("当前筛选没有可显示的 Sheet。", result);
+      const empty = document.createElement("div");
+      empty.className = "semantic-table-empty";
+      empty.textContent = "切换到“显示全部”查看无变化 Sheet。";
+      tableBody.appendChild(empty);
+      resetDetail();
+      return;
+    }
+    state.selectedSheet = sheet;
+    renderSheetNavigation(result, sheet.id);
     if (!sheet.rows.length) {
       const empty = document.createElement("div");
       empty.className = "semantic-table-empty";
@@ -214,7 +254,7 @@
           : "该 Sheet 没有行级差异。";
       }
       tableBody.appendChild(empty);
-      resetDetail("当前 Sheet 没有可选择的字段差异。");
+      resetDetail();
       return;
     }
 
@@ -267,6 +307,16 @@
     });
     updateDetail(firstField, firstButton);
   }
+  function setSheetFilterMode(showAll) {
+    if (state.showAllSheets === showAll) return;
+    state.showAllSheets = showAll;
+    const result = state.results.get(state.selectedPath);
+    if (!result?.sheets?.length) {
+      syncSheetFilterControls(null);
+      return;
+    }
+    renderSheet(result, state.selectedSheet?.id);
+  }
 
   function appendErrors(list, errors) {
     list.textContent = "";
@@ -286,52 +336,227 @@
     appendErrors($("diff-error-list"), partial ? [] : result.errors);
   }
 
-  function baseWorkbookMeta(result) {
-    if (!result.resultLoaded && result.itemStatus === "business_failed") {
-      const label = result.diffStatus === "partial" ? "部分完成" : "失败";
-      return label + " · " + Number(result.diffErrorCount || 0) + " 个错误";
-    }
-    if (result.state === "diff_pending") {
-      return result.diffStatus === "unchanged" ? "已完成 · 无差异" : "已完成 · 结果可读";
-    }
-    if (result.partial) return "部分完成 · " + resultFieldCount(result) + " 个修改字段";
-    if (result.state === "diff_ready") return resultFieldCount(result) + " 个修改字段";
-    if (result.state === "diff_loading") return "处理中";
-    return RESULT_LABELS[result.state];
+  function workbookRowMetrics(result) {
+    if (!result.summary) return null;
+    const modified = Number(result.summary.modified_rows || 0);
+    const added = Number(result.summary.target_only_rows || 0);
+    const deleted = Number(result.summary.source_only_rows || 0);
+    return {
+      changed: modified + added + deleted,
+      deleted,
+    };
   }
 
-  function workbookMeta(result) {
-    const base = baseWorkbookMeta(result);
-    if (state.context?.mode !== "replay" || state.context.replayResultMode !== "current") {
-      return base;
-    }
-    const comparison = state.context.replayComparisons?.[result.itemId];
-    if (!comparison?.available) return base + " · 未重算";
-    return base + (comparison.matches_golden
-      ? " · 与黄金一致"
-      : " · 与黄金不一致");
+  function metricValue(value, sign) {
+    return sign + value;
   }
+
+  function workbookCardStatus(result) {
+    if (result.itemStatus === "business_failed") {
+      return result.diffStatus === "partial" ? "部分完成" : "执行失败";
+    }
+    if (result.itemStatus === "orchestration_failed") return "编排失败";
+    if (result.itemStatus === "cancelled") return "已取消";
+    if (result.itemStatus === "skipped") return "已跳过";
+    if (result.summaryError) return "统计不可用";
+    if (result.state === "diff_loading") return "处理中";
+    if (result.state === "diff_pending" && !result.summary) return "统计读取中";
+    if (result.state === "diff_unavailable") return "未执行";
+    if (result.state === "diff_error") return result.partial ? "部分完成" : "执行失败";
+    return "";
+  }
+
+  function isUnchangedResult(result) {
+    if (!result) return false;
+    if (result.itemStatus) {
+      return result.itemStatus === "succeeded"
+        && (result.diffStatus === "unchanged" || result.state === "diff_empty");
+    }
+    return result.state === "diff_empty";
+  }
+
+  function currentReviewScope() {
+    const context = state.context;
+    if (!context) return "";
+    if (context.mode === "formal" && context.batchTaskId) {
+      return "formal:" + context.batchTaskId;
+    }
+    if (context.mode === "replay" && context.fixtureId) {
+      return "replay:" + context.fixtureId + ":" + (context.replayResultMode || "golden");
+    }
+    if (context.mode === "demo") {
+      return "demo:" + (context.capturedAt || "current");
+    }
+    return "";
+  }
+
+  function reviewStateStorageKey() {
+    const scope = currentReviewScope();
+    return scope ? REVIEW_STATE_KEY_PREFIX + scope : "";
+  }
+
+  function syncConfirmedPaths() {
+    const scope = currentReviewScope();
+    if (scope === state.reviewScope) return;
+    state.reviewScope = scope;
+    state.showConfirmed = false;
+    state.confirmedPaths = new Set();
+    const storageKey = reviewStateStorageKey();
+    if (!storageKey) return;
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(storageKey) || "[]");
+      if (Array.isArray(stored)) {
+        state.confirmedPaths = new Set(stored.filter((path) => typeof path === "string"));
+      }
+    } catch {
+      sessionStorage.removeItem(storageKey);
+    }
+  }
+
+  function persistConfirmedPaths() {
+    const storageKey = reviewStateStorageKey();
+    if (!storageKey) return;
+    sessionStorage.setItem(storageKey, JSON.stringify([...state.confirmedPaths]));
+  }
+
+  function isConfirmableResult(result) {
+    if (!result || result.partial || !result.summary) return false;
+    if (result.itemStatus) return result.itemStatus === "succeeded";
+    return result.state === "diff_ready" || result.state === "diff_empty";
+  }
+
+  function isConfirmedResult(result) {
+    return Boolean(result?.candidate?.path && state.confirmedPaths.has(result.candidate.path));
+  }
+
+  function visibleWorkbookResults(allResults = [...state.results.values()]) {
+    return allResults.filter((result) => (
+      (state.showUnchanged || !isUnchangedResult(result))
+      && (state.showConfirmed || !isConfirmedResult(result))
+    ));
+  }
+
+  function setWorkbookConfirmed(path, confirmed, { render = true } = {}) {
+    syncConfirmedPaths();
+    const result = state.results.get(path);
+    if (!result || (confirmed && !isConfirmableResult(result))) return;
+    if (confirmed) state.confirmedPaths.add(path);
+    else state.confirmedPaths.delete(path);
+    persistConfirmedPaths();
+
+    if (!render) return;
+    if (confirmed && !state.showConfirmed && state.selectedPath === path) {
+      const allResults = [...state.results.values()];
+      const currentIndex = allResults.findIndex((item) => item.candidate.path === path);
+      const visibleResults = visibleWorkbookResults(allResults);
+      const replacement = visibleResults.find((item) => (
+        allResults.indexOf(item) > currentIndex
+      )) || visibleResults[visibleResults.length - 1];
+      if (replacement) {
+        selectWorkbook(replacement.candidate.path);
+        return;
+      }
+    }
+    renderWorkbookNavigation();
+  }
+
+  function clearWorkbookConfirmations(path = "") {
+    syncConfirmedPaths();
+    if (path) state.confirmedPaths.delete(path);
+    else state.confirmedPaths.clear();
+    persistConfirmedPaths();
+    renderWorkbookNavigation();
+  }
+
+  function renderHiddenWorkbooksEmpty(navigation, unchangedCount, confirmedCount) {
+    navigation.className = "workbook-empty";
+    const icon = document.createElement("span");
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = "▤";
+    const title = document.createElement("strong");
+    title.textContent = "当前筛选已隐藏所有工作簿";
+    const reasons = [];
+    if (!state.showUnchanged && unchangedCount) reasons.push(unchangedCount + " 个无变化");
+    if (!state.showConfirmed && confirmedCount) reasons.push(confirmedCount + " 个已确认");
+    const detail = document.createElement("small");
+    detail.textContent = "使用标题栏按钮显示" + reasons.join("、") + "工作簿。";
+    navigation.append(icon, title, detail);
+  }
+
   function renderWorkbookNavigation() {
+    syncConfirmedPaths();
     const navigation = $("workbook-navigation");
-    const results = [...state.results.values()];
+    const allResults = [...state.results.values()];
+    const unchangedCount = allResults.filter(isUnchangedResult).length;
+    const confirmedCount = allResults.filter(isConfirmedResult).length;
+    if (confirmedCount === 0) state.showConfirmed = false;
+    const results = visibleWorkbookResults(allResults);
+    const unchangedToggle = $("toggle-unchanged-workbooks");
+    unchangedToggle.disabled = unchangedCount === 0;
+    unchangedToggle.setAttribute("aria-pressed", String(state.showUnchanged));
+    unchangedToggle.textContent = (state.showUnchanged ? "隐藏无变化 " : "显示无变化 ") + unchangedCount;
+    const confirmedToggle = $("toggle-confirmed-workbooks");
+    confirmedToggle.disabled = confirmedCount === 0;
+    confirmedToggle.setAttribute("aria-pressed", String(state.showConfirmed));
+    confirmedToggle.textContent = (state.showConfirmed ? "隐藏已确认 " : "显示已确认 ") + confirmedCount;
     navigation.className = "workbook-list";
     navigation.textContent = "";
-    $("workbook-count").textContent = String(results.length);
+    $("workbook-count").textContent = results.length + " / " + allResults.length;
+    if (!results.length && allResults.length) {
+      renderHiddenWorkbooksEmpty(navigation, unchangedCount, confirmedCount);
+      return;
+    }
     results.forEach((result) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "workbook-nav-item is-" + result.state
-        + (result.candidate.path === state.selectedPath ? " is-selected" : "");
-      button.setAttribute("aria-pressed", String(result.candidate.path === state.selectedPath));
+      const path = result.candidate.path;
+      const confirmed = isConfirmedResult(result);
+      const confirmable = isConfirmableResult(result);
+      const item = document.createElement("div");
+      item.className = "workbook-nav-item is-" + result.state
+        + (path === state.selectedPath ? " is-selected" : "")
+        + (confirmed ? " is-confirmed" : "");
+      const selectButton = document.createElement("button");
+      selectButton.type = "button";
+      selectButton.className = "workbook-nav-select";
+      selectButton.setAttribute("aria-pressed", String(path === state.selectedPath));
       const name = document.createElement("strong");
-      name.textContent = fileName(result.candidate.path);
-      const path = document.createElement("small");
-      path.textContent = result.candidate.path;
-      const meta = document.createElement("span");
-      meta.textContent = workbookMeta(result);
-      button.append(name, path, meta);
-      button.addEventListener("click", () => selectWorkbook(result.candidate.path));
-      navigation.appendChild(button);
+      name.textContent = workbookDisplayName(path);
+      const metrics = workbookRowMetrics(result);
+      const rowSummary = document.createElement("div");
+      rowSummary.className = "workbook-row-summary";
+      const modified = document.createElement("span");
+      modified.className = "is-modified";
+      modified.textContent = metrics ? metricValue(metrics.changed, "+") : "—";
+      const deleted = document.createElement("span");
+      deleted.className = "is-deleted";
+      deleted.textContent = metrics ? metricValue(metrics.deleted, "-") : "—";
+      rowSummary.append(modified, deleted);
+      const statusText = workbookCardStatus(result);
+      selectButton.setAttribute(
+        "aria-label",
+        name.textContent + "，变化行 " + modified.textContent + "，删除行 " + deleted.textContent
+          + (statusText ? "，" + statusText : ""),
+      );
+      selectButton.append(name, rowSummary);
+      if (statusText) {
+        const status = document.createElement("span");
+        status.className = "workbook-result-status";
+        status.textContent = statusText;
+        selectButton.appendChild(status);
+      }
+      selectButton.addEventListener("click", () => selectWorkbook(path));
+
+      const confirmControl = document.createElement("label");
+      confirmControl.className = "workbook-confirm-control" + (confirmable ? "" : " is-disabled");
+      confirmControl.title = confirmable ? "标记为已确认" : "当前结果不可确认";
+      const confirmation = document.createElement("input");
+      confirmation.type = "checkbox";
+      confirmation.checked = confirmed;
+      confirmation.disabled = !confirmable;
+      confirmation.setAttribute("aria-label", (confirmed ? "取消确认 " : "确认 ") + name.textContent + " 差异");
+      confirmation.addEventListener("change", () => setWorkbookConfirmed(path, confirmation.checked));
+      confirmControl.appendChild(confirmation);
+      item.append(selectButton, confirmControl);
+      navigation.appendChild(item);
     });
   }
 
@@ -354,17 +579,19 @@
     return detail[candidate.status] || "当前候选不支持单工作簿语义 Diff。";
   }
 
-  function summaryCaption(result) {
-    const summary = result.summary || {};
-    return (result.workbook?.name || fileName(result.candidate.path))
-      + " · " + Number(summary.total_sheets || result.sheets.length) + " 个 Sheet"
-      + " · " + Number(summary.modified_rows || 0) + " 个修改行"
-      + " · " + Number(summary.modified_fields || 0) + " 个修改字段";
+  function workbookCaption(result) {
+    return result.workbook?.name || fileName(result.candidate.path);
   }
 
   function selectWorkbook(path) {
-    const result = state.results.get(path);
+    syncConfirmedPaths();
+    let result = state.results.get(path);
     if (!result) return;
+    const visibleResults = visibleWorkbookResults();
+    if (!visibleResults.some((item) => item.candidate.path === path)) {
+      result = visibleResults[0] || result;
+      path = result.candidate.path;
+    }
     state.selectedPath = path;
     state.selectedSheet = null;
     renderWorkbookNavigation();
@@ -405,7 +632,6 @@
       const firstAvailableSheet = result.sheets.find((sheet) => sheet.status !== "failed");
       renderSheet(result, firstAvailableSheet?.id || result.sheets[0]?.id);
       $("diff-state-badge").textContent = "部分完成 · " + resultFieldCount(result) + " 个修改字段";
-      $("workbench-caption").textContent = summaryCaption(result) + " · 部分 Sheet 失败";
     } else if (result.state === "diff_error") {
       $("sheet-count").textContent = "0";
       renderEmptySheetNavigation("该工作簿执行失败，没有可用 Sheet 结果。");
@@ -415,14 +641,13 @@
       $("sheet-count").textContent = "0";
       renderEmptySheetNavigation("该工作簿已完成且没有语义差异。");
       setDiffState("diff_empty");
-      $("workbench-caption").textContent = summaryCaption(result) + " · 无语义差异";
+      $("workbench-caption").textContent = workbookCaption(result) + " · 无语义差异";
     } else {
       setDiffState("diff_ready");
       renderSheet(result, result.sheets[0]?.id);
       $("diff-state-badge").textContent = resultFieldCount(result) + " 个修改字段";
-      $("workbench-caption").textContent = summaryCaption(result);
     }
-    $("result-action-message").textContent = "当前工作簿：" + fileName(path);
+    $("result-action-message").textContent = "";
     if (result.resultRef && !result.resultLoaded) {
       void globalThis.ExcelDiffBatchRuntime?.loadResult(result);
     }
@@ -487,6 +712,7 @@
   async function compareCurrentWorkbook() {
     const current = state.results.get(state.selectedPath);
     if (!current || state.busy || current.candidate.status !== "modified") return;
+    setWorkbookConfirmed(current.candidate.path, false, { render: false });
     if (state.context.mode === "demo") {
       state.busy = true;
       $("compare-current-workbook").disabled = true;
@@ -548,6 +774,35 @@
     $("result-workbook-total").textContent = "0";
   }
 
+  function syncWorkbookSidebarVisibility() {
+    const visible = !$("diff-workbench").classList.contains("hidden");
+    $("workbook-sidebar").classList.toggle("hidden", !visible);
+    $("result-page-body").classList.toggle("has-workbook-sidebar", visible);
+  }
+
+  function applyWorkbookVisibilityFilter() {
+    const selected = state.results.get(state.selectedPath);
+    const visibleResults = visibleWorkbookResults();
+    if (selected && !visibleResults.some((result) => result.candidate.path === state.selectedPath)) {
+      const replacement = visibleResults[0];
+      if (replacement) {
+        selectWorkbook(replacement.candidate.path);
+        return;
+      }
+    }
+    renderWorkbookNavigation();
+  }
+
+  function toggleUnchangedWorkbooks() {
+    state.showUnchanged = !state.showUnchanged;
+    applyWorkbookVisibilityFilter();
+  }
+
+  function toggleConfirmedWorkbooks() {
+    state.showConfirmed = !state.showConfirmed;
+    applyWorkbookVisibilityFilter();
+  }
+
   function loadContext() {
     let context = null;
     try {
@@ -576,11 +831,15 @@
   }
 
   $("compare-current-workbook").addEventListener("click", compareCurrentWorkbook);
-  $("toggle-detail").addEventListener("click", () => {
-    const workbench = $("diff-workbench");
-    const collapsed = workbench.classList.toggle("is-detail-collapsed");
-    $("toggle-detail").setAttribute("aria-expanded", String(!collapsed));
+  $("show-modified-sheets").addEventListener("click", () => setSheetFilterMode(false));
+  $("show-all-sheets").addEventListener("click", () => setSheetFilterMode(true));
+  $("toggle-unchanged-workbooks").addEventListener("click", toggleUnchangedWorkbooks);
+  $("toggle-confirmed-workbooks").addEventListener("click", toggleConfirmedWorkbooks);
+  new MutationObserver(syncWorkbookSidebarVisibility).observe($("diff-workbench"), {
+    attributes: true,
+    attributeFilter: ["class"],
   });
+  syncWorkbookSidebarVisibility();
   globalThis.ExcelDiffResults = Object.freeze({
     selectWorkbook,
     compareCurrentWorkbook,
@@ -592,6 +851,7 @@
     fileName,
     selectWorkbook,
     renderWorkbookNavigation,
+    clearWorkbookConfirmations,
     renderTaskContext,
     showMissingContext,
     setDiffState,

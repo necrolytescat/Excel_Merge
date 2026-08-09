@@ -92,6 +92,8 @@ D2 真实试跑发现 29 个业务失败、0 个编排失败，并冻结为五�
 
 - 基于真实 Replay 和测试数据，按用户逐项指定改造差异结果页；
 - 每项先展示现状、代表样本、方案、影响范围和验收用例，用户确认后再实施；
+- Batch Task、工作簿导航、比对结果标题区和 Sheet 标题与导航已完成并锁定；
+- 下一模块只处理行与字段差异，入口见 `M2-08-ROW-FIELD-DIFF-HANDOFF.md`；
 - 保持正式、Replay、Demo 三种模式共享渲染契约；
 - 不修改 `m2.diff.v1`、`m2.batch.v1`、解析规则、冻结 Revision、SVN 只读或无 Merge/写回边界；
 - 当前入口见 `M2-08-DIFF-RESULT-FRONTEND-HANDOFF.md`。

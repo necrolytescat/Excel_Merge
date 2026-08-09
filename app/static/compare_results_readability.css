@@ -1,4 +1,78 @@
 /* Shared desktop readability styling for result pages. */
+.results-readable-page {
+  overflow: hidden;
+}
+
+.results-readable-page .app-shell,
+.results-readable-page .sidebar,
+.results-readable-page .compare-content {
+  height: 100vh;
+  min-height: 0;
+}
+
+.results-readable-page .app-shell {
+  overflow: hidden;
+}
+
+.results-readable-page .compare-content {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.results-readable-page .result-page-body {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-areas:
+    "tabs"
+    "main";
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.results-readable-page .result-page-body.has-workbook-sidebar {
+  grid-template-areas:
+    "workbooks tabs"
+    "workbooks main";
+  grid-template-columns: 280px minmax(0, 1fr);
+}
+
+.results-readable-page .result-page-body > .task-page-nav {
+  min-width: 0;
+  grid-area: tabs;
+}
+
+.results-readable-page .result-page-main {
+  min-width: 0;
+  min-height: 0;
+  grid-area: main;
+  overflow-y: auto;
+}
+
+.results-readable-page .workbook-sidebar {
+  display: grid;
+  width: 280px;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  grid-area: workbooks;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-right: 1px solid #dfe3ea;
+  background: #f7f8fa;
+}
+
+.results-readable-page .workbook-sidebar.hidden {
+  display: none;
+}
+
+.results-readable-page .workbook-sidebar #workbook-navigation {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .results-readable-page .file-context {
   display: none;
 }
@@ -71,6 +145,10 @@
   font-size: 13px;
 }
 
+.results-readable-page .result-action-message:empty {
+  display: none;
+}
+
 .results-readable-page .mock-result-notice {
   gap: 12px;
   padding: 11px 18px;
@@ -82,10 +160,9 @@
   font-size: 12px;
 }
 
-.results-readable-page .workbench-grid,
-.results-readable-page .diff-workbench.is-detail-collapsed .workbench-grid {
+.results-readable-page .workbench-grid {
   min-height: 620px;
-  grid-template-columns: 200px 180px minmax(460px, 1fr) 250px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .results-readable-page .pane-heading,
@@ -106,28 +183,301 @@
   font-size: 12px;
 }
 
-.results-readable-page .workbook-list,
+.results-readable-page .workbook-sidebar-header {
+  display: grid;
+  gap: 10px;
+  padding: 15px 14px 13px;
+  border-bottom: 1px solid #dfe3ea;
+  background: #fff;
+}
+
+.results-readable-page .workbook-sidebar-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.results-readable-page .workbook-sidebar-title-row strong {
+  color: #1d2939;
+  font-size: 15px;
+}
+
+.results-readable-page .workbook-sidebar-title-row span {
+  color: #667085;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.results-readable-page .workbook-sidebar-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.results-readable-page .workbook-visibility-toggle {
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid #b8c7e8;
+  border-radius: 6px;
+  background: #fff;
+  color: #3157a4;
+  padding: 5px 9px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.results-readable-page .workbook-visibility-toggle:hover:not(:disabled),
+.results-readable-page .workbook-visibility-toggle[aria-pressed="true"] {
+  background: #edf3ff;
+}
+
+.results-readable-page .workbook-visibility-toggle:disabled {
+  cursor: default;
+  opacity: .55;
+}
+
+.results-readable-page .workbook-list {
+  grid-template-columns: 1fr;
+  align-content: start;
+  gap: 0;
+  padding: 6px 0;
+}
+
 .results-readable-page .sheet-list {
+  display: flex;
+  min-width: 0;
+  align-items: center;
   gap: 8px;
   padding: 10px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+.results-readable-page .sheet-strip {
+  min-width: 0;
+  border-top: 1px solid #e1e5ec;
+  border-bottom: 1px solid #dfe3ea;
+  background: #f7f8fa;
 }
 
-.results-readable-page .workbook-nav-item,
+.results-readable-page .sheet-strip-header {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 16px;
+}
+
+.results-readable-page .sheet-strip-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.results-readable-page .sheet-strip-title strong {
+  font-size: 13px;
+}
+
+.results-readable-page .sheet-strip-title span {
+  color: #667085;
+  font-size: 11px;
+}
+
+.results-readable-page .sheet-filter {
+  display: inline-flex;
+  flex: 0 0 auto;
+  border: 1px solid #cfd5df;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.results-readable-page .sheet-filter-button {
+  min-height: 30px;
+  border: 0;
+  border-left: 1px solid #cfd5df;
+  border-radius: 0;
+  background: transparent;
+  color: #475467;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.results-readable-page .sheet-filter-button:first-child {
+  border-left: 0;
+}
+
+.results-readable-page .sheet-filter-button:hover:not(:disabled),
+.results-readable-page .sheet-filter-button[aria-pressed="true"] {
+  background: #e8eef9;
+  color: #24447f;
+}
+
+.results-readable-page .sheet-filter-button:disabled {
+  cursor: default;
+  opacity: .55;
+}
+
+.results-readable-page .sheet-strip .sheet-empty {
+  min-height: 72px;
+  border: 0;
+  padding: 12px 16px;
+}
+
+.results-readable-page .workbook-nav-item {
+  position: relative;
+  display: grid;
+  min-height: 44px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 0;
+  border: 0;
+  border-bottom: 1px solid #e7eaf0;
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+}
+
+.results-readable-page .workbook-nav-item:hover {
+  background: #eef1f5;
+}
+
+.results-readable-page .workbook-nav-select {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 10px 4px 10px 11px;
+  text-align: left;
+}
+
+.results-readable-page .workbook-nav-select:focus-visible,
+.results-readable-page .workbook-confirm-control input:focus-visible {
+  z-index: 1;
+  outline: 2px solid #3157a4;
+  outline-offset: -2px;
+}
+
+.results-readable-page .workbook-confirm-control {
+  display: grid;
+  align-self: stretch;
+  cursor: pointer;
+  place-items: center;
+  padding: 0 11px 0 5px;
+}
+
+.results-readable-page .workbook-confirm-control.is-disabled {
+  cursor: default;
+}
+
+.results-readable-page .workbook-confirm-control input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #3157a4;
+}
+
+.results-readable-page .workbook-nav-item.is-selected {
+  border-color: #d7ddea;
+  border-left-color: #3157a4;
+  background: #e8eef9;
+  box-shadow: none;
+}
+
 .results-readable-page .sheet-nav-item {
-  gap: 6px;
-  padding: 11px 10px;
+  display: inline-grid;
+  width: auto;
+  min-width: 140px;
+  max-width: 260px;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #d7dce5;
+  background: #fff;
+  padding: 8px 10px;
 }
 
-.results-readable-page .workbook-nav-item strong,
+.results-readable-page .sheet-strip .sheet-nav-item.is-selected {
+  border-color: #879dcc;
+  background: #e8eef9;
+  box-shadow: inset 0 -3px #3157a4;
+}
+
+.results-readable-page .workbook-nav-item strong {
+  font-size: 11px;
+}
+
 .results-readable-page .sheet-nav-item strong {
-  font-size: 14px;
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.results-readable-page .sheet-nav-item .sheet-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
-.results-readable-page .workbook-nav-item small,
-.results-readable-page .workbook-nav-item span,
+.results-readable-page .sheet-status .is-modified {
+  color: #087c6d;
+}
+
+.results-readable-page .sheet-status .is-deleted,
+.results-readable-page .sheet-status.is-failed {
+  color: #b42318;
+}
+
+.results-readable-page .sheet-status .is-separator {
+  color: #98a2b3;
+}
+
+.results-readable-page .workbook-row-summary > span,
+.results-readable-page .workbook-result-status,
 .results-readable-page .sheet-status {
   font-size: 12px;
   line-height: 1.45;
+}
+
+.results-readable-page .workbook-row-summary {
+  display: inline-flex;
+  gap: 7px;
+  margin: 0;
+  border-color: #cfd5df;
+  border-radius: 6px;
+  padding: 4px 7px;
+}
+
+.results-readable-page .workbook-row-summary > span {
+  margin: 0;
+  font-weight: 800;
+}
+
+.results-readable-page .workbook-row-summary .is-modified {
+  color: #087c6d;
+}
+
+.results-readable-page .workbook-row-summary .is-deleted {
+  color: #b42318;
+}
+
+.results-readable-page .workbook-result-status {
+  margin-top: 0;
+  color: #b42318;
+  font-weight: 800;
 }
 
 .results-readable-page .workbook-empty strong,
@@ -258,4 +608,46 @@
 .results-readable-page .result-back-link,
 .results-readable-page footer {
   font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .results-readable-page {
+    overflow: auto;
+  }
+
+  .results-readable-page .app-shell,
+  .results-readable-page .sidebar,
+  .results-readable-page .compare-content {
+    height: auto;
+    min-height: 0;
+  }
+
+  .results-readable-page .app-shell,
+  .results-readable-page .compare-content {
+    overflow: visible;
+  }
+
+  .results-readable-page .result-page-body,
+  .results-readable-page .result-page-body.has-workbook-sidebar {
+    display: grid;
+    grid-template-areas:
+      "tabs"
+      "workbooks"
+      "main";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    overflow: visible;
+  }
+
+  .results-readable-page .result-page-main {
+    overflow: visible;
+  }
+
+  .results-readable-page .workbook-sidebar {
+    width: 100%;
+    height: min(420px, 46vh);
+    min-height: 260px;
+    border-right: 0;
+    border-bottom: 1px solid #dfe3ea;
+  }
 }
