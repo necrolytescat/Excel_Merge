@@ -3,7 +3,7 @@
 ## 1. 安装依赖
 
 ~~~powershell
-py -3 -m pip install -r requirements-m0.txt
+py -3 -m pip install -r requirements.txt
 ~~~
 
 ## 2. 启动页面
