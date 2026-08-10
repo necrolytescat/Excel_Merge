@@ -163,8 +163,11 @@ def test_version_six_migration_collapses_legacy_duplicate_active_retries(tmp_pat
         target=f"POST /api/monitor/runs/{run.run_id}/retry",
         payload_hash="first",
         payload_json="{}",
-        response_status=202,
-        response_json="{}",
+        accepted_response_json=lambda task_id: "{}",
+        not_found_response_json=(
+            '{"error":{"code":"MONITOR_RUN_NOT_FOUND",'
+            '"message":"监控运行不存在"}}'
+        ),
         conflict_response_json=(
             '{"error":{"code":"MONITOR_STATE_CONFLICT",'
             '"message":"当前运行状态不允许人工重试"}}'

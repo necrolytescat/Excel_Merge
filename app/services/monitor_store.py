@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import secrets
 import sqlite3
-from typing import Any, Iterator, Literal
+from typing import Any, Callable, Iterator, Literal
 from uuid import UUID, uuid4
 
 from app.schemas.monitor import MonitorPublicErrorPayload, MonitorRunSummaryPayload
@@ -660,6 +660,7 @@ class MonitorStore:
         payload_hash: str,
         payload_json: str,
         now: datetime,
+        allow_parallel_target: bool = False,
     ) -> CommandRecord:
         request_id = str(UUID(request_id))
         with self._transaction(write=True) as connection:
@@ -676,12 +677,13 @@ class MonitorStore:
                         "request_id already belongs to another monitor command"
                     )
                 return self._command(existing)
-            pending = connection.execute(
-                "SELECT request_id FROM monitor_commands WHERE target=? AND state='pending'",
-                (target,),
-            ).fetchone()
-            if pending is not None:
-                raise MonitorStateConflict("another monitor command is still pending")
+            if not allow_parallel_target:
+                pending = connection.execute(
+                    "SELECT request_id FROM monitor_commands WHERE target=? AND state='pending'",
+                    (target,),
+                ).fetchone()
+                if pending is not None:
+                    raise MonitorStateConflict("another monitor command is still pending")
             timestamp = _timestamp(now)
             connection.execute(
                 """INSERT INTO monitor_commands
@@ -757,28 +759,33 @@ class MonitorStore:
         target: str,
         payload_hash: str,
         payload_json: str,
-        response_status: int,
-        response_json: str,
+        accepted_response_json: Callable[[str], str],
+        not_found_response_json: str,
         conflict_response_json: str,
         now: datetime,
     ) -> CommandRecord:
         request_id = str(UUID(request_id))
+        run_id = str(UUID(run_id))
+        command = self.claim_command(
+            request_id=request_id,
+            method=method,
+            target=target,
+            payload_hash=payload_hash,
+            payload_json=payload_json,
+            now=now,
+            allow_parallel_target=True,
+        )
+        if command.state == "completed":
+            return command
         timestamp = _timestamp(now)
         with self._transaction(write=True) as connection:
             existing = connection.execute(
                 "SELECT * FROM monitor_commands WHERE request_id=?", (request_id,)
             ).fetchone()
-            if existing is not None:
-                if (
-                    existing["method"] != method
-                    or existing["target"] != target
-                    or existing["payload_hash"] != payload_hash
-                ):
-                    raise MonitorIdempotencyConflict(
-                        "request_id already belongs to another monitor command"
-                    )
+            if existing is None:
+                raise KeyError(request_id)
+            if existing["state"] == "completed":
                 return self._command(existing)
-            run_id = str(UUID(run_id))
             run = connection.execute(
                 """SELECT r.run_id,r.task_id,r.status,t.lifecycle
                    FROM monitor_runs r JOIN monitor_tasks t ON t.task_id=r.task_id
@@ -786,9 +793,29 @@ class MonitorStore:
                 (run_id,),
             ).fetchone()
             if run is None:
-                raise KeyError(run_id)
+                connection.execute(
+                    """UPDATE monitor_commands
+                       SET state='completed',response_status=404,response_json=?,updated_at=?
+                       WHERE request_id=? AND state='pending'""",
+                    (not_found_response_json, timestamp, request_id),
+                )
+                completed = connection.execute(
+                    "SELECT * FROM monitor_commands WHERE request_id=?",
+                    (request_id,),
+                ).fetchone()
+                return self._command(completed)
             if run["status"] != "failed" or run["lifecycle"] == "archived":
-                raise MonitorStateConflict("monitor run cannot be retried")
+                connection.execute(
+                    """UPDATE monitor_commands
+                       SET state='completed',response_status=409,response_json=?,updated_at=?
+                       WHERE request_id=? AND state='pending'""",
+                    (conflict_response_json, timestamp, request_id),
+                )
+                completed = connection.execute(
+                    "SELECT * FROM monitor_commands WHERE request_id=?",
+                    (request_id,),
+                ).fetchone()
+                return self._command(completed)
             active = connection.execute(
                 """SELECT request_id FROM monitor_retry_outbox
                    WHERE run_id=? AND state IN ('pending','dispatching')""",
@@ -796,42 +823,22 @@ class MonitorStore:
             ).fetchone()
             if active is not None:
                 connection.execute(
-                    """INSERT INTO monitor_commands
-                       (request_id,method,target,payload_hash,payload_json,state,
-                        response_status,response_json,created_at,updated_at)
-                       VALUES (?,?,?,?,?,'completed',409,?,?,?)""",
-                    (
-                        request_id,
-                        method,
-                        target,
-                        payload_hash,
-                        payload_json,
-                        conflict_response_json,
-                        timestamp,
-                        timestamp,
-                    ),
+                    """UPDATE monitor_commands
+                       SET state='completed',response_status=409,response_json=?,updated_at=?
+                       WHERE request_id=? AND state='pending'""",
+                    (conflict_response_json, timestamp, request_id),
                 )
                 denied = connection.execute(
                     "SELECT * FROM monitor_commands WHERE request_id=?",
                     (request_id,),
                 ).fetchone()
                 return self._command(denied)
+            response_json = accepted_response_json(run["task_id"])
             connection.execute(
-                """INSERT INTO monitor_commands
-                   (request_id,method,target,payload_hash,payload_json,state,response_status,response_json,
-                    created_at,updated_at)
-                   VALUES (?,?,?,?,?,'completed',?,?,?,?)""",
-                (
-                    request_id,
-                    method,
-                    target,
-                    payload_hash,
-                    payload_json,
-                    response_status,
-                    response_json,
-                    timestamp,
-                    timestamp,
-                ),
+                """UPDATE monitor_commands
+                   SET state='completed',response_status=202,response_json=?,updated_at=?
+                   WHERE request_id=? AND state='pending'""",
+                (response_json, timestamp, request_id),
             )
             try:
                 connection.execute(

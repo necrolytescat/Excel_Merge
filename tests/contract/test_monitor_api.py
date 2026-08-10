@@ -11,7 +11,9 @@ import time as wall_time
 from uuid import UUID, uuid4, uuid5
 
 from fastapi.testclient import TestClient
+import pytest
 
+import app.services.monitor_web_service as monitor_web_module
 from app.main import create_app
 from app.schemas.monitor import (
     MonitorPublicErrorPayload,
@@ -625,8 +627,8 @@ def test_retry_denial_is_persisted_and_replayed_after_winner_dispatches(tmp_path
             target=f"POST /api/monitor/runs/{run.run_id}/retry",
             payload_hash="different-payload",
             payload_json='{"different":true}',
-            response_status=202,
-            response_json="{}",
+            accepted_response_json=lambda task_id: "{}",
+            not_found_response_json="{}",
             conflict_response_json="{}",
             now=NOW,
         )
@@ -691,6 +693,186 @@ def test_retry_unique_index_fallback_persists_denial_without_loser_outbox(tmp_pa
             "SELECT COUNT(*) FROM monitor_retry_outbox WHERE request_id=?",
             (str(competitor_id),),
         ).fetchone()[0] == 0
+    service.close()
+
+
+@pytest.mark.parametrize(
+    "initial_state",
+    ["queued", "running", "succeeded", "partial", "archived"],
+)
+def test_retry_state_conflicts_are_persisted_across_state_changes(
+    tmp_path,
+    initial_state,
+):
+    service = build_service(tmp_path)
+    claim = None
+    if initial_state == "archived":
+        task_id, run = fail_and_end_task(service)
+        service.tasks.archive(task_id)
+    else:
+        task, _ = service.create_task(
+            MonitorTaskCreateRequestPayload.model_validate(create_payload())
+        )
+        task_id = str(task.task_id)
+        service.scheduled_tasks.pause(task_id)
+        run = service.store.list_runs(task_id)[-1]
+        if initial_state in {"running", "succeeded", "partial"}:
+            claim = service.store.claim_run(
+                run.run_id,
+                now=NOW,
+                lease_for=timedelta(minutes=5),
+                trigger="manual_retry",
+            )
+        if initial_state in {"succeeded", "partial"}:
+            service.store.finish_run(
+                run.run_id,
+                claim.lease_token,
+                now=NOW + timedelta(seconds=1),
+                status=initial_state,
+                errors=[],
+                start_revision=100,
+                end_revision=101,
+                summary={
+                    "workbook_count": 0,
+                    "changed_workbook_count": 0,
+                    "change_count": 0,
+                    "error_count": 0,
+                },
+                report_ref="test-report",
+                report_sha256="0" * 64,
+                report_expires_at=NOW + timedelta(days=30),
+            )
+
+    request_id = uuid4()
+    try:
+        service.accept_retry(UUID(run.run_id), request_id)
+        raise AssertionError(f"{initial_state} run must reject retry")
+    except MonitorWebError as error:
+        first = (error.code, error.message, error.status_code)
+    assert first == (
+        "MONITOR_STATE_CONFLICT",
+        "当前运行状态不允许人工重试",
+        409,
+    )
+    with service.store._connect() as connection:
+        command = connection.execute(
+            "SELECT state,response_status FROM monitor_commands WHERE request_id=?",
+            (str(request_id),),
+        ).fetchone()
+        assert tuple(command) == ("completed", 409)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM monitor_retry_outbox WHERE request_id=?",
+            (str(request_id),),
+        ).fetchone()[0] == 0
+
+    if initial_state == "queued":
+        claim = service.store.claim_run(
+            run.run_id,
+            now=NOW,
+            lease_for=timedelta(minutes=5),
+            trigger="manual_retry",
+        )
+    if initial_state in {"queued", "running"}:
+        service.store.finish_run(
+            run.run_id,
+            claim.lease_token,
+            now=NOW + timedelta(seconds=1),
+            status="failed",
+            errors=[
+                MonitorPublicErrorPayload(
+                    code="MONITOR_PARSE_FAILED",
+                    stage="csv_parse",
+                    message="工作簿解析失败",
+                    retryable=False,
+                )
+            ],
+        )
+        assert service.store.get_run(run.run_id).status == "failed"
+
+    try:
+        service.accept_retry(UUID(run.run_id), request_id)
+        raise AssertionError("completed state conflict must replay")
+    except MonitorWebError as error:
+        replay = (error.code, error.message, error.status_code)
+    assert replay == first
+    with service.store._connect() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM monitor_retry_outbox WHERE request_id=?",
+            (str(request_id),),
+        ).fetchone()[0] == 0
+    service.close()
+
+
+def test_retry_missing_run_404_is_persisted_and_replayed_without_outbox(tmp_path):
+    service = build_service(tmp_path)
+    run_id = uuid4()
+    request_id = uuid4()
+    for _ in range(2):
+        try:
+            service.accept_retry(run_id, request_id)
+            raise AssertionError("missing run must return 404")
+        except MonitorWebError as error:
+            assert (error.code, error.message, error.status_code) == (
+                "MONITOR_RUN_NOT_FOUND",
+                "监控运行不存在",
+                404,
+            )
+    with service.store._connect() as connection:
+        command = connection.execute(
+            "SELECT state,response_status FROM monitor_commands WHERE request_id=?",
+            (str(request_id),),
+        ).fetchone()
+        assert tuple(command) == ("completed", 404)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM monitor_retry_outbox WHERE request_id=?",
+            (str(request_id),),
+        ).fetchone()[0] == 0
+    service.close()
+
+
+def test_retry_internal_failure_keeps_pending_command_for_startup_recovery(
+    tmp_path,
+    monkeypatch,
+):
+    service = build_service(tmp_path)
+    _, run = fail_and_end_task(service)
+    request_id = uuid4()
+    original_payload = monitor_web_module.MonitorRetryAcceptedPayload
+
+    def fail_payload(**_):
+        raise RuntimeError("transient response construction failure")
+
+    monkeypatch.setattr(
+        monitor_web_module,
+        "MonitorRetryAcceptedPayload",
+        fail_payload,
+    )
+    with pytest.raises(RuntimeError, match="transient response"):
+        service.accept_retry(UUID(run.run_id), request_id)
+    pending = service.store.list_pending_commands()
+    assert [command.request_id for command in pending] == [str(request_id)]
+    with service.store._connect() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM monitor_retry_outbox WHERE request_id=?",
+            (str(request_id),),
+        ).fetchone()[0] == 0
+
+    monkeypatch.setattr(
+        monitor_web_module,
+        "MonitorRetryAcceptedPayload",
+        original_payload,
+    )
+    assert service.recover_pending_commands() == 1
+    with service.store._connect() as connection:
+        command = connection.execute(
+            "SELECT state,response_status FROM monitor_commands WHERE request_id=?",
+            (str(request_id),),
+        ).fetchone()
+        assert tuple(command) == ("completed", 202)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM monitor_retry_outbox WHERE request_id=?",
+            (str(request_id),),
+        ).fetchone()[0] == 1
     service.close()
 
 

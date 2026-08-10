@@ -16,6 +16,7 @@ from app.schemas.monitor import (
     MonitorEndpointOptionPayload,
     MonitorEndpointOptionsPayload,
     MonitorRunListPayload,
+    MonitorRunRetryRequestPayload,
     MonitorRetryAcceptedPayload,
     MonitorTaskCreateRequestPayload,
     MonitorTaskListItemPayload,
@@ -574,16 +575,26 @@ class MonitorWebService:
     def accept_retry(
         self, run_id: UUID, request_id: UUID
     ) -> tuple[MonitorRetryAcceptedPayload, int]:
-        run = self.store.get_run(str(run_id))
-        if run is None:
-            raise MonitorWebError("MONITOR_RUN_NOT_FOUND", "监控运行不存在", 404)
-        accepted = MonitorRetryAcceptedPayload(
-            request_id=request_id,
-            task_id=run.task_id,
-            run_id=run_id,
-        )
-        response_json = json.dumps(
-            accepted.model_dump(mode="json"),
+        def accepted_response_json(task_id: str) -> str:
+            accepted = MonitorRetryAcceptedPayload(
+                request_id=request_id,
+                task_id=UUID(task_id),
+                run_id=run_id,
+            )
+            return json.dumps(
+                accepted.model_dump(mode="json"),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+
+        not_found_response_json = json.dumps(
+            {
+                "error": {
+                    "code": "MONITOR_RUN_NOT_FOUND",
+                    "message": "监控运行不存在",
+                }
+            },
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -614,8 +625,8 @@ class MonitorWebService:
                 target=target,
                 payload_hash=hashlib.sha256(b"{}").hexdigest(),
                 payload_json=payload_json,
-                response_status=202,
-                response_json=response_json,
+                accepted_response_json=accepted_response_json,
+                not_found_response_json=not_found_response_json,
                 conflict_response_json=conflict_response_json,
                 now=self._now(),
             )
@@ -624,12 +635,6 @@ class MonitorWebService:
                 "MONITOR_IDEMPOTENCY_CONFLICT",
                 "request_id 已用于其他版本监控请求",
                 409,
-            ) from error
-        except KeyError as error:
-            raise MonitorWebError("MONITOR_RUN_NOT_FOUND", "监控运行不存在", 404) from error
-        except MonitorStateConflict as error:
-            raise MonitorWebError(
-                "MONITOR_STATE_CONFLICT", "当前运行状态不允许人工重试", 409
             ) from error
         if int(command.response_status) >= 400:
             envelope = json.loads(command.response_json)
@@ -663,6 +668,17 @@ class MonitorWebService:
                         task_id,
                         MonitorTaskPatchRequestPayload.model_validate(data),
                     )
+                    continue
+                retry_prefix = "POST /api/monitor/runs/"
+                if (
+                    command.target.startswith(retry_prefix)
+                    and command.target.endswith("/retry")
+                ):
+                    run_id_text = command.target[
+                        len(retry_prefix) : -len("/retry")
+                    ]
+                    request = MonitorRunRetryRequestPayload.model_validate(data)
+                    self.accept_retry(UUID(run_id_text), request.request_id)
                     continue
                 prefix = "POST /api/monitor/tasks/"
                 if command.target.startswith(prefix):
