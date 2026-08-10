@@ -1,6 +1,6 @@
 # 项目文档导航
 
-> 更新日期：2026-08-09
+> 更新日期：2026-08-10
 
 ## 当前维护入口
 
@@ -18,11 +18,20 @@
 
 若文档冲突，以自动化测试、当前实现、有效契约和 ADR 为准。
 
+维护左侧导航“版本监控”模块时，先读取：
+
+1. `M3-VERSION-MONITORING-PRD.md`：已确认的产品语义、时间边界、报告和运行保证；
+2. `M3-VERSION-MONITORING-IMPLEMENTATION.md`：架构、契约、分阶段实施和验收门禁；
+3. `VERSION-COMPARISON-HANDBOOK.md`：复用的 Table/TableCsv 配对与业务 Diff 边界；
+4. `HISTORY-TASKS-HANDBOOK.md`：独立持久化、日志和 SVN 缓存生命周期边界。
+
 ## 当前有效文档
 
 | 文档 | 用途 |
 |---|---|
 | `VERSION-COMPARISON-HANDBOOK.md` | 版本对比模块长期工作手册和接手入口 |
+| `M3-VERSION-MONITORING-PRD.md` | 版本监控已确认需求和验收基线 |
+| `M3-VERSION-MONITORING-IMPLEMENTATION.md` | 版本监控分阶段实施计划 |
 | `ROADMAP.md` | 当前产品能力与后续方向 |
 | `ENGINEERING-BASELINE.md` | 只读、方向、Revision、契约和测试基线 |
 | `SVN-ENDPOINT-MODEL.md` | 端点注册和物理路径模型 |
