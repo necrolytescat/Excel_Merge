@@ -98,6 +98,7 @@ def make_single_change_report() -> dict:
             "field_modified": 1,
             "row_added": 0,
             "row_deleted": 0,
+            "field_definition_modified": 0,
         }
     )
     report["coverage"]["failed_workbook_count"] = 0
@@ -368,6 +369,56 @@ def test_monitor_report_change_shapes_and_summary_are_strict():
     with pytest.raises(ValidationError):
         MonitorReportPayload.model_validate(report)
 
+
+@pytest.mark.parametrize(
+    "change_type",
+    ("field_added", "field_removed", "field_definition_modified"),
+)
+def test_structural_changes_require_null_row_key(change_type):
+    report = load_json(CONTRACTS / "m3.monitor-report.v1.example.json")
+    change = next(
+        item
+        for item in report["changes"]
+        if item["change_type"] == "field_definition_modified"
+    )
+    change["change_type"] = change_type
+    if change_type == "field_added":
+        change["source"] = None
+    elif change_type == "field_removed":
+        change["target"] = None
+    if change_type != "field_definition_modified":
+        report["summary"]["by_change_type"]["field_definition_modified"] = 0
+        report["summary"]["by_change_type"][change_type] = 1
+    MonitorReportPayload.model_validate(report)
+
+    change["row_key"] = "__schema__"
+    with pytest.raises(ValidationError):
+        MonitorReportPayload.model_validate(report)
+
+    change.pop("row_key")
+    with pytest.raises(ValidationError):
+        MonitorReportPayload.model_validate(report)
+
+
+@pytest.mark.parametrize("change_type", ("field_modified", "row_added", "row_deleted"))
+def test_row_and_value_changes_require_non_empty_row_key(change_type):
+    report = load_json(CONTRACTS / "m3.monitor-report.v1.example.json")
+    change = next(item for item in report["changes"] if item["change_type"] == change_type)
+    change["row_key"] = None
+
+    with pytest.raises(ValidationError):
+        MonitorReportPayload.model_validate(report)
+
+
+def test_structural_changes_do_not_increase_changed_row_count():
+    report = MonitorReportPayload.model_validate(
+        load_json(CONTRACTS / "m3.monitor-report.v1.example.json")
+    )
+
+    assert report.summary.changed_row_count == 3
+    assert len(report.changes) == 4
+    assert sum(change.row_key is None for change in report.changes) == 1
+
     report = load_json(CONTRACTS / "m3.monitor-report.v1.example.json")
     report["summary"]["by_change_type"]["field_modified"] = 2
     with pytest.raises(ValidationError):
@@ -535,6 +586,7 @@ def test_deterministic_mock_svn_fixture_covers_phase_zero_cases():
     ]
     assert {change["change_type"] for change in expected["net_changes"]} == {
         "field_modified",
+        "field_definition_modified",
         "row_added",
         "row_deleted",
     }

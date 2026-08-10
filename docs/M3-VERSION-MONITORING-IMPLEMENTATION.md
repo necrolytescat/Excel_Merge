@@ -84,6 +84,8 @@ MonitorDiffService
 - `field_removed`；
 - `field_definition_modified`。
 
+三类字段结构变化使用 `row_key=null`，不计入 `changed_row_count`；不得使用哨兵值或按业务行展开。`field_modified / row_added / row_deleted` 仍必须携带非空业务主键。
+
 每项字段变化保存规范身份、原始展示值、归一化比较依据和最终归因；HTML 只消费这一份契约，不再派生第二套业务 JSON。
 
 ## 4. 持久化模型

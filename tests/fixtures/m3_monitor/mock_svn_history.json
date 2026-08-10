@@ -28,6 +28,18 @@
   },
   "start_revision": 100,
   "end_revision": 110,
+  "start_field_definitions": {
+    "Id": {
+      "display_name": "ID",
+      "declared_type": "uint32",
+      "scope": "All"
+    },
+    "Hp": {
+      "display_name": "生命值",
+      "declared_type": "uint32",
+      "scope": "Client"
+    }
+  },
   "start_rows": {
     "100": {
       "Id": "100",
@@ -84,6 +96,12 @@
           "row_key": "100",
           "field_name": "Hp",
           "value": "110"
+        },
+        {
+          "event": "field_definition_modified",
+          "field_name": "Hp",
+          "declared_type": "uint64",
+          "scope": "Client"
         }
       ],
       "ignored_events": []
@@ -182,6 +200,18 @@
       "Hp": "100"
     }
   },
+  "end_field_definitions": {
+    "Id": {
+      "display_name": "ID",
+      "declared_type": "uint32",
+      "scope": "All"
+    },
+    "Hp": {
+      "display_name": "生命值",
+      "declared_type": "uint64",
+      "scope": "Client"
+    }
+  },
   "expected": {
     "included_revisions": [
       101,
@@ -201,6 +231,13 @@
         "field_name": "Hp",
         "source": "100",
         "target": "110",
+        "final_revision": 103,
+        "final_author": "bob"
+      },
+      {
+        "change_type": "field_definition_modified",
+        "row_key": null,
+        "field_name": "Hp",
         "final_revision": 103,
         "final_author": "bob"
       },

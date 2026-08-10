@@ -524,7 +524,7 @@ class MonitorChangePayload(StrictMonitorPayload):
     workbook: str = Field(..., min_length=1, max_length=256, strict=True)
     sheet_name: str = Field(..., min_length=1, max_length=256, strict=True)
     primary_key_field: str = Field(..., min_length=1, max_length=256, strict=True)
-    row_key: str = Field(..., min_length=1, max_length=1024, strict=True)
+    row_key: str | None = Field(..., min_length=1, max_length=1024, strict=True)
     field_name: str | None = Field(default=None, min_length=1, max_length=256, strict=True)
     display_name: str | None = Field(default=None, max_length=256, strict=True)
     source: MonitorChangeSidePayload | None = None
@@ -533,6 +533,11 @@ class MonitorChangePayload(StrictMonitorPayload):
 
     @model_validator(mode="after")
     def validate_change_shape(self) -> "MonitorChangePayload":
+        structural_change = self.change_type in {
+            MonitorChangeType.FIELD_ADDED,
+            MonitorChangeType.FIELD_REMOVED,
+            MonitorChangeType.FIELD_DEFINITION_MODIFIED,
+        }
         field_change = self.change_type in {
             MonitorChangeType.FIELD_MODIFIED,
             MonitorChangeType.FIELD_ADDED,
@@ -541,6 +546,8 @@ class MonitorChangePayload(StrictMonitorPayload):
         }
         if field_change != (self.field_name is not None):
             raise ValueError("field identity is required only for field changes")
+        if structural_change != (self.row_key is None):
+            raise ValueError("only structural field changes require a null row_key")
 
         source_kind = self._side_kind(self.source)
         target_kind = self._side_kind(self.target)
@@ -682,6 +689,7 @@ class MonitorReportPayload(StrictMonitorPayload):
         changed_rows = {
             (change.workbook, change.sheet_name, change.row_key)
             for change in self.changes
+            if change.row_key is not None
         }
         changed_fields = {
             (change.workbook, change.sheet_name, change.row_key, change.field_name)

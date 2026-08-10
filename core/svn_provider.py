@@ -10,6 +10,7 @@ Provider 层不依赖 FastAPI，后续 CLI、Web 和 Diff 编排均可复用。
 from __future__ import annotations
 
 import copy
+from datetime import datetime
 import hashlib
 import os
 import urllib.parse
@@ -26,6 +27,20 @@ from .models import (
     Revision,
     SvnInfo,
     TreeEntry,
+)
+from .svn_history import (
+    BranchChangedPath,
+    BranchCommit,
+    BranchCopyBoundary,
+    BranchIdentity,
+    append_url_path,
+    branch_relative_path,
+    canonicalize_svn_url,
+    normalize_repository_path,
+    parse_svn_datetime,
+    repository_path_from_urls,
+    require_utc_instant,
+    svn_date_revision,
 )
 
 
@@ -338,6 +353,215 @@ class CLISVNProvider:
             return ET.fromstring(out)
         except ET.ParseError as exc:
             raise SVNProviderError("SVN_DECODE_ERROR", "SVN XML 响应解析失败", detail=str(exc)) from exc
+
+    @staticmethod
+    def _positive_revision(value: str | int, *, code: str) -> int:
+        token = str(value)
+        if not token.isdigit() or int(token) <= 0:
+            raise SVNProviderError(code, "SVN 未返回有效 Revision")
+        return int(token)
+
+    @staticmethod
+    def _history_commits(root: ET.Element, identity: BranchIdentity) -> list[BranchCommit]:
+        commits: list[BranchCommit] = []
+        for logentry in root.iter("logentry"):
+            revision = CLISVNProvider._positive_revision(
+                logentry.get("revision", ""),
+                code="SVN_HISTORY_INVALID",
+            )
+            try:
+                changed_at = parse_svn_datetime(logentry.findtext("date", "") or "")
+            except ValueError as exc:
+                raise SVNProviderError(
+                    "SVN_HISTORY_INVALID",
+                    "SVN 日志提交时间无效",
+                ) from exc
+            changed_paths: list[BranchChangedPath] = []
+            paths_node = logentry.find("paths")
+            if paths_node is not None:
+                for node in paths_node.findall("path"):
+                    repository_path = node.text or ""
+                    relative = branch_relative_path(
+                        repository_path,
+                        identity.repository_relative_path,
+                    )
+                    if relative is None:
+                        continue
+                    copied_from_revision = node.get("copyfrom-rev")
+                    changed_paths.append(
+                        BranchChangedPath(
+                            repository_path=normalize_repository_path(repository_path),
+                            branch_relative_path=relative,
+                            action=node.get("action", ""),
+                            copied_from_path=(
+                                normalize_repository_path(node.get("copyfrom-path", ""))
+                                if node.get("copyfrom-path")
+                                else None
+                            ),
+                            copied_from_revision=(
+                                int(copied_from_revision)
+                                if copied_from_revision and copied_from_revision.isdigit()
+                                else None
+                            ),
+                        )
+                    )
+            if not changed_paths:
+                continue
+            author_node = logentry.find("author")
+            author = author_node.text if author_node is not None else None
+            commits.append(
+                BranchCommit(
+                    revision=revision,
+                    author=author or None,
+                    changed_at=changed_at,
+                    message=(logentry.findtext("msg", "") or "").strip(),
+                    changed_paths=tuple(changed_paths),
+                )
+            )
+        return sorted(commits, key=lambda commit: commit.revision)
+
+    def resolve_branch_identity(self, endpoint: EndpointSpec) -> BranchIdentity:
+        endpoint = self._validate(endpoint)
+        args = ["info", "--xml"]
+        if endpoint.revision != "HEAD":
+            args.extend(["-r", str(endpoint.revision)])
+        args.append(endpoint.url)
+        root = self._run_xml(args, fallback="SVN_BRANCH_NOT_FOUND")
+        entry = root.find(".//entry")
+        if entry is None:
+            raise SVNProviderError("SVN_BRANCH_NOT_FOUND", "SVN 分支不存在")
+        canonical_url = canonicalize_svn_url(entry.findtext("url", "") or endpoint.url)
+        repository_root = canonicalize_svn_url(entry.findtext("repository/root", "") or "")
+        repository_uuid = entry.findtext("repository/uuid", "") or ""
+        if not repository_uuid:
+            raise SVNProviderError("SVN_HISTORY_INVALID", "SVN 未返回仓库 UUID")
+        try:
+            repository_path = repository_path_from_urls(repository_root, canonical_url)
+        except ValueError as exc:
+            raise SVNProviderError("SVN_HISTORY_INVALID", "SVN 分支身份无效") from exc
+        return BranchIdentity(
+            canonical_url=canonical_url,
+            repository_root=repository_root,
+            repository_uuid=repository_uuid,
+            repository_relative_path=repository_path,
+            bound_revision=self._positive_revision(
+                entry.get("revision", ""),
+                code="SVN_HISTORY_INVALID",
+            ),
+        )
+
+    def resolve_revision_at(self, identity: BranchIdentity, instant: datetime) -> int:
+        instant = require_utc_instant(instant)
+        root = self._run_xml(
+            [
+                "log",
+                "-v",
+                "--xml",
+                "--stop-on-copy",
+                "-l",
+                "1",
+                "-r",
+                f"{svn_date_revision(instant)}:1",
+                identity.canonical_url,
+            ],
+            fallback="SVN_BRANCH_NOT_FOUND_AT_BOUNDARY",
+        )
+        commits = [
+            commit
+            for commit in self._history_commits(root, identity)
+            if commit.changed_at <= instant
+        ]
+        if not commits:
+            raise SVNProviderError(
+                "SVN_BRANCH_NOT_FOUND_AT_BOUNDARY",
+                "SVN 分支在时间边界处不存在",
+            )
+        return max(commits, key=lambda commit: commit.revision).revision
+
+    def list_branch_commits(
+        self,
+        identity: BranchIdentity,
+        start: datetime,
+        end: datetime,
+    ) -> list[BranchCommit]:
+        start = require_utc_instant(start)
+        end = require_utc_instant(end)
+        if start >= end:
+            raise ValueError("history interval must have positive duration")
+        start_revision = self.resolve_revision_at(identity, start)
+        end_revision = self.resolve_revision_at(identity, end)
+        root = self._run_xml(
+            [
+                "log",
+                "-v",
+                "--xml",
+                "--stop-on-copy",
+                "-r",
+                f"{start_revision}:{end_revision}",
+                identity.canonical_url,
+            ]
+        )
+        return [
+            commit
+            for commit in self._history_commits(root, identity)
+            if start < commit.changed_at <= end
+        ]
+
+    def read_path_bytes_at_revision(
+        self,
+        identity: BranchIdentity,
+        path: str,
+        revision: int,
+    ) -> bytes:
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision <= 0:
+            raise SVNProviderError("SVN_INVALID_REVISION", "revision 必须是正整数")
+        target = append_url_path(identity.canonical_url, path)
+        raw = self.client._cat_cached(target, revision, revision)
+        if raw is None:
+            raise SVNProviderError("SVN_PATH_NOT_FOUND", "固定 Revision 下路径不存在")
+        return raw
+
+    def list_paths_at_revision(
+        self,
+        identity: BranchIdentity,
+        revision: int,
+    ) -> list[TreeEntry]:
+        return self.list_tree(EndpointSpec(url=identity.canonical_url, revision=revision))
+
+    def resolve_copy_boundary(self, identity: BranchIdentity) -> BranchCopyBoundary:
+        root = self._run_xml(
+            [
+                "log",
+                "-v",
+                "--xml",
+                "--stop-on-copy",
+                "-r",
+                f"{identity.bound_revision}:1",
+                identity.canonical_url,
+            ],
+            fallback="SVN_BRANCH_NOT_FOUND",
+        )
+        commits = self._history_commits(root, identity)
+        if not commits:
+            raise SVNProviderError("SVN_BRANCH_NOT_FOUND", "SVN 分支没有可读取历史")
+        boundary_commit = min(commits, key=lambda commit: commit.revision)
+        branch_creation = next(
+            (
+                path
+                for path in boundary_commit.changed_paths
+                if path.branch_relative_path == "" and path.action == "A"
+            ),
+            None,
+        )
+        return BranchCopyBoundary(
+            revision=boundary_commit.revision,
+            copied_from_path=(
+                branch_creation.copied_from_path if branch_creation is not None else None
+            ),
+            copied_from_revision=(
+                branch_creation.copied_from_revision if branch_creation is not None else None
+            ),
+        )
 
     def info(self, endpoint: EndpointSpec) -> SvnInfo:
         endpoint = self._validate(endpoint)
