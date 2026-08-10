@@ -16,7 +16,7 @@ from app.services.monitor_schedule import BoundarySpec, BoundaryType, SHANGHAI, 
 
 
 DEFAULT_DATABASE_PATH = Path("var/m3-monitor/monitor.sqlite3")
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class MonitorLeaseLost(RuntimeError):
@@ -119,6 +119,24 @@ class LeaseClaim:
     trigger: Literal["scheduled", "automatic_retry", "manual_retry"]
 
 
+@dataclass(frozen=True)
+class PublicationRecord:
+    run_id: str
+    task_id: str
+    state: Literal["prepared", "activated"]
+    status: Literal["succeeded", "partial"]
+    start_revision: int
+    end_revision: int
+    summary: dict[str, Any]
+    errors: list[MonitorPublicErrorPayload]
+    report_ref: str
+    json_sha256: str
+    html_sha256: str
+    report_expires_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
 MIGRATION_1 = (
     """CREATE TABLE monitor_tasks (
         task_id TEXT PRIMARY KEY, name TEXT NOT NULL, lifecycle TEXT NOT NULL,
@@ -168,6 +186,22 @@ MIGRATION_1 = (
 
 MIGRATION_2 = (
     "ALTER TABLE monitor_tasks ADD COLUMN ended_reason TEXT",
+)
+
+MIGRATION_3 = (
+    """CREATE TABLE monitor_run_publications (
+        run_id TEXT PRIMARY KEY, task_id TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('prepared','activated')),
+        status TEXT NOT NULL CHECK (status IN ('succeeded','partial')),
+        start_revision INTEGER NOT NULL, end_revision INTEGER NOT NULL,
+        summary_json TEXT NOT NULL, errors_json TEXT NOT NULL,
+        report_ref TEXT NOT NULL, json_sha256 TEXT NOT NULL, html_sha256 TEXT NOT NULL,
+        report_expires_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        FOREIGN KEY(run_id) REFERENCES monitor_runs(run_id) ON DELETE CASCADE,
+        FOREIGN KEY(task_id) REFERENCES monitor_tasks(task_id) ON DELETE CASCADE
+    )""",
+    "CREATE INDEX monitor_publications_task_state_idx "
+    "ON monitor_run_publications(task_id, state)",
 )
 
 
@@ -225,6 +259,13 @@ class MonitorStore:
                     "INSERT INTO monitor_schema_migrations(version, applied_at) VALUES (?, ?)",
                     (2, _timestamp(datetime.now(timezone.utc))),
                 )
+            if 3 not in versions:
+                for statement in MIGRATION_3:
+                    connection.execute(statement)
+                connection.execute(
+                    "INSERT INTO monitor_schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (3, _timestamp(datetime.now(timezone.utc))),
+                )
             connection.commit()
         except Exception:
             connection.rollback()
@@ -273,6 +314,25 @@ class MonitorStore:
             report_expires_at=_datetime(row["report_expires_at"]), errors=_errors(row["errors_json"]),
             created_at=_datetime(row["created_at"]), started_at=_datetime(row["started_at"]),
             finished_at=_datetime(row["finished_at"]), updated_at=_datetime(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _publication(row: sqlite3.Row) -> PublicationRecord:
+        return PublicationRecord(
+            run_id=row["run_id"],
+            task_id=row["task_id"],
+            state=row["state"],
+            status=row["status"],
+            start_revision=row["start_revision"],
+            end_revision=row["end_revision"],
+            summary=json.loads(row["summary_json"]),
+            errors=_errors(row["errors_json"]),
+            report_ref=row["report_ref"],
+            json_sha256=row["json_sha256"],
+            html_sha256=row["html_sha256"],
+            report_expires_at=_datetime(row["report_expires_at"]),
+            created_at=_datetime(row["created_at"]),
+            updated_at=_datetime(row["updated_at"]),
         )
 
     def create_task(self, values: dict[str, Any], start: BoundarySpec) -> TaskRecord:
@@ -514,6 +574,103 @@ class MonitorStore:
             row = connection.execute("SELECT * FROM monitor_runs WHERE run_id=?", (run_id,)).fetchone()
         return self._run(row) if row is not None else None
 
+    def get_publication(self, run_id: str) -> PublicationRecord | None:
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM monitor_run_publications WHERE run_id=?", (run_id,)
+            ).fetchone()
+        return self._publication(row) if row is not None else None
+
+    def prepare_publication(
+        self,
+        run_id: str,
+        lease_token: str,
+        *,
+        now: datetime,
+        status: Literal["succeeded", "partial"],
+        start_revision: int,
+        end_revision: int,
+        summary: dict[str, Any],
+        errors: list[MonitorPublicErrorPayload],
+        report_ref: str,
+        json_sha256: str,
+        html_sha256: str,
+        report_expires_at: datetime,
+    ) -> PublicationRecord:
+        current = require_utc(now)
+        summary_payload = MonitorRunSummaryPayload.model_validate(summary)
+        if status == "succeeded" and errors:
+            raise ValueError("succeeded publication cannot contain public errors")
+        if status == "partial" and not errors:
+            raise ValueError("partial publication requires public errors")
+        if summary_payload.error_count != len(errors):
+            raise ValueError("publication summary error_count must match errors")
+        values = {
+            "status": status,
+            "start_revision": start_revision,
+            "end_revision": end_revision,
+            "summary_json": json.dumps(
+                summary, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            ),
+            "errors_json": _errors_json(errors),
+            "report_ref": report_ref,
+            "json_sha256": json_sha256,
+            "html_sha256": html_sha256,
+            "report_expires_at": _timestamp(report_expires_at),
+        }
+        with self._transaction(write=True) as connection:
+            run = connection.execute(
+                "SELECT * FROM monitor_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            expires = _datetime(run["lease_expires_at"]) if run is not None else None
+            if (
+                run is None
+                or run["status"] != "running"
+                or run["lease_token"] != lease_token
+                or expires is None
+                or expires <= current
+            ):
+                raise MonitorLeaseLost("monitor run lease was lost")
+            existing = connection.execute(
+                "SELECT * FROM monitor_run_publications WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    """INSERT INTO monitor_run_publications (
+                       run_id,task_id,state,status,start_revision,end_revision,
+                       summary_json,errors_json,report_ref,json_sha256,html_sha256,
+                       report_expires_at,created_at,updated_at
+                       ) VALUES (?,?, 'prepared', ?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        run_id,
+                        run["task_id"],
+                        values["status"],
+                        values["start_revision"],
+                        values["end_revision"],
+                        values["summary_json"],
+                        values["errors_json"],
+                        values["report_ref"],
+                        values["json_sha256"],
+                        values["html_sha256"],
+                        values["report_expires_at"],
+                        _timestamp(current),
+                        _timestamp(current),
+                    ),
+                )
+            else:
+                comparable = {
+                    key: existing[key]
+                    for key in values
+                }
+                if comparable != values:
+                    raise MonitorStateConflict(
+                        "prepared report publication does not match the existing manifest"
+                    )
+            prepared = connection.execute(
+                "SELECT * FROM monitor_run_publications WHERE run_id=?", (run_id,)
+            ).fetchone()
+        return self._publication(prepared)
+
     def list_due_runs(self, task_id: str, now: datetime) -> list[RunRecord]:
         with self._transaction() as connection:
             rows = connection.execute(
@@ -628,11 +785,19 @@ class MonitorStore:
     def renew_lease(
         self, run_id: str, lease_token: str, *, now: datetime, lease_for: timedelta
     ) -> bool:
+        current = require_utc(now)
         with self._transaction(write=True) as connection:
             cursor = connection.execute(
                 """UPDATE monitor_runs SET lease_expires_at=?,updated_at=?
-                   WHERE run_id=? AND status='running' AND lease_token=?""",
-                (_timestamp(now + lease_for), _timestamp(now), run_id, lease_token),
+                   WHERE run_id=? AND status='running' AND lease_token=?
+                   AND lease_expires_at>?""",
+                (
+                    _timestamp(current + lease_for),
+                    _timestamp(current),
+                    run_id,
+                    lease_token,
+                    _timestamp(current),
+                ),
             )
         return cursor.rowcount == 1
 
@@ -670,7 +835,15 @@ class MonitorStore:
                 raise ValueError("published summary error_count must match public errors")
         with self._transaction(write=True) as connection:
             row = connection.execute("SELECT * FROM monitor_runs WHERE run_id=?", (run_id,)).fetchone()
-            if row is None or row["status"] != "running" or row["lease_token"] != lease_token:
+            expires = _datetime(row["lease_expires_at"]) if row is not None else None
+            current = require_utc(now)
+            if (
+                row is None
+                or row["status"] != "running"
+                or row["lease_token"] != lease_token
+                or expires is None
+                or expires <= current
+            ):
                 raise MonitorLeaseLost("monitor run lease was lost")
             connection.execute(
                 """UPDATE monitor_run_attempts SET status=?,finished_at=?,errors_json=?
@@ -690,6 +863,77 @@ class MonitorStore:
                 ),
             )
             finished = connection.execute("SELECT * FROM monitor_runs WHERE run_id=?", (run_id,)).fetchone()
+        return self._run(finished)
+
+    def finalize_publication(
+        self,
+        run_id: str,
+        lease_token: str,
+        *,
+        now: datetime,
+    ) -> RunRecord:
+        """Atomically activate a prepared manifest and its public Run metadata."""
+        current = require_utc(now)
+        with self._transaction(write=True) as connection:
+            row = connection.execute(
+                "SELECT * FROM monitor_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            expires = _datetime(row["lease_expires_at"]) if row is not None else None
+            if (
+                row is None
+                or row["status"] != "running"
+                or row["lease_token"] != lease_token
+                or expires is None
+                or expires <= current
+            ):
+                raise MonitorLeaseLost("monitor run lease was lost")
+            manifest_row = connection.execute(
+                "SELECT * FROM monitor_run_publications WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if manifest_row is None or manifest_row["state"] != "prepared":
+                raise MonitorStateConflict("prepared report publication is unavailable")
+            manifest = self._publication(manifest_row)
+            connection.execute(
+                """UPDATE monitor_run_attempts SET status=?,finished_at=?,errors_json=?
+                   WHERE run_id=? AND attempt=? AND status='running'""",
+                (
+                    manifest.status,
+                    _timestamp(current),
+                    _errors_json(manifest.errors),
+                    run_id,
+                    row["attempt_count"],
+                ),
+            )
+            connection.execute(
+                """UPDATE monitor_runs SET status=?,lease_token=NULL,lease_expires_at=NULL,
+                   start_revision=?,end_revision=?,summary_json=?,report_ref=?,report_sha256=?,
+                   report_expires_at=?,errors_json=?,finished_at=?,updated_at=? WHERE run_id=?""",
+                (
+                    manifest.status,
+                    manifest.start_revision,
+                    manifest.end_revision,
+                    json.dumps(
+                        manifest.summary,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    manifest.report_ref,
+                    manifest.json_sha256,
+                    _timestamp(manifest.report_expires_at),
+                    _errors_json(manifest.errors),
+                    _timestamp(current),
+                    _timestamp(current),
+                    run_id,
+                ),
+            )
+            connection.execute(
+                """UPDATE monitor_run_publications SET state='activated',updated_at=?
+                   WHERE run_id=? AND state='prepared'""",
+                (_timestamp(current), run_id),
+            )
+            finished = connection.execute(
+                "SELECT * FROM monitor_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
         return self._run(finished)
 
     def heartbeat(self, task_id: str, now: datetime) -> None:

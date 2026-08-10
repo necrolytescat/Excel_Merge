@@ -19,7 +19,11 @@ from app.services.monitor_diff_service import (
     MonitorSnapshot,
     MonitorWorkbookSnapshot,
 )
-from app.services.monitor_report_service import CanonicalJsonReferencePublisher
+from app.services.monitor_report_service import (
+    CanonicalJsonReferencePublisher,
+    MonitorReportPublishError,
+)
+from app.services.monitor_report_artifacts import FileSystemMonitorReportPublisher
 from app.services.monitor_store import MonitorStore
 from app.services.monitor_task_service import CreateMonitorTask, MonitorTaskService
 from core.svn_history import BranchCommit, BranchCopyBoundary, BranchIdentity
@@ -167,6 +171,149 @@ def test_runner_executes_real_p1_diff_and_attribution_without_web(tmp_path):
     assert report.changes[0].attribution.author == "alice"
     assert report.interval.start_at == instant(9)
     assert report.interval.end_at == instant(10)
+
+
+def test_filesystem_runner_publishes_history_latest_and_activated_manifest(tmp_path):
+    clock = Clock(instant(10))
+    database = tmp_path / "persistent" / "monitor.sqlite3"
+    store = MonitorStore(database)
+    tasks = MonitorTaskService(store, clock=clock)
+    task = create_task(tasks)
+    publisher = FileSystemMonitorReportPublisher(database.parent / "reports")
+    runner = MonitorRunnerService(
+        store, tasks, p1_factory(tasks, publisher), clock=clock
+    )
+
+    result = runner.run_task(str(task.task_id), task.scheduler.generation)
+
+    assert result.exit_category == "ok"
+    run = store.list_runs(str(task.task_id))[0]
+    manifest = store.get_publication(run.run_id)
+    assert run.status == "succeeded"
+    assert manifest.state == "activated"
+    task_dir = database.parent / "reports" / str(task.task_id)
+    assert (task_dir / "history" / "20260810-180000.json").exists()
+    assert (task_dir / "history" / "20260810-180000.html").exists()
+    assert (task_dir / "latest.html").exists()
+
+
+def test_crash_after_latest_before_finalize_recovers_same_bytes_without_web(
+    tmp_path, monkeypatch
+):
+    clock = Clock(instant(10))
+    database = tmp_path / "crash" / "monitor.sqlite3"
+    store = MonitorStore(database)
+    tasks = MonitorTaskService(store, clock=clock)
+    task = create_task(tasks)
+    reports = database.parent / "reports"
+    publisher = FileSystemMonitorReportPublisher(reports)
+    runner = MonitorRunnerService(
+        store, tasks, p1_factory(tasks, publisher), clock=clock
+    )
+
+    def crash_finalize(*args, **kwargs):
+        raise OSError("simulated process exit after latest")
+
+    monkeypatch.setattr(store, "finalize_publication", crash_finalize)
+    first = runner.run_task(str(task.task_id), task.scheduler.generation)
+    run = store.list_runs(str(task.task_id))[0]
+    manifest = store.get_publication(run.run_id)
+    history_json = (
+        reports
+        / str(task.task_id)
+        / "history"
+        / "20260810-180000.json"
+    )
+    first_bytes = history_json.read_bytes()
+    assert first.exit_category == "temporary_failure"
+    assert run.status == "running"
+    assert manifest.state == "prepared"
+    assert (reports / str(task.task_id) / "latest.html").exists()
+
+    clock.value = instant(10, 6)
+    recovered_store = MonitorStore(database)
+    recovered_tasks = MonitorTaskService(recovered_store, clock=clock)
+    recovered_publisher = FileSystemMonitorReportPublisher(reports)
+    recovered_runner = MonitorRunnerService(
+        recovered_store,
+        recovered_tasks,
+        p1_factory(recovered_tasks, recovered_publisher),
+        clock=clock,
+    )
+    second = recovered_runner.run_task(
+        str(task.task_id), task.scheduler.generation
+    )
+    recovered = recovered_store.list_runs(str(task.task_id))[0]
+
+    assert second.exit_category == "ok"
+    assert recovered.status == "succeeded"
+    assert recovered.report_ref == manifest.report_ref
+    assert recovered.report_sha256 == manifest.json_sha256
+    assert history_json.read_bytes() == first_bytes
+    assert len(list(history_json.parent.glob("*.json"))) == 1
+    assert len(list(history_json.parent.glob("*.html"))) == 1
+
+
+def test_transient_latest_failure_is_retryable_and_reuses_prepared_report(
+    tmp_path, monkeypatch
+):
+    clock = Clock(instant(10))
+    database = tmp_path / "latest-retry" / "monitor.sqlite3"
+    store = MonitorStore(database)
+    tasks = MonitorTaskService(store, clock=clock)
+    task = create_task(tasks)
+    publisher = FileSystemMonitorReportPublisher(database.parent / "reports")
+    runner = MonitorRunnerService(
+        store, tasks, p1_factory(tasks, publisher), clock=clock
+    )
+    real_activate = publisher.activate_latest
+    monkeypatch.setattr(
+        publisher,
+        "activate_latest",
+        lambda draft, **kwargs: (_ for _ in ()).throw(
+            MonitorReportPublishError("simulated locked latest")
+        ),
+    )
+
+    first = runner.run_task(str(task.task_id), task.scheduler.generation)
+    failed = store.list_runs(str(task.task_id))[0]
+    manifest = store.get_publication(failed.run_id)
+    assert first.exit_category == "temporary_failure"
+    assert failed.status == "failed"
+    assert failed.errors[0].code == "MONITOR_REPORT_PUBLISH_FAILED"
+    assert failed.report_ref is None
+    assert manifest.state == "prepared"
+
+    monkeypatch.setattr(publisher, "activate_latest", real_activate)
+    clock.value = instant(10, 10)
+    second = runner.run_task(str(task.task_id), task.scheduler.generation)
+    recovered = store.list_runs(str(task.task_id))[0]
+    assert second.exit_category == "ok"
+    assert recovered.status == "succeeded"
+    assert recovered.report_ref == manifest.report_ref
+    assert recovered.attempt_count == 2
+
+
+def test_lost_lease_cannot_prepare_history_or_latest(tmp_path, monkeypatch):
+    clock = Clock(instant(10))
+    database = tmp_path / "lost" / "monitor.sqlite3"
+    store = MonitorStore(database)
+    tasks = MonitorTaskService(store, clock=clock)
+    task = create_task(tasks)
+    reports = database.parent / "reports"
+    publisher = FileSystemMonitorReportPublisher(reports)
+    runner = MonitorRunnerService(
+        store, tasks, p1_factory(tasks, publisher), clock=clock
+    )
+    monkeypatch.setattr(store, "renew_lease", lambda *args, **kwargs: False)
+
+    result = runner.run_task(str(task.task_id), task.scheduler.generation)
+
+    assert result.exit_category == "noop"
+    assert store.get_publication(
+        store.list_runs(str(task.task_id))[0].run_id
+    ) is None
+    assert not reports.exists()
 
 
 def test_late_runner_start_keeps_the_original_logical_cutoff(tmp_path):

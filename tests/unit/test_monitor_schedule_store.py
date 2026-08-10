@@ -72,11 +72,17 @@ def test_database_is_isolated_versioned_wal_and_foreign_keys(tmp_path):
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert [row[0] for row in connection.execute(
             "SELECT version FROM monitor_schema_migrations ORDER BY version"
-        ).fetchall()] == [1, 2]
+        ).fetchall()] == [1, 2, 3]
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(monitor_tasks)")
         }
         assert "ended_reason" in columns
+        assert {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(monitor_run_publications)"
+            )
+        } >= {"run_id", "state", "json_sha256", "html_sha256"}
 
 
 def test_version_one_database_migrates_without_recreating_tables(tmp_path):
@@ -100,10 +106,125 @@ def test_version_one_database_migrates_without_recreating_tables(tmp_path):
     with store._connect() as upgraded:
         assert [row[0] for row in upgraded.execute(
             "SELECT version FROM monitor_schema_migrations ORDER BY version"
-        )] == [1, 2]
+        )] == [1, 2, 3]
         assert "ended_reason" in {
             row[1] for row in upgraded.execute("PRAGMA table_info(monitor_tasks)")
         }
+        assert upgraded.execute(
+            "SELECT COUNT(*) FROM monitor_run_publications"
+        ).fetchone()[0] == 0
+
+
+def test_expired_lease_cannot_renew_finish_or_prepare_and_new_worker_takes_over(
+    state,
+):
+    store, service, clock = state
+    task_id = str(service.create(command(effective_at=at(10, 9))).task_id)
+    run_id = store.list_runs(task_id)[0].run_id
+    first = store.claim_run(
+        run_id,
+        now=clock.value,
+        lease_for=timedelta(minutes=1),
+        trigger="scheduled",
+    )
+    clock.value += timedelta(minutes=2)
+    assert not store.renew_lease(
+        run_id,
+        first.lease_token,
+        now=clock.value,
+        lease_for=timedelta(minutes=1),
+    )
+    error = MonitorPublicErrorPayload(
+        code="MONITOR_REPORT_PUBLISH_FAILED",
+        stage="report_publish",
+        message="locked",
+        retryable=True,
+    )
+    with pytest.raises(MonitorLeaseLost):
+        store.finish_run(
+            run_id,
+            first.lease_token,
+            now=clock.value,
+            status="failed",
+            errors=[error],
+        )
+    second = store.claim_run(
+        run_id,
+        now=clock.value,
+        lease_for=timedelta(minutes=5),
+        trigger="automatic_retry",
+    )
+    assert second is not None
+    with pytest.raises(MonitorLeaseLost):
+        store.prepare_publication(
+            run_id,
+            first.lease_token,
+            now=clock.value,
+            status="succeeded",
+            start_revision=100,
+            end_revision=101,
+            summary={
+                "workbook_count": 1,
+                "changed_workbook_count": 0,
+                "change_count": 0,
+                "error_count": 0,
+            },
+            errors=[],
+            report_ref="m3r_abcdefghijklmnopqrstuv",
+            json_sha256="a" * 64,
+            html_sha256="b" * 64,
+            report_expires_at=clock.value + timedelta(days=30),
+        )
+
+
+def test_publication_manifest_is_idempotent_conflict_safe_and_finalized_atomically(
+    state,
+):
+    store, service, clock = state
+    task_id = str(service.create(command(effective_at=at(10, 9))).task_id)
+    run_id = store.list_runs(task_id)[0].run_id
+    claim = store.claim_run(
+        run_id,
+        now=clock.value,
+        lease_for=timedelta(minutes=5),
+        trigger="scheduled",
+    )
+    values = {
+        "status": "succeeded",
+        "start_revision": 100,
+        "end_revision": 101,
+        "summary": {
+            "workbook_count": 1,
+            "changed_workbook_count": 0,
+            "change_count": 0,
+            "error_count": 0,
+        },
+        "errors": [],
+        "report_ref": "m3r_abcdefghijklmnopqrstuv",
+        "json_sha256": "a" * 64,
+        "html_sha256": "b" * 64,
+        "report_expires_at": clock.value + timedelta(days=30),
+    }
+    first = store.prepare_publication(
+        run_id, claim.lease_token, now=clock.value, **values
+    )
+    again = store.prepare_publication(
+        run_id, claim.lease_token, now=clock.value, **values
+    )
+    assert first == again
+    with pytest.raises(MonitorStateConflict):
+        store.prepare_publication(
+            run_id,
+            claim.lease_token,
+            now=clock.value,
+            **{**values, "html_sha256": "c" * 64},
+        )
+    finished = store.finalize_publication(
+        run_id, claim.lease_token, now=clock.value
+    )
+    assert finished.status == "succeeded"
+    assert finished.report_ref == values["report_ref"]
+    assert store.get_publication(run_id).state == "activated"
 
 
 def test_first_short_interval_is_left_open_right_closed_and_public_is_unsynced(state):

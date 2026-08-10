@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path, PurePosixPath
+import threading
 from typing import Callable, Literal, Protocol
 from uuid import UUID
 
@@ -21,10 +22,12 @@ from app.services.config_service import ConfigStore
 from app.services.monitor_attribution_service import MonitorAttributionService
 from app.services.monitor_diff_service import MonitorDiffService, SvnMonitorSnapshotReader
 from app.services.monitor_report_service import (
-    CanonicalJsonReferencePublisher,
     MonitorReportPublisher,
-    ReportPublication,
+    MonitorReportPublishError,
+    ReportDraft,
+    publication_from_draft,
 )
+from app.services.monitor_report_artifacts import FileSystemMonitorReportPublisher
 from app.services.monitor_store import (
     DEFAULT_DATABASE_PATH,
     MonitorLeaseLost,
@@ -43,13 +46,14 @@ from core.svn_provider import SVNProviderError, provider_from_config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "settings.json"
-LEASE_DURATION = timedelta(minutes=30)
+LEASE_DURATION = timedelta(minutes=5)
 MAX_AUTOMATIC_RETRIES = 3
 
 
 @dataclass(frozen=True)
 class EngineResult:
-    publication: ReportPublication
+    draft: ReportDraft
+    publisher: MonitorReportPublisher
 
 
 class MonitorRunEngine(Protocol):
@@ -90,7 +94,7 @@ class P1MonitorRunEngine:
             net, start_revision=start_revision, commits=commits
         )
         task_public = self.task_service.to_public_task(task)
-        publication = self.publisher.publish(
+        draft = self.publisher.render(
             run_id=run.run_id,
             task=task_public,
             interval=MonitorTimeIntervalPayload(
@@ -106,7 +110,7 @@ class P1MonitorRunEngine:
             errors=attributed.errors,
             generated_at=generated_at,
         )
-        return EngineResult(publication)
+        return EngineResult(draft, self.publisher)
 
 
 class P1MonitorRunEngineFactory:
@@ -190,6 +194,13 @@ class RunnerResult:
 
 
 def _public_error(error: Exception) -> MonitorPublicErrorPayload:
+    if isinstance(error, MonitorReportPublishError):
+        return MonitorPublicErrorPayload(
+            code=MonitorErrorCode.REPORT_PUBLISH_FAILED,
+            stage=MonitorErrorStage.REPORT_PUBLISH,
+            message="报告文件暂时无法发布，运行可重试",
+            retryable=True,
+        )
     if isinstance(error, SVNProviderError):
         code = str(error.code).upper()
         if "TIMEOUT" in code or "NETWORK" in code:
@@ -228,6 +239,68 @@ def _public_error(error: Exception) -> MonitorPublicErrorPayload:
     )
 
 
+class _LeaseGuard:
+    """Renew a lease during blocking SVN/file work and expose loss as a CAS failure."""
+
+    def __init__(
+        self,
+        store: MonitorStore,
+        run_id: str,
+        lease_token: str,
+        *,
+        clock: Callable[[], datetime],
+        lease_duration: timedelta,
+    ):
+        self.store = store
+        self.run_id = run_id
+        self.lease_token = lease_token
+        self.clock = clock
+        self.lease_duration = lease_duration
+        self._stop = threading.Event()
+        self._lost = threading.Event()
+        self._thread = threading.Thread(
+            target=self._keepalive,
+            name=f"m3-lease-{run_id[:8]}",
+            daemon=True,
+        )
+
+    def __enter__(self) -> "_LeaseGuard":
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self._stop.set()
+        self._thread.join(timeout=2)
+
+    def _keepalive(self) -> None:
+        interval = max(1.0, self.lease_duration.total_seconds() / 3)
+        while not self._stop.wait(interval):
+            try:
+                renewed = self.store.renew_lease(
+                    self.run_id,
+                    self.lease_token,
+                    now=require_utc(self.clock()),
+                    lease_for=self.lease_duration,
+                )
+            except Exception:
+                renewed = False
+            if not renewed:
+                self._lost.set()
+                return
+
+    def ensure_owned(self) -> None:
+        if self._lost.is_set():
+            raise MonitorLeaseLost("monitor run lease was lost")
+        if not self.store.renew_lease(
+            self.run_id,
+            self.lease_token,
+            now=require_utc(self.clock()),
+            lease_for=self.lease_duration,
+        ):
+            self._lost.set()
+            raise MonitorLeaseLost("monitor run lease was lost")
+
+
 class MonitorRunnerService:
     def __init__(
         self,
@@ -237,12 +310,14 @@ class MonitorRunnerService:
         *,
         clock: Callable[[], datetime] | None = None,
         lease_duration: timedelta = LEASE_DURATION,
+        report_maintenance: Callable[[str, datetime], None] | None = None,
     ):
         self.store = store
         self.task_service = task_service
         self.engine_factory = engine_factory
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.lease_duration = lease_duration
+        self.report_maintenance = report_maintenance
 
     def _now(self) -> datetime:
         return require_utc(self.clock())
@@ -275,6 +350,12 @@ class MonitorRunnerService:
                 return RunnerResult(0, 0, 0, 0)
         elif task.lifecycle not in {"active", "paused", "ended"}:
             return RunnerResult(0, 0, 0, 0)
+
+        if self.report_maintenance is not None:
+            try:
+                self.report_maintenance(task_id, now)
+            except OSError:
+                pass
 
         runs = [
             run for run in self.store.list_due_runs(task_id, now)
@@ -320,27 +401,89 @@ class MonitorRunnerService:
                 continue
             processed += 1
             task = self.store.get_task(run.task_id)
+            finalizing = False
             try:
-                result = self.engine_factory(task).execute(claim.run, task, now)
-                publication = result.publication
-                self.store.finish_run(
+                with _LeaseGuard(
+                    self.store,
                     run.run_id,
                     claim.lease_token,
-                    now=self._now(),
-                    status=publication.status,
-                    errors=list(publication.errors),
-                    start_revision=publication.start_revision,
-                    end_revision=publication.end_revision,
-                    summary=publication.run_summary.model_dump(mode="json"),
-                    report_ref=publication.report_ref,
-                    report_sha256=publication.report_sha256,
-                    report_expires_at=publication.report_expires_at,
-                )
+                    clock=self.clock,
+                    lease_duration=self.lease_duration,
+                ) as lease:
+                    engine = self.engine_factory(task)
+                    publisher = getattr(engine, "publisher", None)
+                    result = None
+                    if publisher is None:
+                        result = engine.execute(
+                            claim.run,
+                            task,
+                            claim.run.started_at or claim.run.created_at,
+                        )
+                        publisher = result.publisher
+                    manifest = self.store.get_publication(run.run_id)
+                    draft = None
+                    if manifest is not None and hasattr(publisher, "load_registered"):
+                        try:
+                            draft = publisher.load_registered(
+                                task_id=manifest.task_id,
+                                run_id=manifest.run_id,
+                                logical_cutoff_at=claim.run.end_at,
+                                reference=manifest.report_ref,
+                                json_sha256=manifest.json_sha256,
+                                html_sha256=manifest.html_sha256,
+                                report_expires_at=manifest.report_expires_at,
+                            )
+                        except Exception:
+                            draft = None
+                    if draft is None:
+                        if result is None:
+                            result = engine.execute(
+                                claim.run,
+                                task,
+                                claim.run.started_at or claim.run.created_at,
+                            )
+                        draft = result.draft
+                        publisher = result.publisher
+                    lease.ensure_owned()
+                    publication = publication_from_draft(draft)
+                    self.store.prepare_publication(
+                        run.run_id,
+                        claim.lease_token,
+                        now=self._now(),
+                        status=publication.status,
+                        start_revision=publication.start_revision,
+                        end_revision=publication.end_revision,
+                        summary=publication.run_summary.model_dump(mode="json"),
+                        errors=list(publication.errors),
+                        report_ref=publication.report_ref,
+                        json_sha256=publication.report_sha256,
+                        html_sha256=draft.html_sha256,
+                        report_expires_at=publication.report_expires_at,
+                    )
+                    lease.ensure_owned()
+                    publisher.publish_history(
+                        draft, ensure_owned=lease.ensure_owned
+                    )
+                    lease.ensure_owned()
+                    publisher.activate_latest(
+                        draft, ensure_owned=lease.ensure_owned
+                    )
+                    lease.ensure_owned()
+                    finalizing = True
+                    self.store.finalize_publication(
+                        run.run_id,
+                        claim.lease_token,
+                        now=self._now(),
+                    )
                 succeeded += 1
             except MonitorLeaseLost:
                 processed -= 1
             except Exception as error:
                 public = _public_error(error)
+                if finalizing:
+                    failed += 1
+                    retryable += 1
+                    continue
                 try:
                     self.store.finish_run(
                         run.run_id,
@@ -351,6 +494,10 @@ class MonitorRunnerService:
                     )
                 except MonitorLeaseLost:
                     processed -= 1
+                    continue
+                except Exception:
+                    failed += 1
+                    retryable += 1
                     continue
                 failed += 1
                 has_retry_budget = (
@@ -373,7 +520,9 @@ def build_runner(
     provider = provider_from_config(config)
     store = MonitorStore(database_path)
     tasks = MonitorTaskService(store)
-    publisher = CanonicalJsonReferencePublisher()
+    publisher = FileSystemMonitorReportPublisher(
+        Path(database_path).parent / "reports"
+    )
     history = BranchHistoryService(provider)
     workbook_source = dict(dataset["workbook_source"])
     csv_export = dict(dataset["csv_export"])
@@ -385,7 +534,14 @@ def build_runner(
         publisher=publisher,
         task_service=tasks,
     )
-    return MonitorRunnerService(store, tasks, factory)
+    return MonitorRunnerService(
+        store,
+        tasks,
+        factory,
+        report_maintenance=lambda task_id, now: publisher.cleanup_expired(
+            task_id, now=now
+        ),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
