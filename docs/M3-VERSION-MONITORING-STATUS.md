@@ -9,7 +9,7 @@
 | 阶段 | 状态 | 阶段分支 | 验收提交 | 结果 |
 |---|---|---|---|---|
 | Planning | 已完成 | `codex/m3-version-monitoring-report` | 本文件所在提交 | PRD 与实施计划已冻结 |
-| Phase 0 | 待开始 | `codex/m3-p0-contracts` | - | - |
+| Phase 0 | 已完成 | `codex/m3-p0-contracts`、`codex/m3-phase0-contract-audit` | `443c396` | 四份严格契约、确定性 SVN Mock、55 项聚焦测试 |
 | Phase 1 | 未开始 | `codex/m3-p1-diff-engine` | - | - |
 | Phase 2 | 未开始 | `codex/m3-p2-runner-store` | - | - |
 | Phase 3 | 未开始 | `codex/m3-p3-report-lifecycle` | - | - |
@@ -42,3 +42,11 @@
 ## 验收记录
 
 阶段通过后按时间顺序追加，至少记录阶段、提交 SHA、验证命令、结论和已知限制。
+
+### Phase 0
+
+- 阶段分支：`codex/m3-p0-contracts`、`codex/m3-phase0-contract-audit`
+- 验收提交：`443c396b9e205685008c14758f3dc5569d83d0b6`
+- 验收结果：聚焦契约测试 55 passed；其余可收集契约回归 99 passed
+- 冻结内容：四份严格 M3 契约及规范示例、确定性 SVN Mock、任务生命周期、Run/attempt、报告统计、未知与无法归因、左开右闭区间和仓库全局 Revision 间隙语义
+- 已知限制：完整 `tests/contract` 因缺少 `config/settings.json` 在收集阶段中止；未创建占位配置
