@@ -15,7 +15,7 @@
 | Phase 3 | 已完成 | `codex/m3-p3-report-lifecycle` | `2254229` | 离线 HTML、可恢复原子发布、latest 与 30 天治理通过 |
 | Phase 4 | 已完成 | `codex/m3-p4-windows-scheduler` | `8c27a63` | Windows 计划任务、登录补跑、维护唤醒与公开失败链通过 |
 | Phase 5 | 已完成 | `codex/m3-p5-monitor-ui` | `60e3fa8` | 严格 API、导航、新建页、任务列表与受控报告入口通过 |
-| Phase 6 | 未开始 | `codex/m3-p6-real-acceptance` | - | - |
+| Phase 6 | 进行中 | `codex/m3-p6-real-acceptance` | `d466319` | 真实 Windows 调度与首份只读报告通过，补跑场景待验收 |
 
 ## 主控规则
 
@@ -99,3 +99,14 @@
 - 生命周期与性能：固定分支身份只由服务端冻结；归档与活动 retry 原子互斥，归档后 Runner 兜底拒绝；公开派生状态正确筛选；任务和 Run 使用 SQL 分页及批量摘要，避免全表扫描和 N+1；history 30 天后返回 410，受控 latest 在任务未彻底删除前保持可读
 - 前端返修：断网或响应体中断时复用 request ID；自动刷新失败显示陈旧状态；筛选请求隔离旧响应；多页列表不自动收缩且请求不超过上限；过期报告不显示死链接；长文本和 360px 布局受控；动态业务文本使用安全 DOM API
 - 已知限制：in-app 浏览器按技能流程由阶段任务和主控分别尝试，均被 Windows `CreateProcessWithLogonW failed: 1385` 阻断，因此未完成真实桌面/移动截图和视觉交互验收；本地 Mock 服务曾在 `127.0.0.1:5571` 正常监听，验收后已关闭；未真实访问 SVN；依赖缺失 `config/settings.json` 的 6 个测试文件未运行，且未创建占位配置
+
+### Phase 6（进行中）
+
+- 阶段分支：`codex/m3-p6-real-acceptance`
+- 已合入提交：`a8ff6cdb46c91cd5bc675e123c769f8fb79c08fb`、`49e960b90c19b4d0b5889b76660a53da62f4e3f2`、`d4663193a80a308cf500531776afa9fdd3e0356e`
+- 真实调度修复：Windows 查询 XML 会省略默认 `Enabled=true`、`RunLevel=LeastPrivilege`，并把登录 SID 规范化为账户名；现改为按正式默认语义及 Windows SID 等价校验，同时继续拒绝显式禁用、提升权限、其他用户、额外触发器和错误每日周期
+- 真实解析修复：分支工作簿包含 openpyxl 无法读取的重复渐变样式，OOXML fallback 在 Table 范围边界缺失时曾产生裸 `TypeError`；现仅对可证明安全的 row-only 范围恢复，空范围、缺行边界、越界或表外扩张均结构化失败，坏工作簿保持 partial 隔离
+- 真实任务证据：固定分支 `KR_FIX_KR-Fix-1.0.1.0`，bound r26511、copy boundary r26215；现存 Windows 任务只读校验 `valid=True` 且无漂移，执行 scheduler-sync 后任务为 `active + synced`
+- 首份报告证据：区间 `2026-08-10 19:50:00` 至 `19:55:00`（Asia/Shanghai），原 Run 复用人工重试成功；解析 197 个工作簿，0 个变化、0 个错误，latest 报告 HTTP 200，未创建重复区间
+- 自动化结果：Scheduler 52 passed；Manifest/M3 集成定向 21 passed；M2 相关 39 passed；M3 聚焦 256 passed；py_compile 与 git diff --check 通过
+- 待验收：选择包含实际 SVN 修改的短区间抽样核对 Revision/作者/字段净值；关闭 Web 后触发；锁屏触发；注销后登录补跑；浏览器桌面/移动视觉验收仍受 Windows `CreateProcessWithLogonW failed: 1385` 阻断
