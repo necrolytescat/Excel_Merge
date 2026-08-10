@@ -93,6 +93,7 @@ class MonitorTaskService:
             requested_identity = (
                 command.name,
                 command.endpoint_id,
+                branch.label,
                 str(branch.repository_uuid),
                 canonical_url,
                 branch.repository_relative_path,
@@ -105,6 +106,7 @@ class MonitorTaskService:
             stored_identity = (
                 existing.name,
                 existing.endpoint_id,
+                existing.branch_label,
                 existing.repository_uuid,
                 existing.canonical_url,
                 existing.repository_relative_path,
@@ -156,20 +158,24 @@ class MonitorTaskService:
         )
         before = {run.run_id for run in self.store.list_runs(task_id)}
         if task.end_at is not None and task.end_at <= current:
-            self.store.transition_task(
-                task_id,
-                boundaries=specs,
-                updates={
-                    "lifecycle": "ended",
-                    "generation": task.generation + 1,
-                    "scheduler_desired_state": "disabled",
-                    "scheduler_sync_status": "pending",
-                    "ended_at": task.end_at,
-                },
-                now=current,
-                expected_generation=task.generation,
-                expected_lifecycle="active",
-            )
+            try:
+                self.store.transition_task(
+                    task_id,
+                    boundaries=specs,
+                    updates={
+                        "lifecycle": "ended",
+                        "generation": task.generation + 1,
+                        "scheduler_desired_state": "disabled",
+                        "scheduler_sync_status": "pending",
+                        "ended_at": task.end_at,
+                        "ended_reason": "configured",
+                    },
+                    now=current,
+                    expected_generation=task.generation,
+                    expected_lifecycle="active",
+                )
+            except MonitorStateConflict:
+                return []
         else:
             try:
                 self.store.append_boundaries(
@@ -275,6 +281,7 @@ class MonitorTaskService:
                     "scheduler_sync_status": "pending",
                     "paused_at": None,
                     "ended_at": task.end_at,
+                    "ended_reason": "configured",
                 },
                 now=now,
                 expected_generation=task.generation,
@@ -329,6 +336,7 @@ class MonitorTaskService:
                 "scheduler_sync_status": "pending",
                 "paused_at": None,
                 "ended_at": now,
+                "ended_reason": "user",
             },
             now=now,
             expected_generation=task.generation,

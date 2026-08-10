@@ -44,6 +44,7 @@ from core.svn_provider import SVNProviderError, provider_from_config
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "settings.json"
 LEASE_DURATION = timedelta(minutes=30)
+MAX_AUTOMATIC_RETRIES = 3
 
 
 @dataclass(frozen=True)
@@ -249,26 +250,46 @@ class MonitorRunnerService:
     def run_task(self, task_id: str, generation: int) -> RunnerResult:
         UUID(task_id)
         task = self.store.get_task(task_id)
-        if task is None or task.generation != generation or task.lifecycle != "active":
-            return RunnerResult(0, 0, 0, 0)
-        now = self._now()
-        try:
-            inserted = self.task_service.materialize_due(task_id, now=now)
-        except MonitorStateConflict:
-            return RunnerResult(0, 0, 0, 0)
-        task = self.store.get_task(task_id)
         if task is None:
             return RunnerResult(0, 0, 0, 0)
+        now = self._now()
         if task.lifecycle == "active":
             if task.generation != generation:
                 return RunnerResult(0, 0, 0, 0)
-            runs = self.store.list_queued_runs(task_id, now)
-        elif task.lifecycle == "ended" and inserted:
-            runs = inserted
-        else:
+            try:
+                self.task_service.materialize_due(task_id, now=now)
+            except MonitorStateConflict:
+                return RunnerResult(0, 0, 0, 0)
+            task = self.store.get_task(task_id)
+            if task is None:
+                return RunnerResult(0, 0, 0, 0)
+        elif generation != task.generation:
+            if task.lifecycle != "ended" or task.ended_reason != "configured":
+                return RunnerResult(0, 0, 0, 0)
+            matching_final = any(
+                run.generation == generation
+                and (run.boundary_type.value == "end" or run.end_at == task.end_at)
+                for run in self.store.list_due_runs(task_id, now)
+            )
+            if not matching_final:
+                return RunnerResult(0, 0, 0, 0)
+        elif task.lifecycle not in {"active", "paused", "ended"}:
             return RunnerResult(0, 0, 0, 0)
+
+        runs = [
+            run for run in self.store.list_due_runs(task_id, now)
+            if run.status in {"queued", "running"}
+            or (
+                run.status == "failed"
+                and any(error.retryable for error in run.errors)
+                and self.store.automatic_retry_count(run.run_id) < MAX_AUTOMATIC_RETRIES
+            )
+        ]
+        if not runs:
+            return RunnerResult(0, 0, 0, 0)
+
         self.store.heartbeat(task_id, now)
-        return self._execute(runs, "scheduled")
+        return self._execute(runs, None)
 
     def run_run(
         self,
@@ -282,15 +303,18 @@ class MonitorRunnerService:
             return RunnerResult(0, 0, 0, 0)
         return self._execute([run], trigger)
 
-    def _execute(self, runs: list[RunRecord], trigger: str) -> RunnerResult:
+    def _execute(self, runs: list[RunRecord], trigger: str | None) -> RunnerResult:
         processed = succeeded = failed = retryable = 0
         for run in runs:
             now = self._now()
+            requested_trigger = trigger or (
+                "automatic_retry" if run.status == "failed" else "scheduled"
+            )
             claim = self.store.claim_run(
                 run.run_id,
                 now=now,
                 lease_for=self.lease_duration,
-                trigger=trigger,
+                trigger=requested_trigger,
             )
             if claim is None:
                 continue
@@ -329,7 +353,11 @@ class MonitorRunnerService:
                     processed -= 1
                     continue
                 failed += 1
-                retryable += int(public.retryable)
+                has_retry_budget = (
+                    self.store.automatic_retry_count(run.run_id)
+                    < MAX_AUTOMATIC_RETRIES
+                )
+                retryable += int(public.retryable and has_retry_budget)
         return RunnerResult(processed, succeeded, failed, retryable)
 
 

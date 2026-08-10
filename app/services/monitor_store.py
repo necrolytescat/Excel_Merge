@@ -11,12 +11,12 @@ import sqlite3
 from typing import Any, Iterator, Literal
 from uuid import uuid4
 
-from app.schemas.monitor import MonitorPublicErrorPayload
+from app.schemas.monitor import MonitorPublicErrorPayload, MonitorRunSummaryPayload
 from app.services.monitor_schedule import BoundarySpec, BoundaryType, SHANGHAI, require_utc
 
 
 DEFAULT_DATABASE_PATH = Path("var/m3-monitor/monitor.sqlite3")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class MonitorLeaseLost(RuntimeError):
@@ -73,6 +73,7 @@ class TaskRecord:
     updated_at: datetime
     paused_at: datetime | None
     ended_at: datetime | None
+    ended_reason: str | None
     archived_at: datetime | None
 
 
@@ -165,6 +166,10 @@ MIGRATION_1 = (
     "CREATE INDEX monitor_boundaries_task_time_idx ON monitor_boundaries(task_id, boundary_at)",
 )
 
+MIGRATION_2 = (
+    "ALTER TABLE monitor_tasks ADD COLUMN ended_reason TEXT",
+)
+
 
 class MonitorStore:
     def __init__(self, database_path: str | Path = DEFAULT_DATABASE_PATH):
@@ -211,7 +216,14 @@ class MonitorStore:
                     connection.execute(statement)
                 connection.execute(
                     "INSERT INTO monitor_schema_migrations(version, applied_at) VALUES (?, ?)",
-                    (SCHEMA_VERSION, _timestamp(datetime.now(timezone.utc))),
+                    (1, _timestamp(datetime.now(timezone.utc))),
+                )
+            if 2 not in versions:
+                for statement in MIGRATION_2:
+                    connection.execute(statement)
+                connection.execute(
+                    "INSERT INTO monitor_schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (2, _timestamp(datetime.now(timezone.utc))),
                 )
             connection.commit()
         except Exception:
@@ -237,6 +249,7 @@ class MonitorStore:
             last_runner_heartbeat_at=_datetime(row["last_runner_heartbeat_at"]),
             created_at=_datetime(row["created_at"]), updated_at=_datetime(row["updated_at"]),
             paused_at=_datetime(row["paused_at"]), ended_at=_datetime(row["ended_at"]),
+            ended_reason=row["ended_reason"],
             archived_at=_datetime(row["archived_at"]),
         )
 
@@ -381,6 +394,7 @@ class MonitorStore:
         allowed = {
             "lifecycle", "end_at", "daily_trigger_time", "schedule_effective_at", "generation",
             "scheduler_desired_state", "scheduler_sync_status", "paused_at", "ended_at",
+            "ended_reason",
             "archived_at", "last_runner_heartbeat_at",
         }
         if not updates or not set(updates) <= allowed:
@@ -420,6 +434,7 @@ class MonitorStore:
         allowed = {
             "lifecycle", "end_at", "daily_trigger_time", "schedule_effective_at", "generation",
             "scheduler_desired_state", "scheduler_sync_status", "paused_at", "ended_at",
+            "ended_reason",
             "archived_at", "last_runner_heartbeat_at",
         }
         if not updates or not set(updates) <= allowed:
@@ -499,14 +514,23 @@ class MonitorStore:
             row = connection.execute("SELECT * FROM monitor_runs WHERE run_id=?", (run_id,)).fetchone()
         return self._run(row) if row is not None else None
 
-    def list_queued_runs(self, task_id: str, now: datetime) -> list[RunRecord]:
+    def list_due_runs(self, task_id: str, now: datetime) -> list[RunRecord]:
         with self._transaction() as connection:
             rows = connection.execute(
                 """SELECT * FROM monitor_runs WHERE task_id=? AND end_at<=?
-                   AND status IN ('queued','running') ORDER BY end_at""",
+                   AND status IN ('queued','running','failed') ORDER BY end_at""",
                 (task_id, _timestamp(now)),
             ).fetchall()
         return [self._run(row) for row in rows]
+
+    def automatic_retry_count(self, run_id: str) -> int:
+        with self._transaction() as connection:
+            row = connection.execute(
+                """SELECT COUNT(*) FROM monitor_run_attempts
+                   WHERE run_id=? AND trigger='automatic_retry'""",
+                (run_id,),
+            ).fetchone()
+        return int(row[0])
 
     def attempts(self, run_id: str) -> list[dict[str, Any]]:
         with self._transaction() as connection:
@@ -549,9 +573,37 @@ class MonitorStore:
                        WHERE run_id=? AND attempt=? AND status='running'""",
                     (_timestamp(current), _errors_json([crash_error]), run_id, row["attempt_count"]),
                 )
+                automatic_count = connection.execute(
+                    """SELECT COUNT(*) FROM monitor_run_attempts
+                       WHERE run_id=? AND trigger='automatic_retry'""",
+                    (run_id,),
+                ).fetchone()[0]
+                if automatic_count >= 3:
+                    connection.execute(
+                        """UPDATE monitor_runs SET status='failed',lease_token=NULL,
+                           lease_expires_at=NULL,errors_json=?,finished_at=?,updated_at=?
+                           WHERE run_id=?""",
+                        (
+                            _errors_json([crash_error]), _timestamp(current),
+                            _timestamp(current), run_id,
+                        ),
+                    )
+                    return None
                 actual_trigger = "automatic_retry"
             elif row["status"] == "failed" and trigger == "scheduled":
                 return None
+
+            if actual_trigger == "automatic_retry":
+                retryable = row["status"] == "running" or any(
+                    error.retryable for error in _errors(row["errors_json"])
+                )
+                automatic_count = connection.execute(
+                    """SELECT COUNT(*) FROM monitor_run_attempts
+                       WHERE run_id=? AND trigger='automatic_retry'""",
+                    (run_id,),
+                ).fetchone()[0]
+                if not retryable or automatic_count >= 3:
+                    return None
 
             attempt = row["attempt_count"] + 1
             token = secrets.token_urlsafe(32)
@@ -600,11 +652,22 @@ class MonitorStore:
         report_expires_at: datetime | None = None,
     ) -> RunRecord:
         published = status in {"succeeded", "partial"}
-        if published != all(
-            value is not None for value in
-            (start_revision, end_revision, summary, report_ref, report_sha256, report_expires_at)
-        ):
+        metadata = (
+            start_revision, end_revision, summary,
+            report_ref, report_sha256, report_expires_at,
+        )
+        if published and not all(value is not None for value in metadata):
             raise ValueError("published result metadata must be complete")
+        if not published and any(value is not None for value in metadata):
+            raise ValueError("unpublished result cannot contain report metadata")
+        if status == "succeeded" and errors:
+            raise ValueError("succeeded result cannot contain public errors")
+        if status in {"partial", "failed"} and not errors:
+            raise ValueError("partial or failed result requires public errors")
+        if published:
+            summary_payload = MonitorRunSummaryPayload.model_validate(summary)
+            if summary_payload.error_count != len(errors):
+                raise ValueError("published summary error_count must match public errors")
         with self._transaction(write=True) as connection:
             row = connection.execute("SELECT * FROM monitor_runs WHERE run_id=?", (run_id,)).fetchone()
             if row is None or row["status"] != "running" or row["lease_token"] != lease_token:

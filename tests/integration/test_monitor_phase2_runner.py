@@ -9,6 +9,7 @@ import pytest
 from app.monitor_runner import (
     MonitorRunnerService,
     P1MonitorRunEngine,
+    RunnerResult,
 )
 from app.schemas.monitor import MonitorReportPayload
 from app.services.branch_history_service import BranchHistoryService
@@ -117,6 +118,20 @@ def create_task(service):
     )
 
 
+def p1_factory(tasks, publisher):
+    history = BranchHistoryService(HistoryProvider())
+    diff = MonitorDiffService(Reader())
+    return lambda record: P1MonitorRunEngine(
+        history=history,
+        endpoint=None,
+        identity=IDENTITY,
+        diff_service=diff,
+        attribution_service=MonitorAttributionService(diff),
+        publisher=publisher,
+        task_service=tasks,
+    )
+
+
 def test_runner_executes_real_p1_diff_and_attribution_without_web(tmp_path):
     clock = Clock(instant(10))
     store = MonitorStore(tmp_path / "runner" / "monitor.sqlite3")
@@ -211,23 +226,57 @@ def test_runner_executes_configured_final_run_before_task_stops(tmp_path):
     assert tasks.public_run(store.list_runs(str(task.task_id))[-1].run_id).status == "succeeded"
 
 
-def test_old_generation_and_paused_or_ended_task_triggers_are_noops(tmp_path):
+def test_pause_and_user_end_final_runs_recover_once_under_current_generation(tmp_path):
     clock = Clock(instant(9, 30))
     store = MonitorStore(tmp_path / "noop.sqlite3")
     tasks = MonitorTaskService(store, clock=clock)
     task = create_task(tasks)
-
-    class NeverFactory:
-        def __call__(self, record):
-            raise AssertionError("no engine should be created")
-
-    runner = MonitorRunnerService(store, tasks, NeverFactory(), clock=clock)
+    runner = MonitorRunnerService(
+        store, tasks, p1_factory(tasks, CanonicalJsonReferencePublisher()), clock=clock
+    )
     assert runner.run_task(str(task.task_id), task.scheduler.generation + 1).exit_category == "noop"
     paused = tasks.pause(str(task.task_id))
+    boundary_count = len(store.list_boundaries(str(task.task_id)))
+    assert runner.run_task(str(task.task_id), task.scheduler.generation).exit_category == "noop"
+    assert runner.run_task(str(task.task_id), paused.scheduler.generation).exit_category == "ok"
     assert runner.run_task(str(task.task_id), paused.scheduler.generation).exit_category == "noop"
+    assert len(store.list_boundaries(str(task.task_id))) == boundary_count
+
+    clock.value = instant(9, 35)
+    resumed = tasks.resume(str(task.task_id))
     clock.value = instant(9, 40)
     ended = tasks.end(str(task.task_id))
+    boundary_count = len(store.list_boundaries(str(task.task_id)))
+    assert runner.run_task(str(task.task_id), resumed.scheduler.generation).exit_category == "noop"
+    assert runner.run_task(str(task.task_id), ended.scheduler.generation).exit_category == "ok"
     assert runner.run_task(str(task.task_id), ended.scheduler.generation).exit_category == "noop"
+    assert len(store.list_boundaries(str(task.task_id))) == boundary_count
+
+
+def test_configured_end_old_action_recovers_after_transition_crash(tmp_path):
+    clock = Clock(instant(9))
+    store = MonitorStore(tmp_path / "configured-crash.sqlite3")
+    tasks = MonitorTaskService(store, clock=clock)
+    task = tasks.create(
+        CreateMonitorTask(
+            name="KR final", endpoint_id="kr-fix", branch_label="KR Fix",
+            repository_uuid=IDENTITY.repository_uuid, canonical_url=IDENTITY.canonical_url,
+            repository_relative_path=IDENTITY.repository_relative_path,
+            bound_revision=101, copy_boundary_revision=90,
+            effective_at=instant(8), daily_trigger_time=time(18), end_at=instant(10),
+        )
+    )
+    old_generation = task.scheduler.generation
+    clock.value = instant(10)
+    pending = tasks.materialize_due(str(task.task_id))
+    assert pending and store.get_task(str(task.task_id)).lifecycle == "ended"
+    runner = MonitorRunnerService(
+        store, tasks, p1_factory(tasks, CanonicalJsonReferencePublisher()), clock=clock
+    )
+    boundary_count = len(store.list_boundaries(str(task.task_id)))
+    assert runner.run_task(str(task.task_id), old_generation).exit_category == "ok"
+    assert runner.run_task(str(task.task_id), old_generation).exit_category == "noop"
+    assert len(store.list_boundaries(str(task.task_id))) == boundary_count
 
 
 def test_runner_failure_classification_and_retry_reuse_original_run(tmp_path):
@@ -244,21 +293,50 @@ def test_runner_failure_classification_and_retry_reuse_original_run(tmp_path):
     runner = MonitorRunnerService(store, tasks, lambda task_record: FailingEngine(), clock=clock)
     first = runner.run_task(str(task.task_id), task.scheduler.generation)
     assert first.exit_category == "temporary_failure"
-    assert tasks.public_run(run_id).errors[0].message == "SVN 暂时不可用，运行可重试"
+    initial = tasks.public_run(run_id)
+    assert initial.errors[0].message == "SVN 暂时不可用，运行可重试"
 
-    second = runner.run_run(run_id, trigger="automatic_retry")
-    third = runner.run_run(run_id, trigger="manual_retry")
+    second = runner.run_task(str(task.task_id), task.scheduler.generation)
+    third = runner.run_task(str(task.task_id), task.scheduler.generation)
+    fourth = runner.run_task(str(task.task_id), task.scheduler.generation)
+    exhausted = runner.run_task(str(task.task_id), task.scheduler.generation)
     run = tasks.public_run(run_id)
     assert second.exit_category == third.exit_category == "temporary_failure"
+    assert fourth.exit_category == "permanent_failure"
+    assert exhausted.exit_category == "noop"
     assert str(run.run_id) == run_id
-    assert run.attempt_count == 3
+    assert run.attempt_count == 4
     assert [attempt.trigger for attempt in run.attempts] == [
-        "scheduled", "automatic_retry", "manual_retry",
+        "scheduled", "automatic_retry", "automatic_retry", "automatic_retry",
     ]
+    assert run.interval == initial.interval
     dumped = run.model_dump_json()
     assert "private command stderr" not in dumped
     assert "lease" not in dumped
     assert "sqlite" not in dumped
+
+
+def test_permanent_task_failure_is_not_automatically_retried(tmp_path):
+    clock = Clock(instant(10))
+    store = MonitorStore(tmp_path / "permanent.sqlite3")
+    tasks = MonitorTaskService(store, clock=clock)
+    task = create_task(tasks)
+
+    class PermanentFailure:
+        def execute(self, run, task_record, generated_at):
+            raise SVNProviderError("SVN_AUTH_FAILED", "private auth details")
+
+    runner = MonitorRunnerService(
+        store, tasks, lambda record: PermanentFailure(), clock=clock
+    )
+    assert runner.run_task(str(task.task_id), task.scheduler.generation).exit_category == "permanent_failure"
+    assert runner.run_task(str(task.task_id), task.scheduler.generation).exit_category == "noop"
+    assert tasks.public_run(store.list_runs(str(task.task_id))[0].run_id).attempt_count == 1
+
+
+def test_exit_category_depends_on_remaining_retryable_failures():
+    assert RunnerResult(2, 0, 2, 1).exit_category == "temporary_failure"
+    assert RunnerResult(2, 0, 2, 0).exit_category == "permanent_failure"
 
 
 def test_credentials_are_rejected_and_public_task_has_no_internal_paths(tmp_path):

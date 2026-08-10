@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time, timedelta, timezone
+import sqlite3
 from uuid import uuid4
 
 import pytest
@@ -13,7 +14,12 @@ from app.services.monitor_schedule import (
     MonitorScheduleError,
     scheduled_boundaries,
 )
-from app.services.monitor_store import MonitorLeaseLost, MonitorStateConflict, MonitorStore
+from app.services.monitor_store import (
+    MIGRATION_1,
+    MonitorLeaseLost,
+    MonitorStateConflict,
+    MonitorStore,
+)
 from app.services.monitor_task_service import CreateMonitorTask, MonitorTaskService
 
 
@@ -65,8 +71,39 @@ def test_database_is_isolated_versioned_wal_and_foreign_keys(tmp_path):
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert [row[0] for row in connection.execute(
-            "SELECT version FROM monitor_schema_migrations"
-        ).fetchall()] == [1]
+            "SELECT version FROM monitor_schema_migrations ORDER BY version"
+        ).fetchall()] == [1, 2]
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(monitor_tasks)")
+        }
+        assert "ended_reason" in columns
+
+
+def test_version_one_database_migrates_without_recreating_tables(tmp_path):
+    path = tmp_path / "upgrade" / "monitor.sqlite3"
+    path.parent.mkdir(parents=True)
+    connection = sqlite3.connect(path)
+    connection.execute(
+        "CREATE TABLE monitor_schema_migrations "
+        "(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+    )
+    for statement in MIGRATION_1:
+        connection.execute(statement)
+    connection.execute(
+        "INSERT INTO monitor_schema_migrations(version, applied_at) VALUES (1, ?)",
+        ("2026-08-10T00:00:00.000000Z",),
+    )
+    connection.commit()
+    connection.close()
+
+    store = MonitorStore(path)
+    with store._connect() as upgraded:
+        assert [row[0] for row in upgraded.execute(
+            "SELECT version FROM monitor_schema_migrations ORDER BY version"
+        )] == [1, 2]
+        assert "ended_reason" in {
+            row[1] for row in upgraded.execute("PRAGMA table_info(monitor_tasks)")
+        }
 
 
 def test_first_short_interval_is_left_open_right_closed_and_public_is_unsynced(state):
@@ -183,6 +220,22 @@ def test_repeated_create_and_lifecycle_commands_are_idempotent(state):
     ) == 1
 
 
+def test_same_task_id_with_a_different_branch_label_is_not_idempotent(state):
+    _, service, _ = state
+    task_id = str(uuid4())
+    original = command(effective_at=at(10, 9), task_id=task_id)
+    service.create(original)
+    with pytest.raises(ValueError, match="different monitor task"):
+        service.create(
+            CreateMonitorTask(
+                **{
+                    **original.__dict__,
+                    "branch_label": "A different public label",
+                }
+            )
+        )
+
+
 def test_ending_while_paused_does_not_report_the_paused_period(state):
     store, service, clock = state
     task_id = str(service.create(command(effective_at=at(10, 9))).task_id)
@@ -270,6 +323,23 @@ def test_creation_and_missed_recovery_enforce_30_day_limit(state):
         )
 
 
+def test_configured_end_state_conflict_is_an_idempotent_noop(state, monkeypatch):
+    store, service, clock = state
+    clock.value = at(10, 9)
+    task_id = str(
+        service.create(
+            command(effective_at=at(10, 8), end_at=at(10, 10))
+        ).task_id
+    )
+    clock.value = at(10, 10)
+
+    def conflict(*args, **kwargs):
+        raise MonitorStateConflict("concurrent runner won")
+
+    monkeypatch.setattr(store, "transition_task", conflict)
+    assert service.materialize_due(task_id) == []
+
+
 def test_failure_does_not_move_following_interval(state):
     store, service, clock = state
     task_id = str(service.create(command(effective_at=at(10, 9))).task_id)
@@ -285,6 +355,86 @@ def test_failure_does_not_move_following_interval(state):
     service.materialize_due(task_id)
     second = store.list_runs(task_id)[1]
     assert (second.start_at, second.end_at) == (at(10, 10), at(11, 10))
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"start_revision": 100},
+        {"summary": {"workbook_count": 1, "changed_workbook_count": 0, "change_count": 0, "error_count": 1}},
+        {"report_ref": "m3r_abcdefghijklmnopqrstuv"},
+    ],
+)
+def test_failed_run_rejects_every_partial_report_metadata_shape(state, metadata):
+    store, service, clock = state
+    task_id = str(service.create(command(effective_at=at(10, 9))).task_id)
+    run_id = store.list_runs(task_id)[0].run_id
+    claim = store.claim_run(
+        run_id, now=clock.value, lease_for=timedelta(minutes=5), trigger="scheduled"
+    )
+    error = MonitorPublicErrorPayload(
+        code="MONITOR_SVN_TIMEOUT", stage="history", message="temporary", retryable=True
+    )
+    with pytest.raises(ValueError, match="unpublished"):
+        store.finish_run(
+            run_id, claim.lease_token, now=clock.value,
+            status="failed", errors=[error], **metadata,
+        )
+    assert store.get_run(run_id).status == "running"
+
+
+def test_store_terminal_shapes_match_the_frozen_run_contract(state):
+    store, service, clock = state
+    task_id = str(service.create(command(effective_at=at(10, 9))).task_id)
+    run_id = store.list_runs(task_id)[0].run_id
+    claim = store.claim_run(
+        run_id, now=clock.value, lease_for=timedelta(minutes=5), trigger="scheduled"
+    )
+    error = MonitorPublicErrorPayload(
+        code="MONITOR_PARSE_FAILED", stage="csv_parse", message="partial", retryable=False
+    )
+    metadata = {
+        "start_revision": 100,
+        "end_revision": 101,
+        "summary": {
+            "workbook_count": 1,
+            "changed_workbook_count": 0,
+            "change_count": 0,
+            "error_count": 1,
+        },
+        "report_ref": "m3r_abcdefghijklmnopqrstuv",
+        "report_sha256": "a" * 64,
+        "report_expires_at": clock.value + timedelta(days=30),
+    }
+    with pytest.raises(ValueError, match="succeeded"):
+        store.finish_run(
+            run_id, claim.lease_token, now=clock.value,
+            status="succeeded", errors=[error], **metadata,
+        )
+    with pytest.raises(ValueError, match="requires public errors"):
+        store.finish_run(
+            run_id, claim.lease_token, now=clock.value,
+            status="failed", errors=[],
+        )
+    with pytest.raises(ValueError, match="requires public errors"):
+        store.finish_run(
+            run_id, claim.lease_token, now=clock.value,
+            status="partial", errors=[], **metadata,
+        )
+    mismatched = {
+        **metadata,
+        "summary": {**metadata["summary"], "error_count": 0},
+    }
+    with pytest.raises(ValueError, match="error_count"):
+        store.finish_run(
+            run_id, claim.lease_token, now=clock.value,
+            status="partial", errors=[error], **mismatched,
+        )
+    store.finish_run(
+        run_id, claim.lease_token, now=clock.value,
+        status="partial", errors=[error], **metadata,
+    )
+    assert service.public_run(run_id).status == "partial"
 
 
 def test_concurrent_lease_has_one_winner_and_expired_attempt_recovers(state):
@@ -328,14 +478,18 @@ def test_concurrent_lease_has_one_winner_and_expired_attempt_recovers(state):
         )
 
 
-def test_automatic_and_manual_retry_reuse_run_and_continue_attempts(state):
+def test_automatic_retry_limit_excludes_manual_attempts(state):
     store, service, clock = state
     task_id = str(service.create(command(effective_at=at(10, 9))).task_id)
     run_id = store.list_runs(task_id)[0].run_id
     error = MonitorPublicErrorPayload(
         code="MONITOR_SVN_TIMEOUT", stage="history", message="temporary", retryable=True
     )
-    for number, trigger in enumerate(("scheduled", "automatic_retry", "manual_retry"), 1):
+    triggers = (
+        "scheduled", "manual_retry",
+        "automatic_retry", "automatic_retry", "automatic_retry",
+    )
+    for number, trigger in enumerate(triggers, 1):
         claim = store.claim_run(
             run_id, now=clock.value, lease_for=timedelta(minutes=5), trigger=trigger
         )
@@ -343,7 +497,39 @@ def test_automatic_and_manual_retry_reuse_run_and_continue_attempts(state):
         store.finish_run(run_id, claim.lease_token, now=clock.value, status="failed", errors=[error])
     run = store.get_run(run_id)
     assert run.run_id == run_id
-    assert run.attempt_count == 3
-    assert [item["trigger"] for item in store.attempts(run_id)] == [
-        "scheduled", "automatic_retry", "manual_retry",
-    ]
+    assert run.attempt_count == 5
+    assert [item["trigger"] for item in store.attempts(run_id)] == list(triggers)
+    assert store.automatic_retry_count(run_id) == 3
+    assert store.claim_run(
+        run_id, now=clock.value, lease_for=timedelta(minutes=5),
+        trigger="automatic_retry",
+    ) is None
+
+
+def test_expired_third_automatic_attempt_becomes_a_valid_terminal_failure(state):
+    store, service, clock = state
+    task_id = str(service.create(command(effective_at=at(10, 9))).task_id)
+    run_id = store.list_runs(task_id)[0].run_id
+    error = MonitorPublicErrorPayload(
+        code="MONITOR_SVN_TIMEOUT", stage="history", message="temporary", retryable=True
+    )
+    for trigger in ("scheduled", "automatic_retry", "automatic_retry"):
+        claim = store.claim_run(
+            run_id, now=clock.value, lease_for=timedelta(minutes=5), trigger=trigger
+        )
+        store.finish_run(
+            run_id, claim.lease_token, now=clock.value, status="failed", errors=[error]
+        )
+    running = store.claim_run(
+        run_id, now=clock.value, lease_for=timedelta(minutes=5),
+        trigger="automatic_retry",
+    )
+    clock.value += timedelta(minutes=6)
+    assert store.claim_run(
+        run_id, now=clock.value, lease_for=timedelta(minutes=5), trigger="scheduled"
+    ) is None
+    public = service.public_run(run_id)
+    assert public.status == "failed"
+    assert public.attempt_count == 4
+    assert public.attempts[-1].status == "failed"
+    assert running.attempt == 4
