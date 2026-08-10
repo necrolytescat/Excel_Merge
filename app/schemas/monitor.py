@@ -21,6 +21,7 @@ MONITOR_RUN_SCHEMA_VERSION = "m3.monitor-run.v1"
 MONITOR_REPORT_SCHEMA_VERSION = "m3.monitor-report.v1"
 MONITOR_RUN_LIST_SCHEMA_VERSION = "m3.monitor-run-list.v1"
 MONITOR_ENDPOINT_OPTIONS_SCHEMA_VERSION = "m3.monitor-endpoint-options.v1"
+MONITOR_RETRY_ACCEPTED_SCHEMA_VERSION = "m3.monitor-run-retry.accepted.v1"
 
 
 def _utc_datetime(value: datetime) -> datetime:
@@ -85,8 +86,24 @@ class MonitorRunRetryRequestPayload(StrictMonitorPayload):
     request_id: UUID
 
 
+class MonitorApiErrorCode(str, Enum):
+    INVALID_REQUEST = "MONITOR_INVALID_REQUEST"
+    INVALID_CURSOR = "MONITOR_INVALID_CURSOR"
+    ENDPOINT_NOT_FOUND = "MONITOR_ENDPOINT_NOT_FOUND"
+    ENDPOINT_DISABLED = "MONITOR_ENDPOINT_DISABLED"
+    DATASET_CONFIGURATION_INVALID = "MONITOR_DATASET_CONFIGURATION_INVALID"
+    TASK_NOT_FOUND = "MONITOR_TASK_NOT_FOUND"
+    RUN_NOT_FOUND = "MONITOR_RUN_NOT_FOUND"
+    REPORT_NOT_FOUND = "MONITOR_REPORT_NOT_FOUND"
+    REPORT_EXPIRED = "MONITOR_REPORT_EXPIRED"
+    STATE_CONFLICT = "MONITOR_STATE_CONFLICT"
+    IDEMPOTENCY_CONFLICT = "MONITOR_IDEMPOTENCY_CONFLICT"
+    SERVICE_UNAVAILABLE = "MONITOR_SERVICE_UNAVAILABLE"
+    INTERNAL_ERROR = "MONITOR_API_INTERNAL_ERROR"
+
+
 class MonitorApiErrorPayload(StrictMonitorPayload):
-    code: str = Field(..., min_length=1, max_length=96, pattern=r"^MONITOR_[A-Z0-9_]+$")
+    code: MonitorApiErrorCode
     message: str = Field(..., min_length=1, max_length=256, strict=True)
 
     @field_validator("message")
@@ -113,6 +130,17 @@ class MonitorEndpointOptionsPayload(StrictMonitorPayload):
         MONITOR_ENDPOINT_OPTIONS_SCHEMA_VERSION
     )
     items: list[MonitorEndpointOptionPayload] = Field(default_factory=list)
+
+
+class MonitorRetryAcceptedPayload(StrictMonitorPayload):
+    schema_version: Literal[MONITOR_RETRY_ACCEPTED_SCHEMA_VERSION] = (
+        MONITOR_RETRY_ACCEPTED_SCHEMA_VERSION
+    )
+    request_id: UUID
+    task_id: UUID
+    run_id: UUID
+    status: Literal["accepted"] = "accepted"
+    dispatch_state: Literal["pending"] = "pending"
 
 
 class MonitorTaskStatus(str, Enum):
@@ -402,6 +430,23 @@ class MonitorTaskPayload(StrictMonitorPayload):
             raise ValueError("ended task requires ended_at")
         if self.status == MonitorTaskStatus.ARCHIVED and self.archived_at is None:
             raise ValueError("archived task requires archived_at")
+        if (
+            self.latest_run is not None
+            and self.latest_run.status in {MonitorRunStatus.QUEUED, MonitorRunStatus.RUNNING}
+            and self.pending_run_count < 1
+        ):
+            raise ValueError("queued/running latest run requires pending_run_count")
+        if self.latest_report is not None and self.latest_run is not None:
+            if (
+                self.latest_report.interval.logical_cutoff_at
+                > self.latest_run.interval.logical_cutoff_at
+            ):
+                raise ValueError("latest report cannot follow latest run")
+            if self.latest_run.status in {
+                MonitorRunStatus.SUCCEEDED,
+                MonitorRunStatus.PARTIAL,
+            } and self.latest_report.run_id != self.latest_run.run_id:
+                raise ValueError("published latest run must also be latest report")
         return self
 
 
@@ -424,6 +469,23 @@ class MonitorTaskListItemPayload(StrictMonitorPayload):
         if self.updated_at < self.created_at:
             raise ValueError("updated_at cannot precede created_at")
         _validate_task_lifecycle(self.status, self.schedule, self.scheduler)
+        if (
+            self.latest_run is not None
+            and self.latest_run.status in {MonitorRunStatus.QUEUED, MonitorRunStatus.RUNNING}
+            and self.pending_run_count < 1
+        ):
+            raise ValueError("queued/running latest run requires pending_run_count")
+        if self.latest_report is not None and self.latest_run is not None:
+            if (
+                self.latest_report.interval.logical_cutoff_at
+                > self.latest_run.interval.logical_cutoff_at
+            ):
+                raise ValueError("latest report cannot follow latest run")
+            if self.latest_run.status in {
+                MonitorRunStatus.SUCCEEDED,
+                MonitorRunStatus.PARTIAL,
+            } and self.latest_report.run_id != self.latest_run.run_id:
+                raise ValueError("published latest run must also be latest report")
         return self
 
 

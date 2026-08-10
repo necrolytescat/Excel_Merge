@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.monitor import (
+    MonitorApiErrorCode,
     MonitorApiErrorEnvelope,
     MonitorBoundaryKind,
     MonitorChangeType,
@@ -19,6 +20,7 @@ from app.schemas.monitor import (
     MonitorRunListPayload,
     MonitorRunPayload,
     MonitorRunRetryRequestPayload,
+    MonitorRetryAcceptedPayload,
     MonitorRunStatus,
     MonitorSchedulerSyncStatus,
     MonitorTaskCreateRequestPayload,
@@ -27,6 +29,13 @@ from app.schemas.monitor import (
     MonitorTaskPayload,
     MonitorTaskStatus,
     serialize_monitor_json,
+)
+from app.services.monitor_api_contract import (
+    MonitorCursorError,
+    decode_cursor,
+    encode_cursor,
+    etag_matches,
+    response_etag,
 )
 
 
@@ -39,6 +48,8 @@ EXAMPLES = (
     ("m3.monitor-task-list.v1.example.json", MonitorTaskListPayload),
     ("m3.monitor-run.v1.example.json", MonitorRunPayload),
     ("m3.monitor-report.v1.example.json", MonitorReportPayload),
+    ("m3.monitor-run-list.v1.example.json", MonitorRunListPayload),
+    ("m3.monitor-endpoint-options.v1.example.json", MonitorEndpointOptionsPayload),
 )
 
 
@@ -211,6 +222,38 @@ def test_phase_five_query_and_error_contracts_reject_internal_fields():
             }
         )
 
+    accepted = MonitorRetryAcceptedPayload.model_validate(
+        {
+            "schema_version": "m3.monitor-run-retry.accepted.v1",
+            "request_id": "40000000-0000-4000-8000-000000000001",
+            "task_id": "10000000-0000-4000-8000-000000000001",
+            "run_id": "30000000-0000-4000-8000-000000000001",
+            "status": "accepted",
+            "dispatch_state": "pending",
+        }
+    )
+    assert accepted.dispatch_state == "pending"
+
+    assert {code.value for code in MonitorApiErrorCode} == {
+        "MONITOR_INVALID_REQUEST",
+        "MONITOR_INVALID_CURSOR",
+        "MONITOR_ENDPOINT_NOT_FOUND",
+        "MONITOR_ENDPOINT_DISABLED",
+        "MONITOR_DATASET_CONFIGURATION_INVALID",
+        "MONITOR_TASK_NOT_FOUND",
+        "MONITOR_RUN_NOT_FOUND",
+        "MONITOR_REPORT_NOT_FOUND",
+        "MONITOR_REPORT_EXPIRED",
+        "MONITOR_STATE_CONFLICT",
+        "MONITOR_IDEMPOTENCY_CONFLICT",
+        "MONITOR_SERVICE_UNAVAILABLE",
+        "MONITOR_API_INTERNAL_ERROR",
+    }
+    with pytest.raises(ValidationError):
+        MonitorApiErrorEnvelope.model_validate(
+            {"error": {"code": "MONITOR_UNFROZEN", "message": "未知错误"}}
+        )
+
     MonitorRunListPayload.model_validate(
         {
             "schema_version": "m3.monitor-run-list.v1",
@@ -251,6 +294,58 @@ def test_task_contract_keeps_latest_report_independent_from_latest_run():
     task["pending_run_count"] = -1
     with pytest.raises(ValidationError):
         MonitorTaskPayload.model_validate(task)
+
+
+def test_task_latest_and_pending_cross_field_invariants():
+    task = load_json(CONTRACTS / "m3.monitor-task.v1.example.json")
+    task["latest_run"]["status"] = "running"
+    task["latest_run"]["summary"] = None
+    task["latest_run"]["report_ref"] = None
+    task["pending_run_count"] = 0
+    with pytest.raises(ValidationError):
+        MonitorTaskPayload.model_validate(task)
+
+    task = load_json(CONTRACTS / "m3.monitor-task.v1.example.json")
+    task["latest_report"]["run_id"] = "30000000-0000-4000-8000-000000000099"
+    with pytest.raises(ValidationError):
+        MonitorTaskPayload.model_validate(task)
+
+    task = load_json(CONTRACTS / "m3.monitor-task.v1.example.json")
+    task["latest_run"] = None
+    MonitorTaskPayload.model_validate(task)
+
+
+def test_monitor_etag_projection_and_weak_condition_are_frozen():
+    first = {
+        "schema_version": "m3.monitor-task-list.v1",
+        "items": [],
+        "next_cursor": None,
+        "has_more": False,
+        "as_of": "2026-08-10T10:00:00Z",
+    }
+    second = {**first, "as_of": "2026-08-10T10:01:00Z"}
+    etag = response_etag(first, exclude_as_of=True)
+    assert etag == response_etag(second, exclude_as_of=True)
+    assert etag.startswith('"') and etag.endswith('"')
+    assert etag_matches(etag, etag)
+    assert etag_matches("W/" + etag, etag)
+    assert not etag_matches('"different"', etag)
+
+
+def test_monitor_cursor_is_bound_to_scope_and_filters():
+    filters = {"status": ["active"], "q": "qa"}
+    cursor = encode_cursor(
+        scope="tasks",
+        filters=filters,
+        sort_values=["2026-08-10T10:00:00Z", "10000000-0000-4000-8000-000000000001"],
+    )
+    assert decode_cursor(
+        cursor, scope="tasks", filters=filters, sort_size=2
+    ) == ["2026-08-10T10:00:00Z", "10000000-0000-4000-8000-000000000001"]
+    with pytest.raises(MonitorCursorError):
+        decode_cursor(cursor, scope="tasks", filters={"status": []}, sort_size=2)
+    with pytest.raises(MonitorCursorError):
+        decode_cursor(cursor, scope="runs:other", filters=filters, sort_size=2)
 
 
 def test_monitor_contracts_reject_unknown_nested_fields_and_internal_diagnostics():

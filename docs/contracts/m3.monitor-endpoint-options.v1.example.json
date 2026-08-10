@@ -1,0 +1,13 @@
+{
+  "schema_version": "m3.monitor-endpoint-options.v1",
+  "items": [
+    {
+      "endpoint_id": "KR_FIX_1_0",
+      "label": "KR FIX 1.0"
+    },
+    {
+      "endpoint_id": "TC_TRUNK",
+      "label": "TC Trunk"
+    }
+  ]
+}
