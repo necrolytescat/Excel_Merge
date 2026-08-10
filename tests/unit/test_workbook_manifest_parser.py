@@ -216,6 +216,45 @@ def test_manifest_ooxml_row_bounds_reject_horizontal_cells_outside_table():
     assert captured.value.details == {"table_ref": "1:2"}
 
 
+@pytest.mark.parametrize("table_ref", ["0:2", "1:1048577"])
+def test_manifest_ooxml_row_bounds_reject_rows_outside_excel(table_ref):
+    raw = _table_manifest_workbook(
+        [
+            ["sheetName", "tbxName", "isExport"],
+            ["Base", "AtlasConfig_Base", 1],
+        ],
+        table_ref="A1:C2",
+        extra_rows=[["Ghost", "GhostCsv", 1]],
+    )
+    raw = _with_broken_styles_and_table_ref(raw, table_ref)
+
+    with pytest.raises(M2ProcessingError) as captured:
+        manifest_parser.parse_workbook_manifest(raw)
+
+    assert captured.value.code == "M2_MANIFEST_FIELD_MISSING"
+    assert captured.value.details == {"table_ref": table_ref}
+
+
+def test_manifest_ooxml_row_bounds_reject_inferred_columns_outside_excel():
+    sheet_data = ET.fromstring(
+        f"""<sheetData xmlns="{_SHEET_NS}">
+  <row r="1"><c r="XFE1"/><c r="XFF1"/><c r="XFG1"/></row>
+  <row r="2"><c r="XFE2"/><c r="XFF2"/><c r="XFG2"/></row>
+</sheetData>"""
+    )
+
+    with pytest.raises(M2ProcessingError) as captured:
+        manifest_parser._resolve_ooxml_table_bounds(
+            "1:2",
+            sheet_data,
+            sheet_name="main",
+            table_width=3,
+        )
+
+    assert captured.value.code == "M2_MANIFEST_FIELD_MISSING"
+    assert captured.value.details == {"table_ref": "1:2"}
+
+
 @pytest.mark.parametrize(
     "table_ref",
     ["", "A:C"],

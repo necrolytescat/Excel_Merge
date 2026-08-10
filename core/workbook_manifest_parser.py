@@ -19,6 +19,8 @@ _REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 _SHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _CELL_REF_RE = re.compile(r"^([A-Z]+)")
+_EXCEL_MAX_ROW = 1_048_576
+_EXCEL_MAX_COLUMN = 16_384
 
 
 @dataclass(frozen=True)
@@ -366,6 +368,14 @@ def _resolve_ooxml_table_bounds(
                 sheet_name=sheet_name,
                 details={"table_ref": table_ref},
             )
+        if not 1 <= min_row <= max_row <= _EXCEL_MAX_ROW:
+            raise M2ProcessingError(
+                "M2_MANIFEST_FIELD_MISSING",
+                "manifest_parse",
+                "main Sheet 的 manifest Excel Table 行边界超出 Excel 范围",
+                sheet_name=sheet_name,
+                details={"table_ref": table_ref},
+            )
         coordinates: list[tuple[int, int]] = []
         if sheet_data is not None:
             for fallback_row, row_node in enumerate(
@@ -400,7 +410,11 @@ def _resolve_ooxml_table_bounds(
             int(max_row),
         )
         inferred_width = resolved_bounds[2] - resolved_bounds[0] + 1
-        if table_width is None or inferred_width != table_width:
+        if (
+            not 1 <= resolved_bounds[0] <= resolved_bounds[2] <= _EXCEL_MAX_COLUMN
+            or table_width is None
+            or inferred_width != table_width
+        ):
             raise M2ProcessingError(
                 "M2_MANIFEST_FIELD_MISSING",
                 "manifest_parse",
