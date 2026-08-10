@@ -601,8 +601,6 @@ class MonitorStore:
         summary_payload = MonitorRunSummaryPayload.model_validate(summary)
         if status == "succeeded" and errors:
             raise ValueError("succeeded publication cannot contain public errors")
-        if status == "partial" and not errors:
-            raise ValueError("partial publication requires public errors")
         if summary_payload.error_count != len(errors):
             raise ValueError("publication summary error_count must match errors")
         values = {
@@ -827,8 +825,8 @@ class MonitorStore:
             raise ValueError("unpublished result cannot contain report metadata")
         if status == "succeeded" and errors:
             raise ValueError("succeeded result cannot contain public errors")
-        if status in {"partial", "failed"} and not errors:
-            raise ValueError("partial or failed result requires public errors")
+        if status == "failed" and not errors:
+            raise ValueError("failed result requires public errors")
         if published:
             summary_payload = MonitorRunSummaryPayload.model_validate(summary)
             if summary_payload.error_count != len(errors):

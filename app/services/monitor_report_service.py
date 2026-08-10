@@ -29,7 +29,9 @@ from app.schemas.monitor import (
 
 REPORT_RETENTION = timedelta(days=30)
 REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
-_MANAGED_HISTORY = re.compile(r"^(?P<stem>\d{8}-\d{6})\.(?P<kind>html|json)$")
+_MANAGED_HISTORY = re.compile(
+    r"^(?P<stem>\d{8}-\d{6}(?:-\d{6})?)\.(?P<kind>html|json)$"
+)
 _REFERENCE = re.compile(r"^m3r_[A-Za-z0-9_-]{22}$")
 _EMBEDDED_REPORT = re.compile(
     rb'<script type="application/json" id="report-data">(?P<data>.*?)</script>',
@@ -39,6 +41,10 @@ _EMBEDDED_REPORT = re.compile(
 
 class MonitorReportPublishError(RuntimeError):
     """A report artifact could not be safely published."""
+
+    def __init__(self, message: str, *, retryable: bool = True):
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class MonitorReportReferenceError(ValueError):

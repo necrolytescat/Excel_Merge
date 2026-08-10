@@ -18,6 +18,7 @@ from core.svn_history import BranchCommit
 @dataclass(frozen=True)
 class MonitorAttributionResult:
     workbook_count: int
+    reliable_workbook_count: int
     changes: tuple[MonitorChangePayload, ...]
     errors: tuple[MonitorPublicErrorPayload, ...]
 
@@ -189,6 +190,7 @@ class MonitorAttributionService:
         )
         return MonitorAttributionResult(
             workbook_count=net.workbook_count,
+            reliable_workbook_count=net.reliable_workbook_count,
             changes=tuple(attributed),
             errors=tuple(errors),
         )

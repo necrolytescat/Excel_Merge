@@ -15,6 +15,7 @@ from app.schemas.monitor import (
 )
 from app.services.monitor_report_artifacts import FileSystemMonitorReportPublisher
 from app.services.monitor_report_service import (
+    _MANAGED_HISTORY,
     REPORT_RETENTION,
     MonitorReportPublishError,
     MonitorReportReferenceError,
@@ -96,6 +97,18 @@ def later_report(base: MonitorReportPayload) -> MonitorReportPayload:
     data["interval"]["end_at"] = "2026-08-11T10:00:00Z"
     data["interval"]["logical_cutoff_at"] = "2026-08-11T10:00:00Z"
     data["generated_at"] = "2026-08-11T10:02:00Z"
+    return report_from(data)
+
+
+def report_at(base: MonitorReportPayload, cutoff: datetime) -> MonitorReportPayload:
+    data = base.model_dump(mode="json")
+    run_id = uuid4()
+    data["report_id"] = str(uuid5(run_id, "m3.monitor-report.v1"))
+    data["run_id"] = str(run_id)
+    data["interval"]["start_at"] = (cutoff - timedelta(hours=1)).isoformat()
+    data["interval"]["end_at"] = cutoff.isoformat()
+    data["interval"]["logical_cutoff_at"] = cutoff.isoformat()
+    data["generated_at"] = (cutoff + timedelta(minutes=1)).isoformat()
     return report_from(data)
 
 
@@ -229,6 +242,74 @@ def test_history_is_immutable_and_latest_is_activated_last(tmp_path):
     assert publication.html_sha256 == draft.html_sha256
 
 
+def test_history_names_keep_seconds_and_distinguish_microsecond_cutoffs(tmp_path):
+    publisher = FileSystemMonitorReportPublisher(tmp_path / "reports")
+    base = empty_report()
+    first = draft_from(
+        report_at(base, datetime(2026, 8, 10, 10, 0, 0, 100000, tzinfo=UTC))
+    )
+    second = draft_from(
+        report_at(base, datetime(2026, 8, 10, 10, 0, 0, 500000, tzinfo=UTC))
+    )
+
+    publisher.publish_history(first)
+    publisher.publish_history(second)
+
+    history = tmp_path / "reports" / str(base.task_id) / "history"
+    assert (history / "20260810-180000-100000.json").exists()
+    assert (history / "20260810-180000-500000.json").exists()
+    assert len(list(history.glob("*.json"))) == 2
+
+
+@pytest.mark.parametrize(
+    "filename",
+    (
+        "20260810-180000.json",
+        "20260810-180000-000001.html",
+        "20260810-180000-999999.json",
+    ),
+)
+def test_managed_history_name_accepts_only_second_or_six_digit_microsecond(filename):
+    assert _MANAGED_HISTORY.fullmatch(filename)
+
+
+@pytest.mark.parametrize(
+    "filename",
+    (
+        "20260810-180000-1.json",
+        "20260810-180000-0000000.html",
+        "20260810-180000-.json",
+        "20260810-180000.tmp",
+    ),
+)
+def test_managed_history_name_rejects_malformed_precision(filename):
+    assert _MANAGED_HISTORY.fullmatch(filename) is None
+
+
+def test_whole_second_compat_artifacts_with_zero_microseconds_can_be_resolved(tmp_path):
+    publisher = FileSystemMonitorReportPublisher(tmp_path / "reports")
+    draft = draft_from(empty_report())
+    publisher.publish_history(draft)
+    history = tmp_path / "reports" / str(draft.payload.task_id) / "history"
+    (history / "20260810-180000.json").rename(
+        history / "20260810-180000-000000.json"
+    )
+    (history / "20260810-180000.html").rename(
+        history / "20260810-180000-000000.html"
+    )
+
+    resolved = publisher.resolve(
+        task_id=str(draft.payload.task_id),
+        run_id=str(draft.payload.run_id),
+        logical_cutoff_at=draft.payload.interval.logical_cutoff_at,
+        reference=draft.report_ref,
+        expected_json_sha256=draft.json_sha256,
+        expected_html_sha256=draft.html_sha256,
+    )
+
+    assert resolved.payload == draft.payload
+
+
 def test_lease_loss_between_fsync_and_replace_publishes_nothing(tmp_path):
     publisher = FileSystemMonitorReportPublisher(tmp_path / "reports")
     draft = draft_from(report_from())
@@ -242,6 +323,18 @@ def test_lease_loss_between_fsync_and_replace_publishes_nothing(tmp_path):
     assert not list(task_dir.rglob("*.json"))
     assert not list(task_dir.rglob("*.html"))
     assert not list(task_dir.rglob(".m3tmp-*.tmp"))
+
+
+def test_same_cutoff_history_conflict_is_deterministic(tmp_path):
+    publisher = FileSystemMonitorReportPublisher(tmp_path / "reports")
+    first = draft_from(empty_report())
+    second = draft_from(report_at(first.payload, first.payload.interval.end_at))
+    publisher.publish_history(first)
+
+    with pytest.raises(MonitorReportPublishError, match="conflicts") as captured:
+        publisher.publish_history(second)
+
+    assert captured.value.retryable is False
 
 
 def test_latest_failure_keeps_old_latest_and_history_is_recoverable(
@@ -284,8 +377,9 @@ def test_directory_access_error_is_a_retryable_publish_error(
         ),
     )
 
-    with pytest.raises(MonitorReportPublishError):
+    with pytest.raises(MonitorReportPublishError) as captured:
         publisher.publish_history(draft)
+    assert captured.value.retryable is True
 
 
 def test_older_retry_never_rolls_latest_back(tmp_path):
@@ -443,6 +537,7 @@ def test_publication_rejects_symlinked_task_directory_when_supported(tmp_path):
         pytest.skip("directory symlink creation is unavailable on this Windows account")
     publisher = FileSystemMonitorReportPublisher(reports)
 
-    with pytest.raises(MonitorReportPublishError, match="ownership"):
+    with pytest.raises(MonitorReportPublishError, match="ownership") as captured:
         publisher.publish_history(draft_from(report))
+    assert captured.value.retryable is False
     assert not list(outside.rglob("*"))

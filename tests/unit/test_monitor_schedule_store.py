@@ -537,11 +537,6 @@ def test_store_terminal_shapes_match_the_frozen_run_contract(state):
             run_id, claim.lease_token, now=clock.value,
             status="failed", errors=[],
         )
-    with pytest.raises(ValueError, match="requires public errors"):
-        store.finish_run(
-            run_id, claim.lease_token, now=clock.value,
-            status="partial", errors=[], **metadata,
-        )
     mismatched = {
         **metadata,
         "summary": {**metadata["summary"], "error_count": 0},
@@ -556,6 +551,38 @@ def test_store_terminal_shapes_match_the_frozen_run_contract(state):
         status="partial", errors=[error], **metadata,
     )
     assert service.public_run(run_id).status == "partial"
+
+
+def test_store_allows_unresolved_only_partial_without_public_errors(state):
+    store, service, clock = state
+    task_id = str(service.create(command(effective_at=at(10, 9))).task_id)
+    run_id = store.list_runs(task_id)[0].run_id
+    claim = store.claim_run(
+        run_id, now=clock.value, lease_for=timedelta(minutes=5), trigger="scheduled"
+    )
+    store.finish_run(
+        run_id,
+        claim.lease_token,
+        now=clock.value,
+        status="partial",
+        errors=[],
+        start_revision=100,
+        end_revision=101,
+        summary={
+            "workbook_count": 1,
+            "changed_workbook_count": 1,
+            "change_count": 1,
+            "error_count": 0,
+        },
+        report_ref="m3r_abcdefghijklmnopqrstuv",
+        report_sha256="a" * 64,
+        report_expires_at=clock.value + timedelta(days=30),
+    )
+
+    run = service.public_run(run_id)
+    assert run.status.value == "partial"
+    assert run.errors == []
+    assert run.summary.error_count == 0
 
 
 def test_concurrent_lease_has_one_winner_and_expired_attempt_recovers(state):

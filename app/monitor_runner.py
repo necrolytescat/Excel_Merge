@@ -56,6 +56,16 @@ class EngineResult:
     publisher: MonitorReportPublisher
 
 
+class MonitorRunComputationFailed(RuntimeError):
+    """The requested interval has no reliable reportable coverage."""
+
+    def __init__(self, errors: tuple[MonitorPublicErrorPayload, ...]):
+        if not errors:
+            raise ValueError("failed monitor computation requires public errors")
+        super().__init__("monitor interval has no reliable coverage")
+        self.errors = errors
+
+
 class MonitorRunEngine(Protocol):
     def execute(self, run: RunRecord, task: TaskRecord, generated_at: datetime) -> EngineResult: ...
 
@@ -93,6 +103,8 @@ class P1MonitorRunEngine:
         attributed = self.attribution_service.attribute(
             net, start_revision=start_revision, commits=commits
         )
+        if attributed.errors and attributed.reliable_workbook_count == 0:
+            raise MonitorRunComputationFailed(attributed.errors)
         task_public = self.task_service.to_public_task(task)
         draft = self.publisher.render(
             run_id=run.run_id,
@@ -195,15 +207,20 @@ class RunnerResult:
 
 def _public_error(error: Exception) -> MonitorPublicErrorPayload:
     if isinstance(error, MonitorReportPublishError):
+        retryable = error.retryable
         return MonitorPublicErrorPayload(
             code=MonitorErrorCode.REPORT_PUBLISH_FAILED,
             stage=MonitorErrorStage.REPORT_PUBLISH,
-            message="报告文件暂时无法发布，运行可重试",
-            retryable=True,
+            message=(
+                "报告文件暂时无法发布，运行可重试"
+                if retryable
+                else "报告产物存在确定性冲突，运行已停止"
+            ),
+            retryable=retryable,
         )
     if isinstance(error, SVNProviderError):
         code = str(error.code).upper()
-        if "TIMEOUT" in code or "NETWORK" in code:
+        if "TIMEOUT" in code or "NETWORK" in code or "NOT_REACHABLE" in code:
             return MonitorPublicErrorPayload(
                 code=MonitorErrorCode.SVN_TIMEOUT,
                 stage=MonitorErrorStage.HISTORY,
@@ -222,6 +239,48 @@ def _public_error(error: Exception) -> MonitorPublicErrorPayload:
                 code=MonitorErrorCode.BRANCH_BINDING_INVALID,
                 stage=MonitorErrorStage.BRANCH_IDENTITY,
                 message="固定 SVN 分支绑定已失效",
+                retryable=False,
+            )
+        if code == "SVN_BRANCH_NOT_FOUND":
+            return MonitorPublicErrorPayload(
+                code=MonitorErrorCode.BRANCH_BINDING_INVALID,
+                stage=MonitorErrorStage.BRANCH_IDENTITY,
+                message="固定 SVN 分支不可用",
+                retryable=False,
+            )
+        if code == "SVN_BRANCH_NOT_FOUND_AT_BOUNDARY":
+            return MonitorPublicErrorPayload(
+                code=MonitorErrorCode.BRANCH_BINDING_INVALID,
+                stage=MonitorErrorStage.HISTORY,
+                message="报告时间边界不在固定分支有效历史内",
+                retryable=False,
+            )
+        if code == "SVN_HISTORY_INVALID":
+            return MonitorPublicErrorPayload(
+                code=MonitorErrorCode.CONFIGURATION_INVALID,
+                stage=MonitorErrorStage.HISTORY,
+                message="固定 SVN 分支历史响应无效",
+                retryable=False,
+            )
+        if code in {"SVN_CLI_NOT_FOUND", "SVN_NOT_FOUND"}:
+            return MonitorPublicErrorPayload(
+                code=MonitorErrorCode.CONFIGURATION_INVALID,
+                stage=MonitorErrorStage.BRANCH_IDENTITY,
+                message="SVN 只读客户端或端点配置无效",
+                retryable=False,
+            )
+        if code in {"SVN_DECODE_ERROR", "SVN_INVALID_REVISION"}:
+            return MonitorPublicErrorPayload(
+                code=MonitorErrorCode.CONFIGURATION_INVALID,
+                stage=MonitorErrorStage.HISTORY,
+                message="固定 SVN 分支历史数据无效",
+                retryable=False,
+            )
+        if code == "SVN_PATH_NOT_FOUND":
+            return MonitorPublicErrorPayload(
+                code=MonitorErrorCode.PARSE_FAILED,
+                stage=MonitorErrorStage.SNAPSHOT,
+                message="固定 Revision 快照路径不可用",
                 retryable=False,
             )
         if "CONFIG" in code or "SCOPE" in code:
@@ -322,12 +381,22 @@ class MonitorRunnerService:
     def _now(self) -> datetime:
         return require_utc(self.clock())
 
+    def _maintain_reports(self, now: datetime) -> None:
+        if self.report_maintenance is None:
+            return
+        for task in self.store.list_tasks():
+            try:
+                self.report_maintenance(task.task_id, now)
+            except Exception:
+                continue
+
     def run_task(self, task_id: str, generation: int) -> RunnerResult:
         UUID(task_id)
+        now = self._now()
+        self._maintain_reports(now)
         task = self.store.get_task(task_id)
         if task is None:
             return RunnerResult(0, 0, 0, 0)
-        now = self._now()
         if task.lifecycle == "active":
             if task.generation != generation:
                 return RunnerResult(0, 0, 0, 0)
@@ -351,12 +420,6 @@ class MonitorRunnerService:
         elif task.lifecycle not in {"active", "paused", "ended"}:
             return RunnerResult(0, 0, 0, 0)
 
-        if self.report_maintenance is not None:
-            try:
-                self.report_maintenance(task_id, now)
-            except OSError:
-                pass
-
         runs = [
             run for run in self.store.list_due_runs(task_id, now)
             if run.status in {"queued", "running"}
@@ -379,6 +442,7 @@ class MonitorRunnerService:
         trigger: Literal["automatic_retry", "manual_retry"] = "manual_retry",
     ) -> RunnerResult:
         UUID(run_id)
+        self._maintain_reports(self._now())
         run = self.store.get_run(run_id)
         if run is None:
             return RunnerResult(0, 0, 0, 0)
@@ -479,7 +543,11 @@ class MonitorRunnerService:
             except MonitorLeaseLost:
                 processed -= 1
             except Exception as error:
-                public = _public_error(error)
+                public_errors = (
+                    list(error.errors)
+                    if isinstance(error, MonitorRunComputationFailed)
+                    else [_public_error(error)]
+                )
                 if finalizing:
                     failed += 1
                     retryable += 1
@@ -490,7 +558,7 @@ class MonitorRunnerService:
                         claim.lease_token,
                         now=self._now(),
                         status="failed",
-                        errors=[public],
+                        errors=public_errors,
                     )
                 except MonitorLeaseLost:
                     processed -= 1
@@ -504,7 +572,10 @@ class MonitorRunnerService:
                     self.store.automatic_retry_count(run.run_id)
                     < MAX_AUTOMATIC_RETRIES
                 )
-                retryable += int(public.retryable and has_retry_budget)
+                retryable += int(
+                    any(public.retryable for public in public_errors)
+                    and has_retry_budget
+                )
         return RunnerResult(processed, succeeded, failed, retryable)
 
 

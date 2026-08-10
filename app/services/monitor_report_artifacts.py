@@ -41,7 +41,22 @@ class FileSystemMonitorReportPublisher:
     def _history_stem(cutoff: datetime) -> str:
         if cutoff.tzinfo is None or cutoff.utcoffset() is None:
             raise ValueError("logical cutoff must include timezone")
-        return cutoff.astimezone(REPORT_TIMEZONE).strftime("%Y%m%d-%H%M%S")
+        local = cutoff.astimezone(REPORT_TIMEZONE)
+        base = local.strftime("%Y%m%d-%H%M%S")
+        return f"{base}-{local.microsecond:06d}" if local.microsecond else base
+
+    @staticmethod
+    def _compat_history_stem(cutoff: datetime) -> str | None:
+        local = cutoff.astimezone(REPORT_TIMEZONE)
+        if local.microsecond != 0:
+            return None
+        return local.strftime("%Y%m%d-%H%M%S-000000")
+
+    @classmethod
+    def _stem_matches_cutoff(cls, stem: str, cutoff: datetime) -> bool:
+        return stem == cls._history_stem(cutoff) or stem == cls._compat_history_stem(
+            cutoff
+        )
 
     def _paths(
         self, task_id: str | UUID, cutoff: datetime
@@ -55,6 +70,32 @@ class FileSystemMonitorReportPublisher:
             task_dir / "latest.html",
         )
 
+    def _history_paths(
+        self, task_id: str | UUID, cutoff: datetime
+    ) -> tuple[Path, Path]:
+        json_path, html_path, _ = self._paths(task_id, cutoff)
+        if (
+            json_path.exists()
+            or json_path.is_symlink()
+            or html_path.exists()
+            or html_path.is_symlink()
+        ):
+            return json_path, html_path
+        compat_stem = self._compat_history_stem(cutoff)
+        if compat_stem is None:
+            return json_path, html_path
+        history = json_path.parent
+        legacy_json = history / f"{compat_stem}.json"
+        legacy_html = history / f"{compat_stem}.html"
+        if (
+            legacy_json.exists()
+            or legacy_json.is_symlink()
+            or legacy_html.exists()
+            or legacy_html.is_symlink()
+        ):
+            return legacy_json, legacy_html
+        return json_path, html_path
+
     def _validate_directories(
         self, task_id: str | UUID, *, create: bool
     ) -> tuple[Path, Path]:
@@ -64,7 +105,8 @@ class FileSystemMonitorReportPublisher:
             if directory.exists() or directory.is_symlink():
                 if directory.is_symlink() or not directory.is_dir():
                     raise MonitorReportPublishError(
-                        "managed report directory ownership is invalid"
+                        "managed report directory ownership is invalid",
+                        retryable=False,
                     )
             elif create:
                 directory.mkdir()
@@ -111,7 +153,9 @@ class FileSystemMonitorReportPublisher:
     ) -> None:
         if path.exists() or path.is_symlink():
             if not self._regular_file(path) or path.read_bytes() != content:
-                raise MonitorReportPublishError("managed report history conflicts")
+                raise MonitorReportPublishError(
+                    "managed report history conflicts", retryable=False
+                )
             return
         self._atomic_write(path, content, ensure_owned=ensure_owned)
 
@@ -119,8 +163,12 @@ class FileSystemMonitorReportPublisher:
     def _latest_lock(self, latest_path: Path) -> Iterator[None]:
         latest_path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = latest_path.parent / ".latest.lock"
-        if lock_path.is_symlink():
-            raise MonitorReportPublishError("latest lock ownership is invalid")
+        if lock_path.is_symlink() or (
+            lock_path.exists() and not self._regular_file(lock_path)
+        ):
+            raise MonitorReportPublishError(
+                "latest lock ownership is invalid", retryable=False
+            )
         with lock_path.open("a+b") as stream:
             stream.seek(0, os.SEEK_END)
             if stream.tell() == 0:
@@ -157,7 +205,7 @@ class FileSystemMonitorReportPublisher:
         report = draft.payload
         try:
             self._validate_directories(report.task_id, create=True)
-            json_path, html_path, _ = self._paths(
+            json_path, html_path = self._history_paths(
                 report.task_id, report.interval.logical_cutoff_at
             )
             self._write_immutable(
@@ -188,12 +236,12 @@ class FileSystemMonitorReportPublisher:
                 if latest_path.exists() or latest_path.is_symlink():
                     if not self._regular_file(latest_path):
                         raise MonitorReportPublishError(
-                            "latest report is not a regular file"
+                            "latest report is not a regular file", retryable=False
                         )
                     current = _decode_embedded_report(latest_path.read_bytes())
                     if current.task_id != report.task_id:
                         raise MonitorReportPublishError(
-                            "latest report ownership mismatch"
+                            "latest report ownership mismatch", retryable=False
                         )
                     if (
                         current.interval.logical_cutoff_at
@@ -206,7 +254,8 @@ class FileSystemMonitorReportPublisher:
                         and current != report
                     ):
                         raise MonitorReportPublishError(
-                            "latest report conflicts at the same cutoff"
+                            "latest report conflicts at the same cutoff",
+                            retryable=False,
                         )
                 self._atomic_write(
                     latest_path,
@@ -215,6 +264,10 @@ class FileSystemMonitorReportPublisher:
                 )
         except MonitorReportPublishError:
             raise
+        except MonitorReportReferenceError as error:
+            raise MonitorReportPublishError(
+                "latest report content is invalid", retryable=False
+            ) from error
         except OSError as error:
             raise MonitorReportPublishError("latest report publication failed") from error
 
@@ -235,7 +288,9 @@ class FileSystemMonitorReportPublisher:
             raise MonitorReportReferenceError(
                 "report directory ownership is invalid"
             ) from error
-        json_path, html_path, _ = self._paths(task_id, logical_cutoff_at)
+        json_path, html_path = self._history_paths(
+            task_id, logical_cutoff_at
+        )
         if not self._regular_file(json_path) or not self._regular_file(html_path):
             raise MonitorReportReferenceError("report artifact is unavailable")
         canonical = json_path.read_bytes()
@@ -340,8 +395,10 @@ class FileSystemMonitorReportPublisher:
                 continue
             if (
                 str(payload.task_id) != task_segment
-                or self._history_stem(payload.interval.logical_cutoff_at)
-                != match.group("stem")
+                or not self._stem_matches_cutoff(
+                    match.group("stem"),
+                    payload.interval.logical_cutoff_at,
+                )
                 or not self.is_expired(
                     payload.generated_at + REPORT_RETENTION, now=now
                 )

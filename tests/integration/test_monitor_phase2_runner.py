@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import csv
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from io import StringIO
+from uuid import uuid4
 
 import pytest
 
 from app.monitor_runner import (
+    EngineResult,
     MonitorRunnerService,
     P1MonitorRunEngine,
     RunnerResult,
+    _public_error,
 )
-from app.schemas.monitor import MonitorReportPayload
+from app.schemas.monitor import (
+    MonitorErrorCode,
+    MonitorErrorStage,
+    MonitorPublicErrorPayload,
+    MonitorReportPayload,
+    MonitorTimeIntervalPayload,
+)
 from app.services.branch_history_service import BranchHistoryService
 from app.services.monitor_attribution_service import MonitorAttributionService
 from app.services.monitor_diff_service import (
@@ -84,6 +93,29 @@ class Reader:
         return self.snapshots[revision]
 
 
+class ScenarioReader:
+    def __init__(self, source: MonitorSnapshot, target: MonitorSnapshot):
+        self.snapshots = {100: source, 101: target}
+
+    def load_snapshot(self, revision):
+        return self.snapshots[revision]
+
+
+def parse_error(*, workbook=None, sheet_name=None, retryable=False):
+    return MonitorPublicErrorPayload(
+        code=MonitorErrorCode.PARSE_FAILED,
+        stage=(
+            MonitorErrorStage.CSV_PARSE
+            if workbook is not None
+            else MonitorErrorStage.SNAPSHOT
+        ),
+        message="固定快照存在公开覆盖错误",
+        retryable=retryable,
+        workbook=workbook,
+        sheet_name=sheet_name,
+    )
+
+
 class HistoryProvider:
     def resolve_branch_identity(self, endpoint):
         return IDENTITY
@@ -123,8 +155,12 @@ def create_task(service):
 
 
 def p1_factory(tasks, publisher):
+    return p1_factory_for_reader(tasks, publisher, Reader())
+
+
+def p1_factory_for_reader(tasks, publisher, reader):
     history = BranchHistoryService(HistoryProvider())
-    diff = MonitorDiffService(Reader())
+    diff = MonitorDiffService(reader)
     return lambda record: P1MonitorRunEngine(
         history=history,
         endpoint=None,
@@ -171,6 +207,283 @@ def test_runner_executes_real_p1_diff_and_attribution_without_web(tmp_path):
     assert report.changes[0].attribution.author == "alice"
     assert report.interval.start_at == instant(9)
     assert report.interval.end_at == instant(10)
+
+
+def test_runner_publishes_unresolved_only_partial_without_invented_error(tmp_path):
+    clock = Clock(instant(10))
+    store = MonitorStore(tmp_path / "unresolved.sqlite3")
+    tasks = MonitorTaskService(store, clock=clock)
+    task = create_task(tasks)
+    publisher = CanonicalJsonReferencePublisher()
+    diff = MonitorDiffService(Reader())
+
+    class UnresolvedOnlyEngine:
+        def __init__(self):
+            self.publisher = publisher
+
+        def execute(self, run, task_record, generated_at):
+            net = diff.compare_revisions(100, 101)
+            draft = publisher.render(
+                run_id=run.run_id,
+                task=tasks.to_public_task(task_record),
+                interval=MonitorTimeIntervalPayload(
+                    start_at=run.start_at,
+                    end_at=run.end_at,
+                    logical_cutoff_at=run.end_at,
+                    boundary_kind=run.boundary_type.value,
+                ),
+                start_revision=100,
+                end_revision=101,
+                workbook_count=net.workbook_count,
+                changes=net.changes,
+                errors=(),
+                generated_at=generated_at,
+            )
+            return EngineResult(draft, publisher)
+
+    runner = MonitorRunnerService(
+        store, tasks, lambda record: UnresolvedOnlyEngine(), clock=clock
+    )
+    result = runner.run_task(str(task.task_id), task.scheduler.generation)
+    run = tasks.public_run(store.list_runs(str(task.task_id))[0].run_id)
+    report = MonitorReportPayload.model_validate_json(
+        publisher.results[run.report_ref]
+    )
+
+    assert result.exit_category == "ok"
+    assert run.status.value == "partial"
+    assert run.errors == []
+    assert run.summary.error_count == 0
+    assert run.attempts[-1].errors == []
+    assert report.status == "partial"
+    assert report.coverage.unattributed_change_count == 1
+    assert report.errors == []
+
+
+@pytest.mark.parametrize(
+    ("source", "target", "expected_error_count"),
+    (
+        (
+            MonitorSnapshot(revision=100, errors=(parse_error(),)),
+            MonitorSnapshot(revision=101, errors=(parse_error(),)),
+            1,
+        ),
+        (
+            MonitorSnapshot(
+                revision=100,
+                workbooks={
+                    "A.xlsm": MonitorWorkbookSnapshot(),
+                    "B.xlsm": MonitorWorkbookSnapshot(),
+                },
+                errors=(
+                    parse_error(workbook="A.xlsm"),
+                    parse_error(workbook="B.xlsm"),
+                ),
+            ),
+            MonitorSnapshot(
+                revision=101,
+                workbooks={
+                    "A.xlsm": MonitorWorkbookSnapshot(),
+                    "B.xlsm": MonitorWorkbookSnapshot(),
+                },
+                errors=(
+                    parse_error(workbook="A.xlsm"),
+                    parse_error(workbook="B.xlsm"),
+                ),
+            ),
+            2,
+        ),
+    ),
+    ids=("global-snapshot-failure", "all-workbooks-failed"),
+)
+def test_completely_failed_coverage_publishes_no_report_or_manifest(
+    tmp_path, source, target, expected_error_count
+):
+    clock = Clock(instant(10))
+    database = tmp_path / "complete-failure" / "monitor.sqlite3"
+    store = MonitorStore(database)
+    tasks = MonitorTaskService(store, clock=clock)
+    task = create_task(tasks)
+    publisher = FileSystemMonitorReportPublisher(database.parent / "reports")
+    runner = MonitorRunnerService(
+        store,
+        tasks,
+        p1_factory_for_reader(tasks, publisher, ScenarioReader(source, target)),
+        clock=clock,
+    )
+
+    result = runner.run_task(str(task.task_id), task.scheduler.generation)
+    run = store.list_runs(str(task.task_id))[0]
+
+    assert result.exit_category == "permanent_failure"
+    assert run.status == "failed"
+    assert len(run.errors) == expected_error_count
+    assert store.get_publication(run.run_id) is None
+    assert not (database.parent / "reports").exists()
+
+
+def test_partial_workbook_failure_publishes_reliable_zero_change_report(tmp_path):
+    clock = Clock(instant(10))
+    database = tmp_path / "partial-coverage" / "monitor.sqlite3"
+    store = MonitorStore(database)
+    tasks = MonitorTaskService(store, clock=clock)
+    task = create_task(tasks)
+    failed = parse_error(workbook="A.xlsm")
+    failed_sheet = parse_error(workbook="B.xlsm", sheet_name="Broken")
+    source = MonitorSnapshot(
+        revision=100,
+        workbooks={
+            "A.xlsm": MonitorWorkbookSnapshot(),
+            "B.xlsm": MonitorWorkbookSnapshot(sheets={"Role": table(100)}),
+        },
+        errors=(failed, failed_sheet),
+    )
+    target = MonitorSnapshot(
+        revision=101,
+        workbooks={
+            "A.xlsm": MonitorWorkbookSnapshot(),
+            "B.xlsm": MonitorWorkbookSnapshot(sheets={"Role": table(100)}),
+        },
+        errors=(failed, failed_sheet),
+    )
+    publisher = FileSystemMonitorReportPublisher(database.parent / "reports")
+    runner = MonitorRunnerService(
+        store,
+        tasks,
+        p1_factory_for_reader(tasks, publisher, ScenarioReader(source, target)),
+        clock=clock,
+    )
+
+    result = runner.run_task(str(task.task_id), task.scheduler.generation)
+    run = tasks.public_run(store.list_runs(str(task.task_id))[0].run_id)
+
+    assert result.exit_category == "ok"
+    assert run.status.value == "partial"
+    assert run.summary.workbook_count == 2
+    assert run.summary.change_count == 0
+    assert run.summary.error_count == 2
+    assert store.get_publication(str(run.run_id)).state == "activated"
+
+
+def test_reliable_zero_change_interval_publishes_succeeded_empty_report(tmp_path):
+    clock = Clock(instant(10))
+    store = MonitorStore(tmp_path / "empty-success.sqlite3")
+    tasks = MonitorTaskService(store, clock=clock)
+    task = create_task(tasks)
+    snapshot = MonitorSnapshot(
+        revision=100,
+        workbooks={
+            "B.xlsm": MonitorWorkbookSnapshot(sheets={"Role": table(100)})
+        },
+    )
+    target = MonitorSnapshot(
+        revision=101,
+        workbooks=snapshot.workbooks,
+    )
+    publisher = CanonicalJsonReferencePublisher()
+    runner = MonitorRunnerService(
+        store,
+        tasks,
+        p1_factory_for_reader(tasks, publisher, ScenarioReader(snapshot, target)),
+        clock=clock,
+    )
+
+    result = runner.run_task(str(task.task_id), task.scheduler.generation)
+    run = tasks.public_run(store.list_runs(str(task.task_id))[0].run_id)
+
+    assert result.exit_category == "ok"
+    assert run.status.value == "succeeded"
+    assert run.summary.change_count == 0
+    assert run.summary.error_count == 0
+
+
+def test_each_runner_entry_cleans_all_tasks_and_isolates_one_task_failure(tmp_path):
+    clock = Clock(instant(10))
+    database = tmp_path / "retention" / "monitor.sqlite3"
+    store = MonitorStore(database)
+    tasks = MonitorTaskService(store, clock=clock)
+    bad = create_task(tasks)
+    tasks.end(str(bad.task_id))
+    ended = create_task(tasks)
+    tasks.end(str(ended.task_id))
+    publisher = FileSystemMonitorReportPublisher(database.parent / "reports")
+    old_cutoff = instant(10)
+    ended_record = store.get_task(str(ended.task_id))
+    old = publisher.render(
+        run_id=str(uuid4()),
+        task=tasks.to_public_task(ended_record),
+        interval=MonitorTimeIntervalPayload(
+            start_at=old_cutoff - timedelta(hours=1),
+            end_at=old_cutoff,
+            logical_cutoff_at=old_cutoff,
+            boundary_kind="end",
+        ),
+        start_revision=100,
+        end_revision=101,
+        workbook_count=0,
+        changes=(),
+        errors=(),
+        generated_at=old_cutoff,
+    )
+    publisher.publish_history(old)
+    old_json = (
+        database.parent
+        / "reports"
+        / str(ended.task_id)
+        / "history"
+        / "20260810-180000.json"
+    )
+    assert old_json.exists()
+
+    clock.value = datetime(2026, 9, 10, 10, tzinfo=UTC)
+    active = tasks.create(
+        CreateMonitorTask(
+            name="Current daily",
+            endpoint_id="kr-fix",
+            branch_label="KR Fix",
+            repository_uuid=IDENTITY.repository_uuid,
+            canonical_url=IDENTITY.canonical_url,
+            repository_relative_path=IDENTITY.repository_relative_path,
+            bound_revision=101,
+            copy_boundary_revision=90,
+            effective_at=clock.value - timedelta(hours=1),
+            daily_trigger_time=time(18),
+        )
+    )
+    maintained = []
+
+    def maintain(task_id, now):
+        maintained.append(task_id)
+        if task_id == str(bad.task_id):
+            raise PermissionError("one task is locked")
+        publisher.cleanup_expired(task_id, now=now)
+
+    runner = MonitorRunnerService(
+        store,
+        tasks,
+        p1_factory(tasks, publisher),
+        clock=clock,
+        report_maintenance=maintain,
+    )
+
+    result = runner.run_task(str(active.task_id), active.scheduler.generation)
+
+    assert result.exit_category == "ok"
+    expected_tasks = {
+        str(bad.task_id),
+        str(ended.task_id),
+        str(active.task_id),
+    }
+    assert len(maintained) == 3
+    assert set(maintained) == expected_tasks
+    assert not old_json.exists()
+
+    tasks.end(str(active.task_id))
+    assert {task.lifecycle for task in store.list_tasks()} == {"ended"}
+    maintained.clear()
+    runner.run_run(str(uuid4()))
+    assert len(maintained) == 3
+    assert set(maintained) == expected_tasks
 
 
 def test_filesystem_runner_publishes_history_latest_and_activated_manifest(tmp_path):
@@ -479,6 +792,108 @@ def test_permanent_task_failure_is_not_automatically_retried(tmp_path):
     assert runner.run_task(str(task.task_id), task.scheduler.generation).exit_category == "permanent_failure"
     assert runner.run_task(str(task.task_id), task.scheduler.generation).exit_category == "noop"
     assert tasks.public_run(store.list_runs(str(task.task_id))[0].run_id).attempt_count == 1
+
+
+@pytest.mark.parametrize(
+    ("error", "code", "stage", "retryable"),
+    (
+        (
+            MonitorReportPublishError("locked"),
+            "MONITOR_REPORT_PUBLISH_FAILED",
+            "report_publish",
+            True,
+        ),
+        (
+            MonitorReportPublishError("same-cutoff conflict", retryable=False),
+            "MONITOR_REPORT_PUBLISH_FAILED",
+            "report_publish",
+            False,
+        ),
+        (
+            SVNProviderError("SVN_BRANCH_NOT_FOUND", "private URL"),
+            "MONITOR_BRANCH_BINDING_INVALID",
+            "branch_identity",
+            False,
+        ),
+        (
+            SVNProviderError("SVN_BRANCH_NOT_FOUND_AT_BOUNDARY", "private revision"),
+            "MONITOR_BRANCH_BINDING_INVALID",
+            "history",
+            False,
+        ),
+        (
+            SVNProviderError("SVN_HISTORY_INVALID", "private XML"),
+            "MONITOR_CONFIGURATION_INVALID",
+            "history",
+            False,
+        ),
+        (
+            SVNProviderError("SVN_CLI_NOT_FOUND", "private executable"),
+            "MONITOR_CONFIGURATION_INVALID",
+            "branch_identity",
+            False,
+        ),
+        (
+            SVNProviderError("SVN_NOT_FOUND", "private endpoint"),
+            "MONITOR_CONFIGURATION_INVALID",
+            "branch_identity",
+            False,
+        ),
+        (
+            SVNProviderError("SVN_DECODE_ERROR", "private XML"),
+            "MONITOR_CONFIGURATION_INVALID",
+            "history",
+            False,
+        ),
+        (
+            SVNProviderError("SVN_INVALID_REVISION", "private revision"),
+            "MONITOR_CONFIGURATION_INVALID",
+            "history",
+            False,
+        ),
+        (
+            SVNProviderError("SVN_PATH_NOT_FOUND", "private path"),
+            "MONITOR_PARSE_FAILED",
+            "snapshot",
+            False,
+        ),
+    ),
+)
+def test_public_error_mapping_preserves_stage_retryability_and_redacts_details(
+    error, code, stage, retryable
+):
+    public = _public_error(error)
+
+    assert public.code.value == code
+    assert public.stage.value == stage
+    assert public.retryable is retryable
+    assert "private" not in public.message
+    assert "conflict" not in public.message
+
+
+def test_deterministic_publish_conflict_is_not_automatically_retried(tmp_path):
+    clock = Clock(instant(10))
+    store = MonitorStore(tmp_path / "publish-conflict.sqlite3")
+    tasks = MonitorTaskService(store, clock=clock)
+    task = create_task(tasks)
+
+    class ConflictEngine:
+        def execute(self, run, task_record, generated_at):
+            raise MonitorReportPublishError("private ownership", retryable=False)
+
+    runner = MonitorRunnerService(
+        store, tasks, lambda record: ConflictEngine(), clock=clock
+    )
+
+    first = runner.run_task(str(task.task_id), task.scheduler.generation)
+    second = runner.run_task(str(task.task_id), task.scheduler.generation)
+    run = tasks.public_run(store.list_runs(str(task.task_id))[0].run_id)
+
+    assert first.exit_category == "permanent_failure"
+    assert second.exit_category == "noop"
+    assert run.attempt_count == 1
+    assert run.errors[0].retryable is False
+    assert "private" not in run.errors[0].message
 
 
 def test_exit_category_depends_on_remaining_retryable_failures():

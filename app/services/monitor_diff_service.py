@@ -44,6 +44,7 @@ class MonitorSnapshot:
 @dataclass(frozen=True)
 class MonitorNetDiff:
     workbook_count: int
+    reliable_workbook_count: int
     changes: tuple[MonitorChangePayload, ...]
     errors: tuple[MonitorPublicErrorPayload, ...]
 
@@ -85,13 +86,28 @@ def _public_svn_error(
     workbook: str | None = None,
     sheet_name: str | None = None,
 ) -> MonitorPublicErrorPayload:
-    if error.code == "SVN_TIMEOUT":
+    provider_code = str(error.code).upper()
+    if any(
+        marker in provider_code
+        for marker in ("TIMEOUT", "NETWORK", "NOT_REACHABLE")
+    ):
         code = MonitorErrorCode.SVN_TIMEOUT
         message = "固定 Revision 快照读取超时"
         retryable = True
-    elif error.code == "SVN_AUTH_FAILED":
+    elif "AUTH" in provider_code:
         code = MonitorErrorCode.SVN_AUTH_FAILED
         message = "固定 Revision 快照认证失败"
+        retryable = False
+    elif "BRANCH_NOT_FOUND" in provider_code or "BINDING" in provider_code:
+        code = MonitorErrorCode.BRANCH_BINDING_INVALID
+        message = "固定 Revision 对应的分支绑定已失效"
+        retryable = False
+    elif any(
+        marker in provider_code
+        for marker in ("CLI_NOT_FOUND", "HISTORY_INVALID", "DECODE_ERROR")
+    ):
+        code = MonitorErrorCode.CONFIGURATION_INVALID
+        message = "固定 Revision 快照读取配置无效"
         retryable = False
     else:
         code = MonitorErrorCode.PARSE_FAILED
@@ -303,7 +319,39 @@ class MonitorDiffService:
         )
         failed_workbooks = cls._failed_workbooks(source) | cls._failed_workbooks(target)
         failed_sheets = cls._failed_sheets(source) | cls._failed_sheets(target)
+        all_errors = source.errors + target.errors
+        unique_errors = {
+            (
+                error.code,
+                error.stage,
+                error.message,
+                error.retryable,
+                error.workbook,
+                error.sheet_name,
+            ): error
+            for error in all_errors
+        }
+        errors = tuple(
+            sorted(
+                unique_errors.values(),
+                key=lambda error: (
+                    error.workbook or "",
+                    error.sheet_name or "",
+                    error.stage.value,
+                    error.message,
+                ),
+            )
+        )
+        if any(error.workbook is None for error in all_errors):
+            return MonitorNetDiff(
+                workbook_count=len(workbook_names),
+                reliable_workbook_count=0,
+                changes=(),
+                errors=errors,
+            )
+
         changes: list[MonitorChangePayload] = []
+        reliable_workbooks: set[str] = set()
         for workbook in workbook_names:
             if workbook in failed_workbooks:
                 continue
@@ -312,6 +360,9 @@ class MonitorDiffService:
             source_sheets = source_workbook.sheets if source_workbook is not None else {}
             target_sheets = target_workbook.sheets if target_workbook is not None else {}
             sheet_names = sorted(set(source_sheets) | set(target_sheets), key=str.casefold)
+            workbook_has_error = any(error.workbook == workbook for error in all_errors)
+            if not sheet_names and not workbook_has_error:
+                reliable_workbooks.add(workbook)
             for sheet_name in sheet_names:
                 if (workbook, sheet_name) in failed_sheets:
                     continue
@@ -320,6 +371,7 @@ class MonitorDiffService:
                 semantic = diff_table_csv(source_table, target_table)
                 if not semantic.primary_key:
                     continue
+                reliable_workbooks.add(workbook)
                 for field_diff in semantic.fields:
                     change_type = {
                         "source_only": MonitorChangeType.FIELD_REMOVED,
@@ -423,30 +475,9 @@ class MonitorDiffService:
                 change.field_name or "",
             )
         )
-        unique_errors = {
-            (
-                error.code,
-                error.stage,
-                error.message,
-                error.retryable,
-                error.workbook,
-                error.sheet_name,
-            ): error
-            for error in source.errors + target.errors
-        }
-        errors = tuple(
-            sorted(
-                unique_errors.values(),
-                key=lambda error: (
-                    error.workbook or "",
-                    error.sheet_name or "",
-                    error.stage.value,
-                    error.message,
-                ),
-            )
-        )
         return MonitorNetDiff(
             workbook_count=len(workbook_names),
+            reliable_workbook_count=len(reliable_workbooks),
             changes=tuple(changes),
             errors=errors,
         )

@@ -60,6 +60,16 @@ def make_run(status: str) -> dict:
     if status == "failed":
         run["status"] = "failed"
         run["attempts"][-1]["status"] = "failed"
+        error = {
+            "code": "MONITOR_PARSE_FAILED",
+            "stage": "csv_parse",
+            "message": "一个工作簿的 TableCsv 无法按冻结规则解析",
+            "retryable": False,
+            "workbook": "BrokenConfig.xlsm",
+            "sheet_name": "Broken",
+        }
+        run["attempts"][-1]["errors"] = [error]
+        run["errors"] = [error]
         return run
     if status == "running":
         run["status"] = "running"
@@ -133,7 +143,7 @@ def test_monitor_contracts_reject_unknown_nested_fields_and_internal_diagnostics
     with pytest.raises(ValidationError):
         MonitorTaskPayload.model_validate(task)
 
-    run = load_json(CONTRACTS / "m3.monitor-run.v1.example.json")
+    run = make_run("failed")
     run["errors"][0]["stderr"] = "private command output"
     with pytest.raises(ValidationError):
         MonitorRunPayload.model_validate(run)
@@ -328,6 +338,10 @@ def test_monitor_run_rejects_final_status_that_disagrees_with_last_attempt():
 
 def test_monitor_run_rejects_public_errors_that_disagree_with_last_attempt():
     run = make_run("partial")
+    error = make_run("failed")["errors"][0]
+    run["errors"] = [deepcopy(error)]
+    run["attempts"][-1]["errors"] = [deepcopy(error)]
+    run["summary"]["error_count"] = 1
     run["errors"][0]["message"] = "与最终 attempt 不一致的错误"
 
     with pytest.raises(ValidationError):
@@ -336,7 +350,26 @@ def test_monitor_run_rejects_public_errors_that_disagree_with_last_attempt():
 
 def test_monitor_run_rejects_summary_error_count_that_disagrees_with_errors():
     run = make_run("partial")
-    run["summary"]["error_count"] = 0
+    run["summary"]["error_count"] = 1
+
+    with pytest.raises(ValidationError):
+        MonitorRunPayload.model_validate(run)
+
+
+def test_unresolved_only_partial_run_is_valid_without_public_errors():
+    run = make_run("partial")
+
+    payload = MonitorRunPayload.model_validate(run)
+
+    assert payload.errors == []
+    assert payload.attempts[-1].errors == []
+    assert payload.summary.error_count == 0
+
+
+def test_failed_run_and_attempt_still_require_public_errors():
+    run = make_run("failed")
+    run["errors"] = []
+    run["attempts"][-1]["errors"] = []
 
     with pytest.raises(ValidationError):
         MonitorRunPayload.model_validate(run)

@@ -4,6 +4,7 @@ import csv
 from io import BytesIO, StringIO
 
 from openpyxl import Workbook
+import pytest
 
 from app.services.monitor_diff_service import MonitorDiffService, SvnMonitorSnapshotReader
 from app.services.workbook_diff_service import DatasetLayout
@@ -65,8 +66,17 @@ class History:
 
 
 class FailingHistory(History):
+    def __init__(self, files, code="SVN_TIMEOUT"):
+        super().__init__(files)
+        self.code = code
+
     def list_paths_at_revision(self, identity, revision):
-        raise SVNProviderError("SVN_TIMEOUT", "private timeout details")
+        raise SVNProviderError(self.code, "private transport details")
+
+
+class FailingReadHistory(History):
+    def read_path_bytes_at_revision(self, identity, path, revision):
+        raise SVNProviderError("SVN_NOT_REACHABLE", "private transport details")
 
 
 def _layout():
@@ -133,7 +143,10 @@ def test_svn_snapshot_reader_reuses_m2_pairing_and_isolates_parse_failures():
     assert not any("Missing.csv" in path for path, _ in history.reads)
 
 
-def test_svn_snapshot_reader_preserves_retryable_transport_error_classification():
+@pytest.mark.parametrize("provider_code", ("SVN_TIMEOUT", "SVN_NOT_REACHABLE"))
+def test_svn_snapshot_reader_preserves_retryable_transport_error_classification(
+    provider_code,
+):
     identity = BranchIdentity(
         canonical_url="https://svn.example/repo/branches/foo",
         repository_root="https://svn.example/repo",
@@ -142,7 +155,7 @@ def test_svn_snapshot_reader_preserves_retryable_transport_error_classification(
         bound_revision=110,
     )
     reader = SvnMonitorSnapshotReader(
-        FailingHistory({}),
+        FailingHistory({}, provider_code),
         identity,
         _layout(),
         table_directory="Source/Table",
@@ -154,3 +167,35 @@ def test_svn_snapshot_reader_preserves_retryable_transport_error_classification(
     assert snapshot.errors[0].code.value == "MONITOR_SVN_TIMEOUT"
     assert snapshot.errors[0].stage.value == "snapshot"
     assert snapshot.errors[0].retryable is True
+
+
+def test_svn_snapshot_read_transport_failure_remains_retryable():
+    identity = BranchIdentity(
+        canonical_url="https://svn.example/repo/branches/foo",
+        repository_root="https://svn.example/repo",
+        repository_uuid="20000000-0000-4000-8000-000000000001",
+        repository_relative_path="branches/foo",
+        bound_revision=110,
+    )
+    history = FailingReadHistory(
+        {
+            110: {
+                "Source/Table/Combat.xlsm": _workbook_bytes(),
+                "Source/TableCsv/Role.csv": _csv_bytes([("1", "100")]),
+            }
+        }
+    )
+    reader = SvnMonitorSnapshotReader(
+        history,
+        identity,
+        _layout(),
+        table_directory="Source/Table",
+    )
+
+    snapshot = reader.load_snapshot(110)
+
+    assert len(snapshot.errors) == 1
+    assert snapshot.errors[0].code.value == "MONITOR_SVN_TIMEOUT"
+    assert snapshot.errors[0].stage.value == "snapshot"
+    assert snapshot.errors[0].retryable is True
+    assert snapshot.errors[0].workbook == "Combat.xlsm"

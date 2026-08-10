@@ -365,12 +365,13 @@ class MonitorRunAttemptPayload(StrictMonitorPayload):
             raise ValueError("only terminal attempts have finished_at")
         if self.finished_at is not None and self.finished_at < self.started_at:
             raise ValueError("attempt finished_at cannot precede started_at")
-        incomplete = self.status in {
-            MonitorAttemptStatus.PARTIAL,
-            MonitorAttemptStatus.FAILED,
-        }
-        if incomplete != bool(self.errors):
-            raise ValueError("only partial or failed attempts contain public errors")
+        if self.status in {
+            MonitorAttemptStatus.RUNNING,
+            MonitorAttemptStatus.SUCCEEDED,
+        } and self.errors:
+            raise ValueError("running or succeeded attempts cannot contain public errors")
+        if self.status == MonitorAttemptStatus.FAILED and not self.errors:
+            raise ValueError("failed attempts require public errors")
         return self
 
 
