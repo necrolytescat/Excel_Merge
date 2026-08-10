@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -37,7 +37,13 @@ from app.services.monitor_store import (
     RunRecord,
     TaskRecord,
 )
-from app.services.monitor_schedule import require_utc
+from app.services.monitor_schedule import (
+    BoundarySpec,
+    MonitorScheduleError,
+    next_scheduled_cutoff,
+    require_utc,
+    scheduled_boundaries,
+)
 from app.services.monitor_task_service import MonitorTaskService
 from app.services.windows_scheduler import (
     MonitorSchedulerService,
@@ -70,6 +76,20 @@ class MonitorRunComputationFailed(RuntimeError):
             raise ValueError("failed monitor computation requires public errors")
         super().__init__("monitor interval has no reliable coverage")
         self.errors = errors
+
+
+class MonitorRunnerConfigurationError(RuntimeError):
+    """A deterministic local configuration failure with no public details."""
+
+
+class ConfigurationFailureEngine:
+    def __init__(self, errors: tuple[MonitorPublicErrorPayload, ...]):
+        self.errors = errors
+
+    def execute(
+        self, run: RunRecord, task: TaskRecord, generated_at: datetime
+    ) -> EngineResult:
+        raise MonitorRunComputationFailed(self.errors)
 
 
 class MonitorRunEngine(Protocol):
@@ -204,6 +224,8 @@ class RunnerResult:
 
     @property
     def exit_category(self) -> Literal["ok", "temporary_failure", "permanent_failure", "noop"]:
+        if self.processed == 0 and self.retryable_failures:
+            return "temporary_failure"
         if self.processed == 0:
             return "noop"
         if self.failed == 0:
@@ -223,6 +245,20 @@ class MaintenanceResult:
 
 
 def _public_error(error: Exception) -> MonitorPublicErrorPayload:
+    if isinstance(error, MonitorRunnerConfigurationError):
+        return MonitorPublicErrorPayload(
+            code=MonitorErrorCode.CONFIGURATION_INVALID,
+            stage=MonitorErrorStage.SNAPSHOT,
+            message="监控运行配置无效",
+            retryable=False,
+        )
+    if isinstance(error, MonitorScheduleError):
+        return MonitorPublicErrorPayload(
+            code=MonitorErrorCode.CONFIGURATION_INVALID,
+            stage=MonitorErrorStage.SNAPSHOT,
+            message="监控时间边界配置无效",
+            retryable=False,
+        )
     if isinstance(error, MonitorReportPublishError):
         retryable = error.retryable
         return MonitorPublicErrorPayload(
@@ -422,6 +458,55 @@ class MonitorRunnerService:
                 self.task_service.materialize_due(task_id, now=now)
             except MonitorStateConflict:
                 return RunnerResult(0, 0, 0, 0)
+            except MonitorScheduleError as error:
+                existing = [
+                    run
+                    for run in self.store.list_due_runs(task_id, now)
+                    if run.generation == task.generation
+                    and (
+                        run.status in {"queued", "running"}
+                        or (
+                            run.status == "failed"
+                            and any(public.retryable for public in run.errors)
+                            and self.store.automatic_retry_count(run.run_id)
+                            < MAX_AUTOMATIC_RETRIES
+                        )
+                    )
+                ]
+                try:
+                    failure_runs = self._materialization_failure_runs(task, now)
+                except Exception:
+                    return RunnerResult(0, 0, 0, 1)
+                existing_ids = {run.run_id for run in existing}
+                failure_runs = [
+                    run for run in failure_runs if run.run_id not in existing_ids
+                ]
+                if not existing and not failure_runs:
+                    return RunnerResult(0, 0, 0, 0)
+                self.store.heartbeat(task_id, now)
+                normal_result = (
+                    self._execute(existing, None)
+                    if existing
+                    else RunnerResult(0, 0, 0, 0)
+                )
+                failure_result = (
+                    self._execute(
+                        failure_runs,
+                        None,
+                        failure_errors=(_public_error(error),),
+                    )
+                    if failure_runs
+                    else RunnerResult(0, 0, 0, 0)
+                )
+                return RunnerResult(
+                    normal_result.processed + failure_result.processed,
+                    normal_result.succeeded + failure_result.succeeded,
+                    normal_result.failed + failure_result.failed,
+                    normal_result.retryable_failures
+                    + failure_result.retryable_failures,
+                )
+            except Exception:
+                return RunnerResult(0, 0, 0, 1)
             task = self.store.get_task(task_id)
             if task is None:
                 return RunnerResult(0, 0, 0, 0)
@@ -472,6 +557,76 @@ class MonitorRunnerService:
         self.store.heartbeat(task_id, now)
         return self._execute(runs, None)
 
+    def _materialization_failure_runs(
+        self, task: TaskRecord, now: datetime
+    ) -> list[RunRecord]:
+        anchor = max(
+            self.store.latest_boundary(task.task_id).boundary_at,
+            task.schedule_effective_at,
+        )
+        if anchor >= now:
+            return []
+        trigger = time.fromisoformat(task.daily_trigger_time)
+        cutoff = next_scheduled_cutoff(
+            after=anchor,
+            trigger=trigger,
+            end_at=task.end_at,
+        )
+        if cutoff is None or cutoff > now:
+            return []
+        candidates = scheduled_boundaries(
+            after=anchor,
+            due_at=cutoff,
+            trigger=trigger,
+            generation=task.generation,
+            end_at=task.end_at,
+        )
+        if not candidates:
+            return []
+        first = candidates[0]
+        failure_boundary = BoundarySpec(
+            first.boundary_at,
+            first.boundary_type,
+            task.generation,
+            "materialization_failure",
+        )
+        final_end = task.end_at is not None and first.boundary_at == task.end_at
+        try:
+            if final_end:
+                self.store.transition_task(
+                    task.task_id,
+                    boundaries=[failure_boundary],
+                    updates={
+                        "lifecycle": "ended",
+                        "generation": task.generation + 1,
+                        "scheduler_desired_state": "disabled",
+                        "scheduler_sync_status": "pending",
+                        "scheduler_error": None,
+                        "ended_at": task.end_at,
+                        "ended_reason": "configured",
+                    },
+                    now=now,
+                    expected_generation=task.generation,
+                    expected_lifecycle="active",
+                )
+            else:
+                self.store.append_boundaries(
+                    task.task_id,
+                    [failure_boundary],
+                    now,
+                    expected_generation=task.generation,
+                    expected_lifecycle="active",
+                )
+        except MonitorStateConflict:
+            pass
+        return [
+            run
+            for run in self.store.list_due_runs(task.task_id, now)
+            if run.end_at == failure_boundary.boundary_at
+            and run.generation == task.generation
+            and run.status in {"queued", "running"}
+        ]
+
     def run_run(
         self,
         run_id: str,
@@ -485,7 +640,13 @@ class MonitorRunnerService:
             return RunnerResult(0, 0, 0, 0)
         return self._execute([run], trigger)
 
-    def _execute(self, runs: list[RunRecord], trigger: str | None) -> RunnerResult:
+    def _execute(
+        self,
+        runs: list[RunRecord],
+        trigger: str | None,
+        *,
+        failure_errors: tuple[MonitorPublicErrorPayload, ...] | None = None,
+    ) -> RunnerResult:
         processed = succeeded = failed = retryable = 0
         for run in runs:
             now = self._now()
@@ -511,6 +672,8 @@ class MonitorRunnerService:
                     clock=self.clock,
                     lease_duration=self.lease_duration,
                 ) as lease:
+                    if failure_errors is not None:
+                        raise MonitorRunComputationFailed(failure_errors)
                     engine = self.engine_factory(task)
                     publisher = getattr(engine, "publisher", None)
                     result = None
@@ -621,27 +784,31 @@ def build_runner(
     database_path: str | Path = DEFAULT_DATABASE_PATH,
     config_path: str | Path = DEFAULT_CONFIG_PATH,
 ) -> MonitorRunnerService:
-    config = ConfigStore(Path(config_path)).read()
-    dataset = config.get("dataset_layout")
-    if not isinstance(dataset, dict):
-        raise RuntimeError("dataset_layout is required for the monitor runner")
-    provider = provider_from_config(config)
     store = MonitorStore(database_path)
     tasks = MonitorTaskService(store)
     publisher = FileSystemMonitorReportPublisher(
         Path(database_path).parent / "reports"
     )
-    history = BranchHistoryService(provider)
-    workbook_source = dict(dataset["workbook_source"])
-    csv_export = dict(dataset["csv_export"])
-    factory = P1MonitorRunEngineFactory(
-        history=history,
-        layout=DatasetLayout.from_config(dataset),
-        table_directory_name=str(workbook_source["directory_name"]),
-        csv_directory_name=str(csv_export["directory_name"]),
-        publisher=publisher,
-        task_service=tasks,
-    )
+    try:
+        config = ConfigStore(Path(config_path)).read()
+        dataset = config.get("dataset_layout")
+        if not isinstance(dataset, dict):
+            raise MonitorRunnerConfigurationError
+        provider = provider_from_config(config)
+        history = BranchHistoryService(provider)
+        workbook_source = dict(dataset["workbook_source"])
+        csv_export = dict(dataset["csv_export"])
+        factory: MonitorRunEngineFactory = P1MonitorRunEngineFactory(
+            history=history,
+            layout=DatasetLayout.from_config(dataset),
+            table_directory_name=str(workbook_source["directory_name"]),
+            csv_directory_name=str(csv_export["directory_name"]),
+            publisher=publisher,
+            task_service=tasks,
+        )
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError, SVNProviderError):
+        errors = (_public_error(MonitorRunnerConfigurationError()),)
+        factory = lambda task: ConfigurationFailureEngine(errors)
     return MonitorRunnerService(
         store,
         tasks,

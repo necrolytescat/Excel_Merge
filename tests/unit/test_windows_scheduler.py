@@ -6,10 +6,13 @@ import json
 from pathlib import Path
 import tempfile
 from uuid import uuid4
+import xml.etree.ElementTree as ET
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from app.monitor_runner import (
+    MonitorRunnerService,
     main as runner_main,
     reconcile_inactive_scheduler,
     run_maintenance,
@@ -27,8 +30,10 @@ from app.services.monitor_report_service import (
     render_monitor_report_html,
     report_reference,
 )
-from app.services.monitor_store import MonitorStore
+from app.services.monitor_store import MonitorStateConflict, MonitorStore
+from app.services.monitor_schedule import BoundarySpec, MonitorScheduleError
 from app.services.monitor_task_service import CreateMonitorTask, MonitorTaskService
+from core.svn_provider import SVNProviderError
 from app.services.windows_scheduler import (
     MAINTENANCE_TASK_NAME,
     MONITOR_TASK_PREFIX,
@@ -36,6 +41,7 @@ from app.services.windows_scheduler import (
     MULTIPLE_INSTANCES_POLICY,
     RESTART_COUNT,
     RESTART_INTERVAL,
+    TASK_NAMESPACE,
     FakeSchedulerGateway,
     MonitorSchedulerService,
     ScheduledMonitorTaskService,
@@ -45,6 +51,7 @@ from app.services.windows_scheduler import (
     monitor_task_name,
     parse_scheduler_task_xml,
     scheduler_task_xml,
+    validate_scheduler_task,
 )
 
 
@@ -52,7 +59,14 @@ UTC = timezone.utc
 NOW = datetime(2026, 8, 10, 9, 0, tzinfo=UTC)
 
 
-def command(*, task_id=None, name="QA daily", trigger=time(18), end_at=None):
+def command(
+    *,
+    task_id=None,
+    name="QA daily",
+    trigger=time(18),
+    end_at=None,
+    effective_at=None,
+):
     return CreateMonitorTask(
         task_id=task_id or str(uuid4()),
         name=name,
@@ -63,7 +77,7 @@ def command(*, task_id=None, name="QA daily", trigger=time(18), end_at=None):
         repository_relative_path="branches/kr-fix",
         bound_revision=101,
         copy_boundary_revision=90,
-        effective_at=NOW - timedelta(hours=1),
+        effective_at=effective_at or NOW - timedelta(hours=1),
         daily_trigger_time=trigger,
         end_at=end_at,
     )
@@ -477,6 +491,50 @@ def test_structured_xml_and_action_reject_injection_and_hold_frozen_settings(tmp
         scheduler.maintenance_expected(name="Unsafe & task")
 
 
+@pytest.mark.parametrize(
+    ("path", "attribute", "value", "drift_fields"),
+    (
+        (".//t:CalendarTrigger/t:Enabled", None, "false", ("daily_trigger_enabled",)),
+        (".//t:LogonTrigger/t:Enabled", None, "false", ("login_trigger_enabled",)),
+        (
+            ".//t:LogonTrigger/t:UserId",
+            None,
+            "S-1-5-21-OTHER",
+            ("login_trigger_user_id",),
+        ),
+        (".//t:TimeTrigger/t:Enabled", None, "false", ("end_trigger_enabled",)),
+        (".//t:Principal/t:LogonType", None, "Password", ("logon_type",)),
+        (".//t:Principal/t:RunLevel", None, "HighestAvailable", ("run_level",)),
+        (
+            ".//t:Actions",
+            "Context",
+            "OtherPrincipal",
+            ("actions_context", "principal_binding"),
+        ),
+        (".//t:Principal", "id", "OtherPrincipal", ("principal_binding",)),
+    ),
+)
+def test_xml_trigger_and_principal_drift_is_detected(
+    tmp_path, path, attribute, value, drift_fields
+):
+    store, tasks, gateway, scheduler, lifecycle = services(tmp_path)
+    created = lifecycle.create(command(end_at=NOW + timedelta(hours=1)))
+    expected = scheduler.expected(store.get_task(str(created.task_id)))
+    root = ET.fromstring(scheduler_task_xml(expected))
+    element = root.find(path, {"t": TASK_NAMESPACE})
+    assert element is not None
+    if attribute is None:
+        element.text = value
+    else:
+        element.set(attribute, value)
+    actual = parse_scheduler_task_xml(
+        expected.name,
+        ET.tostring(root, encoding="utf-16", xml_declaration=True),
+    )
+
+    assert validate_scheduler_task(expected, actual).drift_fields == drift_fields
+
+
 def test_configured_end_has_exact_one_time_trigger_and_terminal_cleanup(tmp_path):
     store, tasks, gateway, scheduler, lifecycle = services(tmp_path)
     end_at = NOW + timedelta(hours=1)
@@ -558,6 +616,419 @@ def test_maintenance_cli_does_not_read_missing_application_config(tmp_path):
         ]
     ) == 0
     assert database.exists()
+
+
+def _pending_cli_task(tmp_path):
+    now = datetime.now(UTC).replace(microsecond=0)
+    cutoff = now - timedelta(minutes=5)
+    created_at = cutoff - timedelta(minutes=5)
+    effective_at = cutoff - timedelta(minutes=10)
+    trigger = cutoff.astimezone(ZoneInfo("Asia/Shanghai")).time().replace(tzinfo=None)
+    database = tmp_path / "runner-state" / "monitor.sqlite3"
+    store = MonitorStore(database)
+    tasks = MonitorTaskService(store, clock=lambda: created_at)
+    task = tasks.create(command(trigger=trigger, effective_at=effective_at))
+    assert store.list_runs(str(task.task_id)) == []
+    return database, task, cutoff
+
+
+def test_scheduler_runner_missing_config_materializes_and_records_permanent_failure(
+    tmp_path, monkeypatch, capsys
+):
+    database, task, cutoff = _pending_cli_task(tmp_path)
+    config = tmp_path / "private-missing-settings.json"
+    provider_calls = []
+    monkeypatch.setattr(
+        "app.monitor_runner.provider_from_config",
+        lambda value: provider_calls.append(value),
+    )
+
+    assert runner_main(
+        [
+            "--task-id",
+            str(task.task_id),
+            "--generation",
+            str(task.scheduler.generation),
+            "--database",
+            str(database),
+            "--config",
+            str(config),
+            "--scheduler-managed",
+        ]
+    ) == 0
+
+    store = MonitorStore(database)
+    runs = store.list_runs(str(task.task_id))
+    assert len(runs) == 1
+    run = runs[0]
+    assert run.end_at == cutoff
+    assert run.status == "failed"
+    assert run.attempt_count == 1
+    assert run.errors[0].code.value == "MONITOR_CONFIGURATION_INVALID"
+    assert run.errors[0].stage.value == "snapshot"
+    assert run.errors[0].retryable is False
+    assert run.report_ref is None
+    assert store.attempts(run.run_id)[0]["trigger"] == "scheduled"
+    assert provider_calls == []
+    captured = capsys.readouterr()
+    public_output = captured.out + captured.err
+    assert "Traceback" not in public_output
+    assert str(config) not in public_output
+    assert "private-missing" not in public_output
+    assert not (database.parent / "reports" / str(task.task_id) / "history").exists()
+
+
+def test_scheduler_runner_missing_config_without_due_run_is_noop(
+    tmp_path, monkeypatch, capsys
+):
+    now = datetime.now(UTC).replace(microsecond=0)
+    database = tmp_path / "noop-state" / "monitor.sqlite3"
+    store = MonitorStore(database)
+    tasks = MonitorTaskService(store, clock=lambda: now)
+    task = tasks.create(command(effective_at=now))
+    monkeypatch.setattr(
+        "app.monitor_runner.provider_from_config",
+        lambda value: pytest.fail("SVN provider must not be constructed"),
+    )
+    config = tmp_path / "private-noop-settings.json"
+
+    assert runner_main(
+        [
+            "--task-id",
+            str(task.task_id),
+            "--generation",
+            str(task.scheduler.generation),
+            "--database",
+            str(database),
+            "--config",
+            str(config),
+            "--scheduler-managed",
+        ]
+    ) == 0
+    assert MonitorStore(database).list_runs(str(task.task_id)) == []
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.out + captured.err
+    assert str(config) not in captured.out + captured.err
+
+
+def test_manual_retry_invalid_config_reuses_original_run_and_interval(
+    tmp_path, monkeypatch, capsys
+):
+    database, task, cutoff = _pending_cli_task(tmp_path)
+    store = MonitorStore(database)
+    MonitorTaskService(store).materialize_due(str(task.task_id), now=cutoff)
+    original = store.list_runs(str(task.task_id))[0]
+    config = tmp_path / "private-invalid-settings.json"
+    config.write_text("{private invalid json", encoding="utf-8")
+    monkeypatch.setattr(
+        "app.monitor_runner.provider_from_config",
+        lambda value: pytest.fail("SVN provider must not be constructed"),
+    )
+
+    assert runner_main(
+        [
+            "--run-id",
+            original.run_id,
+            "--database",
+            str(database),
+            "--config",
+            str(config),
+        ]
+    ) == 1
+
+    failed = MonitorStore(database).get_run(original.run_id)
+    assert failed is not None
+    assert (failed.start_at, failed.end_at) == (original.start_at, original.end_at)
+    assert failed.status == "failed"
+    assert failed.attempt_count == 1
+    assert failed.errors[0].code.value == "MONITOR_CONFIGURATION_INVALID"
+    assert MonitorStore(database).attempts(original.run_id)[0]["trigger"] == "manual_retry"
+    assert failed.report_ref is None
+    captured = capsys.readouterr()
+    public_output = captured.out + captured.err
+    assert "Traceback" not in public_output
+    assert str(config) not in public_output
+    assert "private invalid" not in public_output
+
+
+def test_materialize_error_records_only_next_cutoff_without_publishing_or_skipping(
+    tmp_path, monkeypatch, capsys
+):
+    database, task, cutoff = _pending_cli_task(tmp_path)
+    config = tmp_path / "private-missing-settings.json"
+
+    def fail_materialize(self, task_id, *, now=None):
+        raise MonitorScheduleError("private recovery window details")
+
+    monkeypatch.setattr(MonitorTaskService, "materialize_due", fail_materialize)
+    assert runner_main(
+        [
+            "--task-id",
+            str(task.task_id),
+            "--generation",
+            str(task.scheduler.generation),
+            "--database",
+            str(database),
+            "--config",
+            str(config),
+            "--scheduler-managed",
+        ]
+    ) == 0
+
+    store = MonitorStore(database)
+    runs = store.list_runs(str(task.task_id))
+    boundaries = store.list_boundaries(str(task.task_id))
+    assert len(runs) == 1
+    assert runs[0].end_at == cutoff
+    assert runs[0].status == "failed"
+    assert runs[0].errors[0].code.value == "MONITOR_CONFIGURATION_INVALID"
+    assert runs[0].report_ref is None
+    assert boundaries[-1].boundary_at == cutoff
+    assert all(boundary.boundary_at <= cutoff for boundary in boundaries)
+    assert not (database.parent / "reports" / str(task.task_id) / "history").exists()
+    captured = capsys.readouterr()
+    public_output = captured.out + captured.err
+    assert "Traceback" not in public_output
+    assert "private recovery" not in public_output
+
+
+def test_real_recovery_limit_failure_records_first_cutoff_without_skipping(tmp_path):
+    store = MonitorStore(tmp_path / "recovery-limit" / "monitor.sqlite3")
+    tasks = MonitorTaskService(store, clock=lambda: NOW)
+    task = tasks.create(command(effective_at=NOW))
+    future = NOW + timedelta(days=31)
+    runner = MonitorRunnerService(
+        store,
+        tasks,
+        lambda record: pytest.fail("report engine must not run"),
+        clock=lambda: future,
+    )
+
+    result = runner.run_task(str(task.task_id), task.scheduler.generation)
+
+    assert result.exit_category == "permanent_failure"
+    runs = store.list_runs(str(task.task_id))
+    assert len(runs) == 1
+    assert runs[0].start_at == NOW
+    assert runs[0].end_at == NOW + timedelta(hours=1)
+    assert runs[0].status == "failed"
+    assert runs[0].attempt_count == 1
+    assert runs[0].errors[0].code.value == "MONITOR_CONFIGURATION_INVALID"
+    assert runs[0].report_ref is None
+    assert store.latest_boundary(str(task.task_id)).boundary_at == runs[0].end_at
+
+
+def test_recovery_limit_uses_schedule_effective_anchor_after_trigger_change(tmp_path):
+    store = MonitorStore(tmp_path / "schedule-anchor" / "monitor.sqlite3")
+    clock = [NOW]
+    tasks = MonitorTaskService(store, clock=lambda: clock[0])
+    task = tasks.create(command(effective_at=NOW))
+    clock[0] = NOW + timedelta(minutes=30)
+    changed = tasks.modify_schedule(
+        str(task.task_id),
+        daily_trigger_time=time(17, 15),
+        end_at=None,
+    )
+    future = clock[0] + timedelta(days=31)
+    runner = MonitorRunnerService(
+        store,
+        tasks,
+        lambda record: pytest.fail("report engine must not run"),
+        clock=lambda: future,
+    )
+
+    result = runner.run_task(str(task.task_id), changed.scheduler.generation)
+
+    assert result.exit_category == "permanent_failure"
+    run = store.list_runs(str(task.task_id))[0]
+    assert run.end_at == datetime(2026, 8, 11, 9, 15, tzinfo=UTC)
+    assert run.end_at > clock[0]
+
+
+def test_recovery_limit_final_end_transitions_task_atomically(tmp_path):
+    store = MonitorStore(tmp_path / "recovery-end" / "monitor.sqlite3")
+    tasks = MonitorTaskService(store, clock=lambda: NOW)
+    end_at = NOW + timedelta(minutes=30)
+    task = tasks.create(command(effective_at=NOW, end_at=end_at))
+    runner = MonitorRunnerService(
+        store,
+        tasks,
+        lambda record: pytest.fail("report engine must not run"),
+        clock=lambda: NOW + timedelta(days=31),
+    )
+
+    result = runner.run_task(str(task.task_id), task.scheduler.generation)
+
+    persisted = store.get_task(str(task.task_id))
+    assert result.exit_category == "permanent_failure"
+    assert persisted is not None
+    assert persisted.lifecycle == "ended"
+    assert persisted.generation == task.scheduler.generation + 1
+    assert persisted.scheduler_desired_state == "disabled"
+    assert store.list_runs(str(task.task_id))[0].end_at == end_at
+
+
+def test_materialize_fallback_does_not_claim_same_cutoff_from_new_generation(
+    tmp_path, monkeypatch
+):
+    store = MonitorStore(tmp_path / "fallback-generation" / "monitor.sqlite3")
+    tasks = MonitorTaskService(store, clock=lambda: NOW)
+    task = tasks.create(command(effective_at=NOW))
+    original_append = store.append_boundaries
+
+    def concurrent_append(task_id, specs, now, **kwargs):
+        store.update_task(
+            task_id,
+            {"generation": task.scheduler.generation + 1},
+            now,
+            expected_generation=task.scheduler.generation,
+            expected_lifecycle="active",
+        )
+        original_append(
+            task_id,
+            [
+                BoundarySpec(
+                    spec.boundary_at,
+                    spec.boundary_type,
+                    task.scheduler.generation + 1,
+                    "concurrent_generation",
+                )
+                for spec in specs
+            ],
+            now,
+            expected_generation=task.scheduler.generation + 1,
+            expected_lifecycle="active",
+        )
+        raise MonitorStateConflict("concurrent generation won")
+
+    monkeypatch.setattr(store, "append_boundaries", concurrent_append)
+    runner = MonitorRunnerService(
+        store,
+        tasks,
+        lambda record: pytest.fail("report engine must not run"),
+        clock=lambda: NOW + timedelta(days=31),
+    )
+
+    result = runner.run_task(str(task.task_id), task.scheduler.generation)
+
+    runs = store.list_runs(str(task.task_id))
+    assert result.exit_category == "noop"
+    assert len(runs) == 1
+    assert runs[0].generation == task.scheduler.generation + 1
+    assert runs[0].status == "queued"
+    assert runs[0].attempt_count == 0
+
+
+def test_existing_due_run_keeps_own_engine_error_when_materialize_fails(tmp_path):
+    created_at = NOW + timedelta(hours=1)
+    store = MonitorStore(tmp_path / "existing-due" / "monitor.sqlite3")
+    tasks = MonitorTaskService(store, clock=lambda: created_at)
+    task = tasks.create(command(effective_at=NOW))
+    original = store.list_runs(str(task.task_id))[0]
+
+    class AuthFailureEngine:
+        def execute(self, run, task_record, generated_at):
+            raise SVNProviderError("SVN_AUTH_FAILED", "private authentication")
+
+    runner = MonitorRunnerService(
+        store,
+        tasks,
+        lambda record: AuthFailureEngine(),
+        clock=lambda: created_at + timedelta(days=31),
+    )
+
+    result = runner.run_task(str(task.task_id), task.scheduler.generation)
+
+    runs = store.list_runs(str(task.task_id))
+    persisted_original = store.get_run(original.run_id)
+    assert result.exit_category == "permanent_failure"
+    assert len(runs) == 2
+    assert persisted_original is not None
+    assert persisted_original.errors[0].code.value == "MONITOR_SVN_AUTH_FAILED"
+    synthesized = next(run for run in runs if run.run_id != original.run_id)
+    assert synthesized.errors[0].code.value == "MONITOR_CONFIGURATION_INVALID"
+
+
+def test_unknown_materialize_error_is_retryable_without_fake_counts_or_attempts(
+    tmp_path, monkeypatch
+):
+    database, task, _ = _pending_cli_task(tmp_path)
+    store = MonitorStore(database)
+    tasks = MonitorTaskService(store)
+
+    def fail_materialize(task_id, *, now=None):
+        raise OSError("private transient store failure")
+
+    monkeypatch.setattr(tasks, "materialize_due", fail_materialize)
+    runner = MonitorRunnerService(
+        store,
+        tasks,
+        lambda record: pytest.fail("report engine must not run"),
+    )
+
+    result = runner.run_task(str(task.task_id), task.scheduler.generation)
+
+    assert result.exit_category == "temporary_failure"
+    assert result.processed == result.failed == 0
+    assert result.retryable_failures == 1
+    assert store.list_runs(str(task.task_id)) == []
+
+
+def test_scheduler_managed_unknown_materialize_error_exits_for_windows_retry(
+    tmp_path, monkeypatch, capsys
+):
+    database, task, _ = _pending_cli_task(tmp_path)
+
+    def fail_materialize(self, task_id, *, now=None):
+        raise OSError("private transient store failure")
+
+    monkeypatch.setattr(MonitorTaskService, "materialize_due", fail_materialize)
+    exit_code = runner_main(
+        [
+            "--task-id",
+            str(task.task_id),
+            "--generation",
+            str(task.scheduler.generation),
+            "--database",
+            str(database),
+            "--config",
+            str(tmp_path / "private-missing-settings.json"),
+            "--scheduler-managed",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 75
+    assert payload["processed"] == payload["failed"] == 0
+    assert payload["retryable_failures"] == 1
+    assert MonitorStore(database).list_runs(str(task.task_id)) == []
+    assert "Traceback" not in captured.out + captured.err
+    assert "private transient" not in captured.out + captured.err
+
+
+def test_materialize_error_without_due_cutoff_is_noop_and_keeps_boundary(tmp_path, monkeypatch):
+    store = MonitorStore(tmp_path / "materialize-noop" / "monitor.sqlite3")
+    tasks = MonitorTaskService(store, clock=lambda: NOW)
+    task = tasks.create(command(effective_at=NOW))
+    original_boundary = store.latest_boundary(str(task.task_id))
+
+    def fail_materialize(task_id, *, now=None):
+        raise MonitorScheduleError("private not-due details")
+
+    monkeypatch.setattr(tasks, "materialize_due", fail_materialize)
+    runner = MonitorRunnerService(
+        store,
+        tasks,
+        lambda record: pytest.fail("report engine must not run"),
+        clock=lambda: NOW,
+    )
+
+    result = runner.run_task(str(task.task_id), task.scheduler.generation)
+
+    assert result.exit_category == "noop"
+    assert store.list_runs(str(task.task_id)) == []
+    assert store.latest_boundary(str(task.task_id)) == original_boundary
 
 
 def test_isolated_cli_state_root_rejects_production_and_is_uuid_scoped(tmp_path):

@@ -93,8 +93,16 @@ class SchedulerInspection:
     arguments: str | None = None
     working_directory: str | None = None
     daily_trigger_time: time | None = None
+    daily_trigger_enabled: bool | None = None
     login_trigger: bool | None = None
+    login_trigger_enabled: bool | None = None
+    login_trigger_user_id: str | None = None
     end_trigger_at: datetime | None = None
+    end_trigger_enabled: bool | None = None
+    principal_id: str | None = None
+    logon_type: str | None = None
+    run_level: str | None = None
+    actions_context: str | None = None
     start_when_available: bool | None = None
     restart_interval: str | None = None
     restart_count: int | None = None
@@ -342,7 +350,20 @@ def validate_scheduler_task(
             os.path.normcase(actual.working_directory or ""),
         ),
         "daily_trigger_time": (expected.daily_trigger_time, actual.daily_trigger_time),
+        "daily_trigger_enabled": (True, actual.daily_trigger_enabled),
         "login_trigger": (expected.login_trigger, actual.login_trigger),
+        "login_trigger_enabled": (
+            True if expected.login_trigger else None,
+            actual.login_trigger_enabled,
+        ),
+        "login_trigger_user_id": (
+            expected.run_as.casefold() if expected.login_trigger else None,
+            (
+                actual.login_trigger_user_id.casefold()
+                if actual.login_trigger_user_id is not None
+                else None
+            ),
+        ),
         "end_trigger_at": (
             (
                 expected.end_trigger_at.astimezone(timezone.utc)
@@ -350,6 +371,18 @@ def validate_scheduler_task(
                 else None
             ),
             actual.end_trigger_at,
+        ),
+        "end_trigger_enabled": (
+            True if expected.end_trigger_at is not None else None,
+            actual.end_trigger_enabled,
+        ),
+        "logon_type": ("InteractiveToken", actual.logon_type),
+        "run_level": ("LeastPrivilege", actual.run_level),
+        "actions_context": ("CurrentUser", actual.actions_context),
+        "principal_binding": (
+            True,
+            actual.principal_id == "CurrentUser"
+            and actual.actions_context == actual.principal_id,
         ),
         "start_when_available": (
             expected.start_when_available,
@@ -382,12 +415,20 @@ def _inspection_from_expected(expected: ExpectedSchedulerTask) -> SchedulerInspe
         arguments=expected.action.arguments,
         working_directory=expected.action.working_directory,
         daily_trigger_time=expected.daily_trigger_time,
+        daily_trigger_enabled=True,
         login_trigger=expected.login_trigger,
+        login_trigger_enabled=True if expected.login_trigger else None,
+        login_trigger_user_id=expected.run_as if expected.login_trigger else None,
         end_trigger_at=(
             expected.end_trigger_at.astimezone(timezone.utc)
             if expected.end_trigger_at is not None
             else None
         ),
+        end_trigger_enabled=True if expected.end_trigger_at is not None else None,
+        principal_id="CurrentUser",
+        logon_type="InteractiveToken",
+        run_level="LeastPrivilege",
+        actions_context="CurrentUser",
         start_when_available=expected.start_when_available,
         restart_interval=expected.restart_interval,
         restart_count=expected.restart_count,
@@ -551,6 +592,11 @@ def _text(root: ET.Element, path: str) -> str | None:
     return element.text if element is not None else None
 
 
+def _xml_bool(root: ET.Element, path: str) -> bool | None:
+    value = _text(root, path)
+    return value.casefold() == "true" if value is not None else None
+
+
 def parse_scheduler_task_xml(name: str, raw: bytes | str) -> SchedulerInspection:
     try:
         root = ET.fromstring(raw)
@@ -577,7 +623,9 @@ def parse_scheduler_task_xml(name: str, raw: bytes | str) -> SchedulerInspection
         trigger_time = datetime.fromisoformat(boundary).time().replace(tzinfo=None)
     enabled_text = _text(root, "./t:Settings/t:Enabled")
     restart_count = _text(root, "./t:Settings/t:RestartOnFailure/t:Count")
+    calendar = root.find(".//t:CalendarTrigger", {"t": TASK_NAMESPACE})
     login = root.find(".//t:LogonTrigger", {"t": TASK_NAMESPACE})
+    ending = root.find(".//t:TimeTrigger", {"t": TASK_NAMESPACE})
     end_boundary = _text(root, ".//t:TimeTrigger/t:StartBoundary")
     end_trigger = None
     if end_boundary:
@@ -594,8 +642,41 @@ def parse_scheduler_task_xml(name: str, raw: bytes | str) -> SchedulerInspection
         arguments=_text(root, ".//t:Actions/t:Exec/t:Arguments") or "",
         working_directory=_text(root, ".//t:Actions/t:Exec/t:WorkingDirectory"),
         daily_trigger_time=trigger_time,
+        daily_trigger_enabled=(
+            _xml_bool(root, ".//t:CalendarTrigger/t:Enabled")
+            if calendar is not None
+            else None
+        ),
         login_trigger=login is not None,
+        login_trigger_enabled=(
+            _xml_bool(root, ".//t:LogonTrigger/t:Enabled")
+            if login is not None
+            else None
+        ),
+        login_trigger_user_id=(
+            _text(root, ".//t:LogonTrigger/t:UserId")
+            if login is not None
+            else None
+        ),
         end_trigger_at=end_trigger,
+        end_trigger_enabled=(
+            _xml_bool(root, ".//t:TimeTrigger/t:Enabled")
+            if ending is not None
+            else None
+        ),
+        principal_id=(
+            root.find(".//t:Principals/t:Principal", {"t": TASK_NAMESPACE}).get("id")
+            if root.find(".//t:Principals/t:Principal", {"t": TASK_NAMESPACE})
+            is not None
+            else None
+        ),
+        logon_type=_text(root, ".//t:Principals/t:Principal/t:LogonType"),
+        run_level=_text(root, ".//t:Principals/t:Principal/t:RunLevel"),
+        actions_context=(
+            root.find(".//t:Actions", {"t": TASK_NAMESPACE}).get("Context")
+            if root.find(".//t:Actions", {"t": TASK_NAMESPACE}) is not None
+            else None
+        ),
         start_when_available=(
             (_text(root, "./t:Settings/t:StartWhenAvailable") or "false").casefold()
             == "true"
