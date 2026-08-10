@@ -43,10 +43,13 @@ from app.services.windows_scheduler import (
     RESTART_COUNT,
     RESTART_INTERVAL,
     TASK_NAMESPACE,
+    ExpectedSchedulerTask,
     FakeSchedulerGateway,
     MonitorSchedulerService,
     ScheduledMonitorTaskService,
+    SchedulerAction,
     SchedulerGatewayError,
+    WindowsSchedulerGateway,
     _system_executable,
     current_windows_user,
     monitor_task_name,
@@ -58,6 +61,47 @@ from app.services.windows_scheduler import (
 
 UTC = timezone.utc
 NOW = datetime(2026, 8, 10, 9, 0, tzinfo=UTC)
+WINDOWS_NORMALIZED_TASK_XML = (
+    Path(__file__).parents[1]
+    / "fixtures"
+    / "m3_monitor"
+    / "windows_normalized_task.xml"
+)
+NORMALIZED_TASK_ID = "11111111-2222-4333-8444-555555555555"
+NORMALIZED_TASK_SID = "S-1-5-21-1111111111-2222222222-3333333333-1001"
+NORMALIZED_TASK_ACCOUNT = r"TESTDOMAIN\qa-user"
+
+
+def normalized_scheduler_expected():
+    return ExpectedSchedulerTask(
+        name=f"ExcelMerge-M3-Monitor-{NORMALIZED_TASK_ID}",
+        enabled=True,
+        run_as=NORMALIZED_TASK_SID,
+        action=SchedulerAction(
+            executable=r"C:\Program Files\Python\python.exe",
+            arguments=(
+                f"-m app.monitor_runner --task-id {NORMALIZED_TASK_ID} "
+                "--generation 1 "
+                "--database C:\\ExcelMerge\\var\\m3-monitor\\monitor.sqlite3 "
+                "--scheduler-managed"
+            ),
+            working_directory=r"C:\ExcelMerge",
+        ),
+        daily_trigger_time=time(19, 55),
+        login_trigger=True,
+        end_trigger_at=datetime(
+            2026, 8, 12, 19, 51, 8, tzinfo=ZoneInfo("Asia/Shanghai")
+        ),
+    )
+
+
+def normalized_identity_resolver(identity):
+    sid_by_identity = {
+        NORMALIZED_TASK_SID.casefold(): NORMALIZED_TASK_SID,
+        NORMALIZED_TASK_ACCOUNT.casefold(): NORMALIZED_TASK_SID,
+        r"TESTDOMAIN\other".casefold(): "S-1-5-21-999",
+    }
+    return sid_by_identity.get(identity.casefold())
 
 
 def command(
@@ -490,6 +534,130 @@ def test_structured_xml_and_action_reject_injection_and_hold_frozen_settings(tmp
     )
     with pytest.raises(ValueError):
         scheduler.maintenance_expected(name="Unsafe & task")
+
+
+def test_real_windows_normalized_xml_defaults_and_account_sid_are_valid():
+    expected = normalized_scheduler_expected()
+    raw = WINDOWS_NORMALIZED_TASK_XML.read_bytes()
+    actual = parse_scheduler_task_xml(expected.name, raw)
+
+    assert actual.daily_trigger_enabled is True
+    assert actual.login_trigger_enabled is True
+    assert actual.end_trigger_enabled is True
+    assert actual.run_level == "LeastPrivilege"
+    gateway = WindowsSchedulerGateway(
+        identity_resolver=normalized_identity_resolver
+    )
+    assert gateway.validate(expected, actual).valid
+
+    root = ET.fromstring(raw)
+    login_user = root.find(
+        ".//t:LogonTrigger/t:UserId",
+        {"t": TASK_NAMESPACE},
+    )
+    assert login_user is not None
+    login_user.text = r"TESTDOMAIN\other"
+    other_user = parse_scheduler_task_xml(
+        expected.name,
+        ET.tostring(root, encoding="utf-16", xml_declaration=True),
+    )
+    assert validate_scheduler_task(
+        expected,
+        other_user,
+        identity_resolver=normalized_identity_resolver,
+    ).drift_fields == ("login_trigger_user_id",)
+
+
+def test_normalized_xml_identity_fields_fail_closed():
+    expected = normalized_scheduler_expected()
+    root = ET.fromstring(WINDOWS_NORMALIZED_TASK_XML.read_bytes())
+    login = root.find(".//t:LogonTrigger", {"t": TASK_NAMESPACE})
+    assert login is not None
+    user_id = login.find("t:UserId", {"t": TASK_NAMESPACE})
+    assert user_id is not None
+    login.remove(user_id)
+    missing_user = parse_scheduler_task_xml(
+        expected.name,
+        ET.tostring(root, encoding="utf-16", xml_declaration=True),
+    )
+    assert "login_trigger_user_id" in validate_scheduler_task(
+        expected,
+        missing_user,
+        identity_resolver=normalized_identity_resolver,
+    ).drift_fields
+
+    unresolved_user = parse_scheduler_task_xml(
+        expected.name,
+        WINDOWS_NORMALIZED_TASK_XML.read_bytes(),
+    )
+    assert "login_trigger_user_id" in validate_scheduler_task(
+        expected,
+        unresolved_user,
+        identity_resolver=lambda _identity: None,
+    ).drift_fields
+
+    root = ET.fromstring(WINDOWS_NORMALIZED_TASK_XML.read_bytes())
+    logon_type = root.find(
+        ".//t:Principal/t:LogonType",
+        {"t": TASK_NAMESPACE},
+    )
+    principal = root.find(".//t:Principal", {"t": TASK_NAMESPACE})
+    assert logon_type is not None and principal is not None
+    principal.remove(logon_type)
+    missing_logon_type = parse_scheduler_task_xml(
+        expected.name,
+        ET.tostring(root, encoding="utf-16", xml_declaration=True),
+    )
+    assert "logon_type" in validate_scheduler_task(
+        expected,
+        missing_logon_type,
+        identity_resolver=normalized_identity_resolver,
+    ).drift_fields
+
+
+@pytest.mark.parametrize(
+    ("mutation", "drift_field"),
+    (
+        ("extra_calendar", "trigger_shape"),
+        ("extra_logon", "trigger_shape"),
+        ("extra_time", "trigger_shape"),
+        ("extra_other", "trigger_shape"),
+        ("wrong_days_interval", "daily_days_interval"),
+    ),
+)
+def test_normalized_xml_rejects_extra_triggers_and_wrong_daily_period(
+    mutation,
+    drift_field,
+):
+    expected = normalized_scheduler_expected()
+    root = ET.fromstring(WINDOWS_NORMALIZED_TASK_XML.read_bytes())
+    triggers = root.find("./t:Triggers", {"t": TASK_NAMESPACE})
+    assert triggers is not None
+    if mutation == "wrong_days_interval":
+        interval = root.find(
+            ".//t:CalendarTrigger/t:ScheduleByDay/t:DaysInterval",
+            {"t": TASK_NAMESPACE},
+        )
+        assert interval is not None
+        interval.text = "2"
+    else:
+        tag = {
+            "extra_calendar": "CalendarTrigger",
+            "extra_logon": "LogonTrigger",
+            "extra_time": "TimeTrigger",
+            "extra_other": "BootTrigger",
+        }[mutation]
+        ET.SubElement(triggers, f"{{{TASK_NAMESPACE}}}{tag}")
+    actual = parse_scheduler_task_xml(
+        expected.name,
+        ET.tostring(root, encoding="utf-16", xml_declaration=True),
+    )
+    validation = validate_scheduler_task(
+        expected,
+        actual,
+        identity_resolver=normalized_identity_resolver,
+    )
+    assert drift_field in validation.drift_fields
 
 
 @pytest.mark.parametrize(

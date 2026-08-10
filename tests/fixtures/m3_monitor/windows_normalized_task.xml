@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Author>S-1-5-21-1111111111-2222222222-3333333333-1001</Author>
+    <URI>\ExcelMerge-M3-Monitor-11111111-2222-4333-8444-555555555555</URI>
+  </RegistrationInfo>
+  <Principals>
+    <Principal id="CurrentUser">
+      <UserId>S-1-5-21-1111111111-2222222222-3333333333-1001</UserId>
+      <LogonType>InteractiveToken</LogonType>
+    </Principal>
+  </Principals>
+  <Settings>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT6H</ExecutionTimeLimit>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <RestartOnFailure>
+      <Count>3</Count>
+      <Interval>PT10M</Interval>
+    </RestartOnFailure>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>true</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
+  </Settings>
+  <Triggers>
+    <CalendarTrigger>
+      <StartBoundary>2026-08-10T19:55:00+08:00</StartBoundary>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+    </CalendarTrigger>
+    <LogonTrigger>
+      <UserId>TESTDOMAIN\qa-user</UserId>
+    </LogonTrigger>
+    <TimeTrigger>
+      <StartBoundary>2026-08-12T19:51:08+08:00</StartBoundary>
+    </TimeTrigger>
+  </Triggers>
+  <Actions Context="CurrentUser">
+    <Exec>
+      <Command>C:\Program Files\Python\python.exe</Command>
+      <Arguments>-m app.monitor_runner --task-id 11111111-2222-4333-8444-555555555555 --generation 1 --database C:\ExcelMerge\var\m3-monitor\monitor.sqlite3 --scheduler-managed</Arguments>
+      <WorkingDirectory>C:\ExcelMerge</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>

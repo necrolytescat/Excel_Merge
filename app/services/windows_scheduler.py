@@ -94,6 +94,11 @@ class SchedulerInspection:
     working_directory: str | None = None
     daily_trigger_time: time | None = None
     daily_trigger_enabled: bool | None = None
+    calendar_trigger_count: int | None = None
+    login_trigger_count: int | None = None
+    end_trigger_count: int | None = None
+    trigger_count: int | None = None
+    daily_days_interval: int | None = None
     login_trigger: bool | None = None
     login_trigger_enabled: bool | None = None
     login_trigger_user_id: str | None = None
@@ -229,6 +234,106 @@ def current_windows_user() -> str:
     return f"{domain}\\{username}" if domain else username
 
 
+IdentityResolver = Callable[[str], str | None]
+
+
+def resolve_windows_identity_sid(identity: str) -> str | None:
+    """Resolve either an account name or SID string to a canonical SID."""
+    if os.name != "nt" or not identity:
+        return None
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+    advapi32.ConvertSidToStringSidW.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.LPWSTR),
+    ]
+    advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+
+    def sid_to_text(sid: ctypes.c_void_p) -> str | None:
+        sid_text = wintypes.LPWSTR()
+        if not advapi32.ConvertSidToStringSidW(sid, ctypes.byref(sid_text)):
+            return None
+        try:
+            return sid_text.value
+        finally:
+            kernel32.LocalFree(sid_text)
+
+    if re.fullmatch(r"S-\d+(?:-\d+)+", identity, flags=re.IGNORECASE):
+        advapi32.ConvertStringSidToSidW.argtypes = [
+            wintypes.LPCWSTR,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        advapi32.ConvertStringSidToSidW.restype = wintypes.BOOL
+        sid = ctypes.c_void_p()
+        if not advapi32.ConvertStringSidToSidW(identity, ctypes.byref(sid)):
+            return None
+        try:
+            return sid_to_text(sid)
+        finally:
+            kernel32.LocalFree(sid)
+
+    advapi32.LookupAccountNameW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.DWORD),
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.LookupAccountNameW.restype = wintypes.BOOL
+    sid_size = wintypes.DWORD()
+    domain_size = wintypes.DWORD()
+    sid_type = wintypes.DWORD()
+    advapi32.LookupAccountNameW(
+        None,
+        identity,
+        None,
+        ctypes.byref(sid_size),
+        None,
+        ctypes.byref(domain_size),
+        ctypes.byref(sid_type),
+    )
+    if sid_size.value <= 0:
+        return None
+    sid_buffer = ctypes.create_string_buffer(sid_size.value)
+    domain_capacity = max(domain_size.value, 1)
+    domain_buffer = ctypes.create_unicode_buffer(domain_capacity)
+    domain_size = wintypes.DWORD(domain_capacity)
+    if not advapi32.LookupAccountNameW(
+        None,
+        identity,
+        sid_buffer,
+        ctypes.byref(sid_size),
+        domain_buffer,
+        ctypes.byref(domain_size),
+        ctypes.byref(sid_type),
+    ):
+        return None
+    return sid_to_text(ctypes.cast(sid_buffer, ctypes.c_void_p))
+
+
+def _same_windows_identity(
+    expected: str | None,
+    actual: str | None,
+    identity_resolver: IdentityResolver,
+) -> bool:
+    if expected is None or actual is None:
+        return expected is actual
+    if expected.casefold() == actual.casefold():
+        return True
+    expected_sid = identity_resolver(expected)
+    actual_sid = identity_resolver(actual)
+    return (
+        expected_sid is not None
+        and actual_sid is not None
+        and expected_sid.casefold() == actual_sid.casefold()
+    )
+
+
 def _system_executable(name: str) -> str:
     if os.name != "nt":
         raise SchedulerGatewayError("Windows system directory is unavailable")
@@ -333,13 +438,19 @@ def scheduler_public_error(*, drift: bool = False) -> MonitorPublicErrorPayload:
 def validate_scheduler_task(
     expected: ExpectedSchedulerTask,
     actual: SchedulerInspection,
+    *,
+    identity_resolver: IdentityResolver | None = None,
 ) -> SchedulerValidation:
     if not actual.exists:
         return SchedulerValidation(False, ("missing",))
     fields: list[str] = []
+    resolver = identity_resolver or resolve_windows_identity_sid
     comparisons = {
         "enabled": (expected.enabled, actual.enabled),
-        "run_as": (expected.run_as.casefold(), (actual.run_as or "").casefold()),
+        "run_as": (
+            True,
+            _same_windows_identity(expected.run_as, actual.run_as, resolver),
+        ),
         "executable": (
             os.path.normcase(expected.action.executable),
             os.path.normcase(actual.executable or ""),
@@ -351,16 +462,37 @@ def validate_scheduler_task(
         ),
         "daily_trigger_time": (expected.daily_trigger_time, actual.daily_trigger_time),
         "daily_trigger_enabled": (True, actual.daily_trigger_enabled),
+        "trigger_shape": (
+            (
+                1,
+                1 if expected.login_trigger else 0,
+                1 if expected.end_trigger_at is not None else 0,
+                1
+                + (1 if expected.login_trigger else 0)
+                + (1 if expected.end_trigger_at is not None else 0),
+            ),
+            (
+                actual.calendar_trigger_count,
+                actual.login_trigger_count,
+                actual.end_trigger_count,
+                actual.trigger_count,
+            ),
+        ),
+        "daily_days_interval": (1, actual.daily_days_interval),
         "login_trigger": (expected.login_trigger, actual.login_trigger),
         "login_trigger_enabled": (
             True if expected.login_trigger else None,
             actual.login_trigger_enabled,
         ),
         "login_trigger_user_id": (
-            expected.run_as.casefold() if expected.login_trigger else None,
+            True if expected.login_trigger else None,
             (
-                actual.login_trigger_user_id.casefold()
-                if actual.login_trigger_user_id is not None
+                _same_windows_identity(
+                    expected.run_as,
+                    actual.login_trigger_user_id,
+                    resolver,
+                )
+                if expected.login_trigger
                 else None
             ),
         ),
@@ -416,6 +548,15 @@ def _inspection_from_expected(expected: ExpectedSchedulerTask) -> SchedulerInspe
         working_directory=expected.action.working_directory,
         daily_trigger_time=expected.daily_trigger_time,
         daily_trigger_enabled=True,
+        calendar_trigger_count=1,
+        login_trigger_count=1 if expected.login_trigger else 0,
+        end_trigger_count=1 if expected.end_trigger_at is not None else 0,
+        trigger_count=(
+            1
+            + (1 if expected.login_trigger else 0)
+            + (1 if expected.end_trigger_at is not None else 0)
+        ),
+        daily_days_interval=1,
         login_trigger=expected.login_trigger,
         login_trigger_enabled=True if expected.login_trigger else None,
         login_trigger_user_id=expected.run_as if expected.login_trigger else None,
@@ -592,9 +733,34 @@ def _text(root: ET.Element, path: str) -> str | None:
     return element.text if element is not None else None
 
 
-def _xml_bool(root: ET.Element, path: str) -> bool | None:
-    value = _text(root, path)
+def _xml_bool(
+    root: ET.Element,
+    path: str,
+    *,
+    missing_default: bool | None = None,
+) -> bool | None:
+    element = root.find(path, {"t": TASK_NAMESPACE})
+    if element is None:
+        return missing_default
+    value = element.text
     return value.casefold() == "true" if value is not None else None
+
+
+def _text_with_missing_default(
+    root: ET.Element,
+    path: str,
+    default: str,
+) -> str | None:
+    element = root.find(path, {"t": TASK_NAMESPACE})
+    return default if element is None else element.text
+
+
+def _xml_int(root: ET.Element, path: str) -> int | None:
+    value = _text(root, path)
+    try:
+        return int(value) if value is not None else None
+    except ValueError:
+        return None
 
 
 def parse_scheduler_task_xml(name: str, raw: bytes | str) -> SchedulerInspection:
@@ -623,9 +789,17 @@ def parse_scheduler_task_xml(name: str, raw: bytes | str) -> SchedulerInspection
         trigger_time = datetime.fromisoformat(boundary).time().replace(tzinfo=None)
     enabled_text = _text(root, "./t:Settings/t:Enabled")
     restart_count = _text(root, "./t:Settings/t:RestartOnFailure/t:Count")
-    calendar = root.find(".//t:CalendarTrigger", {"t": TASK_NAMESPACE})
-    login = root.find(".//t:LogonTrigger", {"t": TASK_NAMESPACE})
-    ending = root.find(".//t:TimeTrigger", {"t": TASK_NAMESPACE})
+    triggers = root.find("./t:Triggers", {"t": TASK_NAMESPACE})
+    trigger_elements = list(triggers) if triggers is not None else []
+    calendar_tag = f"{{{TASK_NAMESPACE}}}CalendarTrigger"
+    login_tag = f"{{{TASK_NAMESPACE}}}LogonTrigger"
+    ending_tag = f"{{{TASK_NAMESPACE}}}TimeTrigger"
+    calendars = [item for item in trigger_elements if item.tag == calendar_tag]
+    logins = [item for item in trigger_elements if item.tag == login_tag]
+    endings = [item for item in trigger_elements if item.tag == ending_tag]
+    calendar = calendars[0] if calendars else None
+    login = logins[0] if logins else None
+    ending = endings[0] if endings else None
     end_boundary = _text(root, ".//t:TimeTrigger/t:StartBoundary")
     end_trigger = None
     if end_boundary:
@@ -643,13 +817,29 @@ def parse_scheduler_task_xml(name: str, raw: bytes | str) -> SchedulerInspection
         working_directory=_text(root, ".//t:Actions/t:Exec/t:WorkingDirectory"),
         daily_trigger_time=trigger_time,
         daily_trigger_enabled=(
-            _xml_bool(root, ".//t:CalendarTrigger/t:Enabled")
+            _xml_bool(
+                root,
+                ".//t:CalendarTrigger/t:Enabled",
+                missing_default=True,
+            )
             if calendar is not None
             else None
         ),
+        calendar_trigger_count=len(calendars),
+        login_trigger_count=len(logins),
+        end_trigger_count=len(endings),
+        trigger_count=len(trigger_elements),
+        daily_days_interval=_xml_int(
+            root,
+            ".//t:CalendarTrigger/t:ScheduleByDay/t:DaysInterval",
+        ),
         login_trigger=login is not None,
         login_trigger_enabled=(
-            _xml_bool(root, ".//t:LogonTrigger/t:Enabled")
+            _xml_bool(
+                root,
+                ".//t:LogonTrigger/t:Enabled",
+                missing_default=True,
+            )
             if login is not None
             else None
         ),
@@ -660,7 +850,11 @@ def parse_scheduler_task_xml(name: str, raw: bytes | str) -> SchedulerInspection
         ),
         end_trigger_at=end_trigger,
         end_trigger_enabled=(
-            _xml_bool(root, ".//t:TimeTrigger/t:Enabled")
+            _xml_bool(
+                root,
+                ".//t:TimeTrigger/t:Enabled",
+                missing_default=True,
+            )
             if ending is not None
             else None
         ),
@@ -671,7 +865,11 @@ def parse_scheduler_task_xml(name: str, raw: bytes | str) -> SchedulerInspection
             else None
         ),
         logon_type=_text(root, ".//t:Principals/t:Principal/t:LogonType"),
-        run_level=_text(root, ".//t:Principals/t:Principal/t:RunLevel"),
+        run_level=_text_with_missing_default(
+            root,
+            ".//t:Principals/t:Principal/t:RunLevel",
+            "LeastPrivilege",
+        ),
         actions_context=(
             root.find(".//t:Actions", {"t": TASK_NAMESPACE}).get("Context")
             if root.find(".//t:Actions", {"t": TASK_NAMESPACE}) is not None
@@ -703,8 +901,10 @@ class WindowsSchedulerGateway:
         *,
         process_runner: ProcessRunner = subprocess.run,
         schtasks_path: str | Path | None = None,
+        identity_resolver: IdentityResolver | None = None,
     ):
         self.process_runner = process_runner
+        self.identity_resolver = identity_resolver
         self.schtasks_path = (
             str(Path(schtasks_path).resolve()) if schtasks_path is not None else None
         )
@@ -825,7 +1025,11 @@ class WindowsSchedulerGateway:
         expected: ExpectedSchedulerTask,
         actual: SchedulerInspection | None = None,
     ) -> SchedulerValidation:
-        return validate_scheduler_task(expected, actual or self.inspect(expected.name))
+        return validate_scheduler_task(
+            expected,
+            actual or self.inspect(expected.name),
+            identity_resolver=self.identity_resolver,
+        )
 
 
 class MonitorSchedulerService:
