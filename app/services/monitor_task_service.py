@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 from app.schemas.monitor import (
     MonitorBranchPayload,
+    MonitorLatestReportPayload,
     MonitorRunAttemptPayload,
     MonitorRunDigestPayload,
     MonitorRunPayload,
@@ -31,6 +32,7 @@ from app.services.monitor_store import (
     MonitorStore,
     RunRecord,
     TaskRecord,
+    TaskRunOverview,
 )
 from core.svn_history import canonicalize_svn_url
 
@@ -198,16 +200,17 @@ class MonitorTaskService:
     ) -> MonitorTaskPayload:
         now = self._now()
         task = self._require_task(task_id)
-        if task.lifecycle != "active":
-            raise ValueError("only an active monitor task can change its schedule")
-        self.materialize_due(task_id, now=now)
-        task = self._require_task(task_id)
-        if task.lifecycle != "active":
-            return self.to_public_task(task)
+        if task.lifecycle not in {"active", "paused"}:
+            raise ValueError("current monitor task cannot change its schedule")
+        if task.lifecycle == "active":
+            self.materialize_due(task_id, now=now)
+            task = self._require_task(task_id)
+            if task.lifecycle != "active":
+                return self.to_public_task(task)
         end = require_utc(end_at) if end_at is not None else None
         if end is not None and end <= task.effective_at:
             raise ValueError("end_at must be later than effective_at")
-        if end is not None and end <= now:
+        if task.lifecycle == "active" and end is not None and end <= now:
             raise ValueError("a modified end_at must be in the future")
         trigger_text = daily_trigger_time.isoformat()
         if daily_trigger_time.tzinfo is not None or daily_trigger_time.microsecond:
@@ -226,7 +229,7 @@ class MonitorTaskService:
             },
             now,
             expected_generation=task.generation,
-            expected_lifecycle="active",
+            expected_lifecycle=task.lifecycle,
         )
         return self.to_public_task(updated)
 
@@ -349,21 +352,86 @@ class MonitorTaskService:
         )
         return self.to_public_task(updated)
 
+    def archive(self, task_id: str) -> MonitorTaskPayload:
+        now = self._now()
+        task = self._require_task(task_id)
+        if task.lifecycle == "archived":
+            return self.to_public_task(task)
+        if task.lifecycle != "ended":
+            raise ValueError("only an ended monitor task can be archived")
+        if any(
+            run.status in {"queued", "running"}
+            for run in self.store.list_runs(task_id)
+        ):
+            raise ValueError("monitor task still has pending runs")
+        updated = self.store.update_task(
+            task_id,
+            {
+                "lifecycle": "archived",
+                "generation": task.generation + 1,
+                "scheduler_desired_state": "removed",
+                "scheduler_sync_status": "pending",
+                "scheduler_error": None,
+                "archived_at": now,
+            },
+            now,
+            expected_generation=task.generation,
+            expected_lifecycle="ended",
+        )
+        return self.to_public_task(updated)
+
     def _require_task(self, task_id: str) -> TaskRecord:
         task = self.store.get_task(task_id)
         if task is None:
             raise KeyError(task_id)
         return task
 
-    def to_public_task(self, task: TaskRecord) -> MonitorTaskPayload:
-        latest = self.store.list_runs(task.task_id)
-        latest_run = self._run_digest(latest[-1]) if latest else None
+    def to_public_task(
+        self,
+        task: TaskRecord,
+        *,
+        overview: TaskRunOverview | None = None,
+    ) -> MonitorTaskPayload:
+        if overview is None:
+            runs = self.store.list_runs(task.task_id)
+            latest_record = runs[-1] if runs else None
+            published = [
+                run for run in runs if run.status in {"succeeded", "partial"}
+            ]
+            report_record = published[-1] if published else None
+            now = self._now()
+            pending_run_count = sum(
+                run.end_at <= now and run.status in {"queued", "running"}
+                for run in runs
+            )
+            latest_boundary_at = self.store.latest_boundary(task.task_id).boundary_at
+        else:
+            latest_record = overview.latest_run
+            report_record = overview.latest_report_run
+            pending_run_count = overview.pending_run_count
+            latest_boundary_at = overview.latest_boundary_at
+            now = self._now()
+        latest_run = self._run_digest(latest_record) if latest_record else None
+        latest_report = None
+        if report_record is not None:
+            report_run = report_record
+            latest_report = MonitorLatestReportPayload(
+                run_id=report_run.run_id,
+                status=report_run.status,
+                interval=MonitorTimeIntervalPayload(
+                    start_at=report_run.start_at,
+                    end_at=report_run.end_at,
+                    logical_cutoff_at=report_run.end_at,
+                    boundary_kind=report_run.boundary_type.value,
+                ),
+                summary=MonitorRunSummaryPayload.model_validate(report_run.summary),
+            )
         trigger = self._parse_trigger(task.daily_trigger_time)
         next_cutoff = None
         if task.lifecycle == "active":
             next_cutoff = next_scheduled_cutoff(
                 after=max(
-                    self.store.latest_boundary(task.task_id).boundary_at,
+                    latest_boundary_at,
                     task.schedule_effective_at,
                 ),
                 trigger=trigger,
@@ -409,6 +477,8 @@ class MonitorTaskService:
                 last_error=task.scheduler_error,
             ),
             latest_run=latest_run,
+            latest_report=latest_report,
+            pending_run_count=pending_run_count,
             last_runner_heartbeat_at=task.last_runner_heartbeat_at,
             created_at=task.created_at,
             updated_at=task.updated_at,
@@ -437,7 +507,14 @@ class MonitorTaskService:
         run = self.store.get_run(run_id)
         if run is None:
             raise KeyError(run_id)
-        attempts = [MonitorRunAttemptPayload(**attempt) for attempt in self.store.attempts(run_id)]
+        return self.public_run_record(run, self.store.attempts(run_id))
+
+    def public_run_record(
+        self,
+        run: RunRecord,
+        attempts: list[dict],
+    ) -> MonitorRunPayload:
+        public_attempts = [MonitorRunAttemptPayload(**attempt) for attempt in attempts]
         published = run.status in {"succeeded", "partial"}
         return MonitorRunPayload(
             run_id=run.run_id,
@@ -452,7 +529,7 @@ class MonitorTaskService:
             start_revision=run.start_revision if published else None,
             end_revision=run.end_revision if published else None,
             attempt_count=run.attempt_count,
-            attempts=attempts,
+            attempts=public_attempts,
             summary=MonitorRunSummaryPayload.model_validate(run.summary) if published else None,
             report_ref=run.report_ref if published else None,
             report_sha256=run.report_sha256 if published else None,

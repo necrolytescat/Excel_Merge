@@ -1205,3 +1205,7 @@ class ScheduledMonitorTaskService:
     def end(self, task_id: str):
         payload = self.tasks.end(task_id)
         return self._sync_current(str(payload.task_id))
+
+    def archive(self, task_id: str):
+        payload = self.tasks.archive(task_id)
+        return self._sync_current(str(payload.task_id))

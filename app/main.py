@@ -15,13 +15,24 @@ from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from core.svn_provider import SVNProviderError, provider_from_config
 
-from app.api import batch, diff, health, operations, replay, svn
+from app.api import batch, diff, health, monitor, operations, replay, svn
+from app.monitor_runner import build_runner
+from app.services.branch_history_service import BranchHistoryService
+from app.services.monitor_report_artifacts import FileSystemMonitorReportPublisher
+from app.services.monitor_store import MonitorStore
+from app.services.monitor_task_service import MonitorTaskService
+from app.services.monitor_web_service import MonitorWebError, MonitorWebService
+from app.services.windows_scheduler import (
+    MonitorSchedulerService,
+    ScheduledMonitorTaskService,
+    WindowsSchedulerGateway,
+)
 from app.services.workbook_dataset_service import (
     SVNWorkbookDatasetResolver,
     UnavailableWorkbookDatasetResolver,
@@ -77,6 +88,7 @@ def create_app(
     workbook_dataset_resolver: WorkbookDatasetResolver | None = None,
     batch_diff_service: BatchDiffService | None = None,
     workbook_diff_service: WorkbookDiffService | None = None,
+    monitor_web_service: MonitorWebService | None = None,
 ) -> FastAPI:
     config = config if config is not None else load_config()
     configured_provider = os.environ.get("EXCEL_MERGE_SVN_PROVIDER", "").strip()
@@ -205,6 +217,54 @@ def create_app(
     else:
         app.state.batch_diff_service = None
 
+    app.state.monitor_web_service = monitor_web_service
+    if app.state.monitor_web_service is None and os.name == "nt" and hasattr(
+        provider, "resolve_branch_identity"
+    ):
+        monitor_config = (
+            config.get("monitor", {})
+            if isinstance(config.get("monitor", {}), dict)
+            else {}
+        )
+        configured_monitor_db = os.environ.get("EXCEL_MERGE_MONITOR_DB") or str(
+            monitor_config.get("database_path", "var/m3-monitor/monitor.sqlite3")
+        )
+        monitor_database = Path(configured_monitor_db)
+        if not monitor_database.is_absolute():
+            monitor_database = PROJECT_ROOT / monitor_database
+        try:
+            monitor_store = MonitorStore(monitor_database)
+            monitor_tasks = MonitorTaskService(monitor_store)
+            monitor_scheduler = MonitorSchedulerService(
+                monitor_store,
+                WindowsSchedulerGateway(),
+                database_path=monitor_database,
+                working_directory=PROJECT_ROOT,
+            )
+            monitor_publisher = FileSystemMonitorReportPublisher(
+                monitor_database.parent / "reports"
+            )
+            app.state.monitor_web_service = MonitorWebService(
+                store=monitor_store,
+                tasks=monitor_tasks,
+                scheduled_tasks=ScheduledMonitorTaskService(
+                    monitor_tasks, monitor_scheduler
+                ),
+                scheduler=monitor_scheduler,
+                history=BranchHistoryService(provider),
+                endpoint_registry=lambda: getattr(
+                    app.state, "endpoint_registry", []
+                ),
+                dataset_layout=dataset_layout if isinstance(dataset_layout, dict) else None,
+                runner=build_runner(
+                    database_path=monitor_database,
+                    config_path=DEFAULT_CONFIG_PATH,
+                ),
+                publisher=monitor_publisher,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            app.state.monitor_web_service = None
+
     def close_batch_service() -> None:
         service = getattr(app.state, "batch_diff_service", None)
         if service is not None:
@@ -217,9 +277,22 @@ def create_app(
     def close_operations_logging() -> None:
         app.state.operational_log_service.close()
 
+    def start_monitor_web_service() -> None:
+        service = getattr(app.state, "monitor_web_service", None)
+        if service is not None:
+            service.recover_pending_commands()
+            service.dispatch_retry_intents()
+
+    def close_monitor_web_service() -> None:
+        service = getattr(app.state, "monitor_web_service", None)
+        if service is not None:
+            service.close()
+
     app.add_event_handler("startup", start_operations_logging)
+    app.add_event_handler("startup", start_monitor_web_service)
     app.add_event_handler("shutdown", close_batch_service)
     app.add_event_handler("shutdown", close_operations_logging)
+    app.add_event_handler("shutdown", close_monitor_web_service)
 
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
@@ -292,6 +365,26 @@ def create_app(
                 "provider": provider_name,
                 "active_page": "history",
             },
+        )
+
+    @app.get("/monitor", include_in_schema=False)
+    def monitor_overview(request: Request):
+        return templates.TemplateResponse(
+            "monitor.html",
+            {"request": request, "provider": provider_name, "active_page": "monitor"},
+        )
+
+    @app.get("/monitor/tasks", include_in_schema=False)
+    def monitor_tasks_page(request: Request):
+        return templates.TemplateResponse(
+            "monitor_tasks.html",
+            {"request": request, "provider": provider_name, "active_page": "monitor"},
+        )
+
+    @app.get("/monitor/reports/{run_id}", include_in_schema=False)
+    def monitor_report_page(run_id: UUID):
+        return RedirectResponse(
+            url=f"/api/monitor/runs/{run_id}/report", status_code=307
         )
     @app.get("/compare/demo", include_in_schema=False)
     def compare_demo(request: Request):
@@ -382,6 +475,12 @@ def create_app(
             status_code=exc.status_code,
             content={"error": {"code": exc.code, "message": exc.message}},
         )
+    @app.exception_handler(MonitorWebError)
+    async def monitor_web_error_handler(_: Request, exc: MonitorWebError):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"code": exc.code, "message": exc.message}},
+        )
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError):
         if request.url.path.startswith("/api/operations/"):
@@ -391,6 +490,16 @@ def create_app(
                     "error": {
                         "code": "OPERATIONS_INVALID_REQUEST",
                         "message": "运维查询请求无效",
+                    }
+                },
+            )
+        if request.url.path.startswith("/api/monitor/"):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "code": "MONITOR_INVALID_REQUEST",
+                        "message": "版本监控请求无效",
                     }
                 },
             )
@@ -433,6 +542,7 @@ def create_app(
     app.include_router(diff.router, prefix="/api")
     app.include_router(batch.router, prefix="/api")
     app.include_router(operations.router, prefix="/api")
+    app.include_router(monitor.router, prefix="/api")
     if bool(web_config.get("dev_mode", False)):
         app.include_router(replay.router, prefix="/api")
     return app

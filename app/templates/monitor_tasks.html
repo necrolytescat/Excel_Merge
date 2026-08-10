@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Config Atlas · 监控任务</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.4">
+  <link rel="stylesheet" href="{{ url_for('static', path='monitor.css') }}?v=1.0.0">
+  <script defer src="{{ url_for('static', path='monitor_request.js') }}?v=1.0.0"></script>
+  <script defer src="{{ url_for('static', path='monitor_tasks.js') }}?v=1.0.0"></script>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar" aria-label="主导航">
+    <div class="brand"><div class="brand-mark" aria-hidden="true">CA</div><div><strong>Config Atlas</strong><span>EXCEL REVIEW · READ ONLY</span></div></div>
+    <nav class="sidebar-nav">
+      <p class="nav-label">系统配置</p><a class="nav-item" href="/"><span class="nav-icon" aria-hidden="true">⌂</span><span>基础连接</span></a>
+      <p class="nav-label">对比工具</p><a class="nav-item" href="/compare"><span class="nav-icon" aria-hidden="true">⇄</span><span>版本比对</span><span class="nav-current">M2</span></a>
+      <a class="nav-item active" href="/monitor" aria-current="page"><span class="nav-icon" aria-hidden="true">◉</span><span>版本监控</span><span class="nav-current">M3</span></a>
+      <p class="nav-label">结果</p><a class="nav-item" href="/compare/history"><span class="nav-icon" aria-hidden="true">▤</span><span>历史任务</span></a>
+    </nav>
+    <div class="sidebar-footer"><span class="sidebar-readonly"><span class="status-dot status-ok"></span> SVN 只读</span><span class="sidebar-version">M3 · 每日监控</span></div>
+  </aside>
+  <div class="app-content monitor-content">
+    <header class="topbar monitor-topbar"><div><p class="eyebrow">VERSION MONITOR / TASK INDEX</p><h1>监控任务</h1><p class="subtitle">运行、调度与报告状态</p></div><a class="monitor-primary-link" href="/monitor">新建任务</a></header>
+    <nav class="monitor-tabs" aria-label="版本监控页面"><a href="/monitor">新建与概览</a><a class="is-active" href="/monitor/tasks" aria-current="page">全部任务</a></nav>
+    <main class="monitor-main monitor-task-main">
+      <section class="monitor-toolbar" aria-labelledby="monitor-filter-title">
+        <div class="monitor-section-heading"><div><p class="eyebrow">TASK FILTER</p><h2 id="monitor-filter-title">任务索引</h2></div><button class="monitor-icon-button" id="monitor-task-refresh" type="button" title="刷新任务" aria-label="刷新任务">↻</button></div>
+        <form id="monitor-task-filter" class="monitor-filter-form">
+          <label><span>搜索</span><input id="monitor-task-query" type="search" maxlength="128" autocomplete="off" placeholder="任务名称或端点"></label>
+          <label><span>状态</span><select id="monitor-task-status"><option value="">当前任务</option><option value="active">运行中</option><option value="scheduler_error">调度异常</option><option value="paused">已暂停</option><option value="ended">已结束</option><option value="archived">已归档</option></select></label>
+          <button class="monitor-primary" type="submit">筛选</button><button class="monitor-secondary" id="monitor-filter-reset" type="button">重置</button>
+        </form>
+      </section>
+      <p class="monitor-alert is-hidden" id="monitor-task-alert" role="alert"></p>
+      <section class="monitor-task-index" aria-labelledby="monitor-task-table-title">
+        <div class="monitor-index-meta"><h2 id="monitor-task-table-title">任务列表</h2><span id="monitor-task-meta" role="status" aria-live="polite">正在读取</span></div>
+        <div class="monitor-table-scroll"><table class="monitor-table monitor-task-table"><thead><tr><th>任务 / 分支</th><th>业务状态</th><th>计划</th><th>最近运行</th><th>调度 / 心跳</th><th>操作</th></tr></thead><tbody id="monitor-task-rows"><tr><td colspan="6" class="monitor-loading">正在读取任务</td></tr></tbody></table></div>
+        <div class="monitor-empty is-hidden" id="monitor-task-empty"><strong>当前筛选无任务</strong><span>调整筛选条件或新建任务</span><a href="/monitor">新建任务</a></div>
+        <div class="monitor-more"><button class="monitor-secondary is-hidden" id="monitor-load-more" type="button">加载更多</button></div>
+      </section>
+    </main>
+  </div>
+</div>
+<dialog class="monitor-dialog monitor-detail-dialog" id="monitor-detail-dialog" aria-labelledby="monitor-detail-title">
+  <div class="monitor-dialog-shell">
+    <header><div><p class="eyebrow">MONITOR DETAIL</p><h2 id="monitor-detail-title">任务详情</h2><code id="monitor-detail-id"></code></div><button class="monitor-icon-button" id="monitor-detail-close" type="button" aria-label="关闭详情" title="关闭">×</button></header>
+    <p class="monitor-alert is-hidden" id="monitor-detail-alert" role="alert"></p>
+    <div id="monitor-detail-content" class="monitor-detail-content">
+      <dl class="monitor-detail-grid"><div><dt>固定分支</dt><dd id="monitor-detail-branch">—</dd></div><div><dt>计划</dt><dd id="monitor-detail-schedule">—</dd></div><div><dt>调度</dt><dd id="monitor-detail-scheduler">—</dd></div><div><dt>Runner 心跳</dt><dd id="monitor-detail-heartbeat">—</dd></div></dl>
+      <div class="monitor-detail-actions" id="monitor-detail-actions"></div>
+      <section aria-labelledby="monitor-run-title"><div class="monitor-index-meta"><h3 id="monitor-run-title">运行记录</h3><span id="monitor-run-meta"></span></div><div class="monitor-table-scroll"><table class="monitor-table monitor-run-table"><thead><tr><th>逻辑区间</th><th>状态</th><th>变化</th><th>尝试</th><th>报告</th></tr></thead><tbody id="monitor-run-rows"></tbody></table></div></section>
+    </div>
+  </div>
+</dialog>
+<dialog class="monitor-dialog" id="monitor-edit-dialog" aria-labelledby="monitor-edit-title">
+  <form class="monitor-dialog-shell monitor-edit-form" id="monitor-edit-form"><header><div><p class="eyebrow">SCHEDULE</p><h2 id="monitor-edit-title">修改调度</h2></div><button class="monitor-icon-button" id="monitor-edit-close" type="button" aria-label="关闭修改" title="关闭">×</button></header><label><span>每日触发时间</span><input id="monitor-edit-trigger" type="time" step="1" required></label><label><span>结束时间（可选）</span><input id="monitor-edit-end" type="datetime-local" step="1"></label><p class="monitor-alert is-hidden" id="monitor-edit-alert" role="alert"></p><footer><button class="monitor-secondary" id="monitor-edit-cancel" type="button">取消</button><button class="monitor-primary" type="submit">保存并同步</button></footer></form>
+</dialog>
+<dialog class="monitor-dialog" id="monitor-confirm-dialog" aria-labelledby="monitor-confirm-title"><div class="monitor-dialog-shell monitor-confirm-shell"><header><div><p class="eyebrow">CONFIRM ACTION</p><h2 id="monitor-confirm-title">确认操作</h2></div></header><p id="monitor-confirm-message"></p><footer><button class="monitor-secondary" id="monitor-confirm-cancel" type="button">取消</button><button class="monitor-danger" id="monitor-confirm-submit" type="button">确认</button></footer></div></dialog>
+</body>
+</html>

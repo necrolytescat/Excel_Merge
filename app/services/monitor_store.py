@@ -16,7 +16,7 @@ from app.services.monitor_schedule import BoundarySpec, BoundaryType, SHANGHAI, 
 
 
 DEFAULT_DATABASE_PATH = Path("var/m3-monitor/monitor.sqlite3")
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class MonitorLeaseLost(RuntimeError):
@@ -24,6 +24,10 @@ class MonitorLeaseLost(RuntimeError):
 
 
 class MonitorStateConflict(RuntimeError):
+    pass
+
+
+class MonitorIdempotencyConflict(RuntimeError):
     pass
 
 
@@ -115,6 +119,14 @@ class RunRecord:
 
 
 @dataclass(frozen=True)
+class TaskRunOverview:
+    latest_run: RunRecord | None
+    latest_report_run: RunRecord | None
+    pending_run_count: int
+    latest_boundary_at: datetime
+
+
+@dataclass(frozen=True)
 class LeaseClaim:
     run: RunRecord
     lease_token: str
@@ -138,6 +150,31 @@ class PublicationRecord:
     report_expires_at: datetime
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True)
+class CommandRecord:
+    request_id: str
+    method: str
+    target: str
+    payload_hash: str
+    payload_json: str
+    state: Literal["pending", "completed"]
+    response_status: int | None
+    response_json: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class RetryIntentRecord:
+    request_id: str
+    task_id: str
+    run_id: str
+    state: Literal["pending", "dispatching", "dispatched"]
+    dispatch_count: int
+    lease_token: str | None
+    lease_expires_at: datetime | None
 
 
 MIGRATION_1 = (
@@ -211,6 +248,28 @@ MIGRATION_4 = (
     "ALTER TABLE monitor_tasks ADD COLUMN windows_task_name TEXT",
     "ALTER TABLE monitor_tasks ADD COLUMN scheduler_last_synced_at TEXT",
     "ALTER TABLE monitor_tasks ADD COLUMN scheduler_error_json TEXT",
+)
+
+MIGRATION_5 = (
+    """CREATE TABLE monitor_commands (
+        request_id TEXT PRIMARY KEY, method TEXT NOT NULL, target TEXT NOT NULL,
+        payload_hash TEXT NOT NULL, payload_json TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('pending','completed')),
+        response_status INTEGER, response_json TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX monitor_commands_target_state_idx ON monitor_commands(target,state)",
+    """CREATE TABLE monitor_retry_outbox (
+        request_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, run_id TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('pending','dispatching','dispatched')),
+        dispatch_count INTEGER NOT NULL DEFAULT 0,
+        lease_token TEXT, lease_expires_at TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        FOREIGN KEY(request_id) REFERENCES monitor_commands(request_id) ON DELETE CASCADE,
+        FOREIGN KEY(task_id) REFERENCES monitor_tasks(task_id) ON DELETE CASCADE,
+        FOREIGN KEY(run_id) REFERENCES monitor_runs(run_id) ON DELETE CASCADE
+    )""",
+    "CREATE INDEX monitor_retry_outbox_state_idx ON monitor_retry_outbox(state,lease_expires_at)",
 )
 
 
@@ -297,6 +356,13 @@ class MonitorStore:
                 connection.execute(
                     "INSERT INTO monitor_schema_migrations(version, applied_at) VALUES (?, ?)",
                     (4, _timestamp(datetime.now(timezone.utc))),
+                )
+            if 5 not in versions:
+                for statement in MIGRATION_5:
+                    connection.execute(statement)
+                connection.execute(
+                    "INSERT INTO monitor_schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (5, _timestamp(datetime.now(timezone.utc))),
                 )
             connection.commit()
         except Exception:
@@ -418,6 +484,347 @@ class MonitorStore:
         with self._transaction() as connection:
             rows = connection.execute("SELECT * FROM monitor_tasks ORDER BY created_at, task_id").fetchall()
         return [self._task(row) for row in rows]
+
+    def list_task_page(
+        self,
+        *,
+        limit: int,
+        statuses: list[str] | None = None,
+        query: str | None = None,
+        before_created_at: datetime | None = None,
+        before_task_id: str | None = None,
+    ) -> list[TaskRecord]:
+        if limit < 1:
+            raise ValueError("task page limit must be positive")
+        where: list[str] = []
+        parameters: list[Any] = []
+        normalized_statuses = sorted(set(statuses or []))
+        if normalized_statuses:
+            placeholders = ",".join("?" for _ in normalized_statuses)
+            where.append(f"lifecycle IN ({placeholders})")
+            parameters.extend(normalized_statuses)
+        else:
+            where.append("lifecycle<>'archived'")
+        needle = (query or "").strip().lower()
+        if needle:
+            where.append(
+                "(instr(lower(name),?)>0 OR instr(lower(endpoint_id),?)>0 "
+                "OR instr(lower(branch_label),?)>0)"
+            )
+            parameters.extend((needle, needle, needle))
+        if before_created_at is not None or before_task_id is not None:
+            if before_created_at is None or before_task_id is None:
+                raise ValueError("task cursor requires both sort values")
+            cursor_time = _timestamp(before_created_at)
+            cursor_id = str(UUID(before_task_id))
+            where.append("(created_at<? OR (created_at=? AND task_id<?))")
+            parameters.extend((cursor_time, cursor_time, cursor_id))
+        sql = "SELECT * FROM monitor_tasks"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY created_at DESC,task_id DESC LIMIT ?"
+        parameters.append(limit)
+        with self._transaction() as connection:
+            rows = connection.execute(sql, parameters).fetchall()
+        return [self._task(row) for row in rows]
+
+    def task_run_overviews(
+        self, task_ids: list[str], *, now: datetime
+    ) -> dict[str, TaskRunOverview]:
+        normalized = [str(UUID(task_id)) for task_id in dict.fromkeys(task_ids)]
+        if not normalized:
+            return {}
+        placeholders = ",".join("?" for _ in normalized)
+        latest: dict[str, RunRecord] = {}
+        published: dict[str, RunRecord] = {}
+        pending: dict[str, int] = {}
+        boundaries: dict[str, datetime] = {}
+        with self._transaction() as connection:
+            latest_rows = connection.execute(
+                f"""WITH ranked AS (
+                    SELECT monitor_runs.*,
+                           row_number() OVER (
+                               PARTITION BY task_id ORDER BY end_at DESC,run_id DESC
+                           ) AS row_number
+                    FROM monitor_runs WHERE task_id IN ({placeholders})
+                ) SELECT * FROM ranked WHERE row_number=1""",
+                normalized,
+            ).fetchall()
+            published_rows = connection.execute(
+                f"""WITH ranked AS (
+                    SELECT monitor_runs.*,
+                           row_number() OVER (
+                               PARTITION BY task_id ORDER BY end_at DESC,run_id DESC
+                           ) AS row_number
+                    FROM monitor_runs
+                    WHERE task_id IN ({placeholders})
+                      AND status IN ('succeeded','partial')
+                ) SELECT * FROM ranked WHERE row_number=1""",
+                normalized,
+            ).fetchall()
+            pending_rows = connection.execute(
+                f"""SELECT task_id,count(*) AS pending_count FROM monitor_runs
+                    WHERE task_id IN ({placeholders}) AND end_at<=?
+                      AND status IN ('queued','running') GROUP BY task_id""",
+                [*normalized, _timestamp(now)],
+            ).fetchall()
+            boundary_rows = connection.execute(
+                f"""SELECT task_id,max(boundary_at) AS latest_boundary_at
+                    FROM monitor_boundaries WHERE task_id IN ({placeholders})
+                    GROUP BY task_id""",
+                normalized,
+            ).fetchall()
+        for row in latest_rows:
+            latest[row["task_id"]] = self._run(row)
+        for row in published_rows:
+            published[row["task_id"]] = self._run(row)
+        for row in pending_rows:
+            pending[row["task_id"]] = int(row["pending_count"])
+        for row in boundary_rows:
+            boundaries[row["task_id"]] = _datetime(row["latest_boundary_at"])
+        return {
+            task_id: TaskRunOverview(
+                latest_run=latest.get(task_id),
+                latest_report_run=published.get(task_id),
+                pending_run_count=pending.get(task_id, 0),
+                latest_boundary_at=boundaries[task_id],
+            )
+            for task_id in normalized
+        }
+
+    @staticmethod
+    def _command(row: sqlite3.Row) -> CommandRecord:
+        return CommandRecord(
+            request_id=row["request_id"],
+            method=row["method"],
+            target=row["target"],
+            payload_hash=row["payload_hash"],
+            payload_json=row["payload_json"],
+            state=row["state"],
+            response_status=row["response_status"],
+            response_json=row["response_json"],
+            created_at=_datetime(row["created_at"]),
+            updated_at=_datetime(row["updated_at"]),
+        )
+
+    def claim_command(
+        self,
+        *,
+        request_id: str,
+        method: str,
+        target: str,
+        payload_hash: str,
+        payload_json: str,
+        now: datetime,
+    ) -> CommandRecord:
+        request_id = str(UUID(request_id))
+        with self._transaction(write=True) as connection:
+            existing = connection.execute(
+                "SELECT * FROM monitor_commands WHERE request_id=?", (request_id,)
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["method"] != method
+                    or existing["target"] != target
+                    or existing["payload_hash"] != payload_hash
+                ):
+                    raise MonitorIdempotencyConflict(
+                        "request_id already belongs to another monitor command"
+                    )
+                return self._command(existing)
+            pending = connection.execute(
+                "SELECT request_id FROM monitor_commands WHERE target=? AND state='pending'",
+                (target,),
+            ).fetchone()
+            if pending is not None:
+                raise MonitorStateConflict("another monitor command is still pending")
+            timestamp = _timestamp(now)
+            connection.execute(
+                """INSERT INTO monitor_commands
+                   (request_id,method,target,payload_hash,payload_json,state,created_at,updated_at)
+                   VALUES (?,?,?,?,?,'pending',?,?)""",
+                (request_id, method, target, payload_hash, payload_json, timestamp, timestamp),
+            )
+            row = connection.execute(
+                "SELECT * FROM monitor_commands WHERE request_id=?", (request_id,)
+            ).fetchone()
+        return self._command(row)
+
+    def list_pending_commands(self) -> list[CommandRecord]:
+        with self._transaction() as connection:
+            rows = connection.execute(
+                "SELECT * FROM monitor_commands WHERE state='pending' ORDER BY created_at,request_id"
+            ).fetchall()
+        return [self._command(row) for row in rows]
+
+    def complete_command(
+        self,
+        request_id: str,
+        *,
+        response_status: int,
+        response_json: str,
+        now: datetime,
+    ) -> CommandRecord:
+        request_id = str(UUID(request_id))
+        with self._transaction(write=True) as connection:
+            row = connection.execute(
+                "SELECT * FROM monitor_commands WHERE request_id=?", (request_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(request_id)
+            if row["state"] == "completed":
+                return self._command(row)
+            connection.execute(
+                """UPDATE monitor_commands
+                   SET state='completed',response_status=?,response_json=?,updated_at=?
+                   WHERE request_id=? AND state='pending'""",
+                (response_status, response_json, _timestamp(now), request_id),
+            )
+            completed = connection.execute(
+                "SELECT * FROM monitor_commands WHERE request_id=?", (request_id,)
+            ).fetchone()
+        return self._command(completed)
+
+    def discard_pending_command(self, request_id: str) -> None:
+        with self._transaction(write=True) as connection:
+            connection.execute(
+                "DELETE FROM monitor_commands WHERE request_id=? AND state='pending'",
+                (str(UUID(request_id)),),
+            )
+
+    @staticmethod
+    def _retry_intent(row: sqlite3.Row) -> RetryIntentRecord:
+        return RetryIntentRecord(
+            request_id=row["request_id"],
+            task_id=row["task_id"],
+            run_id=row["run_id"],
+            state=row["state"],
+            dispatch_count=row["dispatch_count"],
+            lease_token=row["lease_token"],
+            lease_expires_at=_datetime(row["lease_expires_at"]),
+        )
+
+    def accept_retry_intent(
+        self,
+        *,
+        request_id: str,
+        run_id: str,
+        method: str,
+        target: str,
+        payload_hash: str,
+        payload_json: str,
+        response_status: int,
+        response_json: str,
+        now: datetime,
+    ) -> CommandRecord:
+        request_id = str(UUID(request_id))
+        timestamp = _timestamp(now)
+        with self._transaction(write=True) as connection:
+            existing = connection.execute(
+                "SELECT * FROM monitor_commands WHERE request_id=?", (request_id,)
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["method"] != method
+                    or existing["target"] != target
+                    or existing["payload_hash"] != payload_hash
+                ):
+                    raise MonitorIdempotencyConflict(
+                        "request_id already belongs to another monitor command"
+                    )
+                return self._command(existing)
+            run_id = str(UUID(run_id))
+            run = connection.execute(
+                """SELECT r.run_id,r.task_id,r.status,t.lifecycle
+                   FROM monitor_runs r JOIN monitor_tasks t ON t.task_id=r.task_id
+                   WHERE r.run_id=?""",
+                (run_id,),
+            ).fetchone()
+            if run is None:
+                raise KeyError(run_id)
+            if run["status"] != "failed" or run["lifecycle"] == "archived":
+                raise MonitorStateConflict("monitor run cannot be retried")
+            connection.execute(
+                """INSERT INTO monitor_commands
+                   (request_id,method,target,payload_hash,payload_json,state,response_status,response_json,
+                    created_at,updated_at)
+                   VALUES (?,?,?,?,?,'completed',?,?,?,?)""",
+                (
+                    request_id,
+                    method,
+                    target,
+                    payload_hash,
+                    payload_json,
+                    response_status,
+                    response_json,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.execute(
+                """INSERT INTO monitor_retry_outbox
+                   (request_id,task_id,run_id,state,created_at,updated_at)
+                   VALUES (?,?,?,'pending',?,?)""",
+                (request_id, run["task_id"], run_id, timestamp, timestamp),
+            )
+            completed = connection.execute(
+                "SELECT * FROM monitor_commands WHERE request_id=?", (request_id,)
+            ).fetchone()
+        return self._command(completed)
+
+    def claim_retry_intents(
+        self,
+        *,
+        now: datetime,
+        lease_for: timedelta,
+        limit: int = 20,
+    ) -> list[RetryIntentRecord]:
+        current = require_utc(now)
+        claimed: list[RetryIntentRecord] = []
+        with self._transaction(write=True) as connection:
+            rows = connection.execute(
+                """SELECT * FROM monitor_retry_outbox
+                   WHERE state='pending'
+                      OR (state='dispatching' AND lease_expires_at<=?)
+                   ORDER BY created_at,request_id LIMIT ?""",
+                (_timestamp(current), limit),
+            ).fetchall()
+            for row in rows:
+                token = secrets.token_urlsafe(32)
+                connection.execute(
+                    """UPDATE monitor_retry_outbox
+                       SET state='dispatching',dispatch_count=dispatch_count+1,
+                           lease_token=?,lease_expires_at=?,updated_at=?
+                       WHERE request_id=?""",
+                    (
+                        token,
+                        _timestamp(current + lease_for),
+                        _timestamp(current),
+                        row["request_id"],
+                    ),
+                )
+                updated = connection.execute(
+                    "SELECT * FROM monitor_retry_outbox WHERE request_id=?",
+                    (row["request_id"],),
+                ).fetchone()
+                claimed.append(self._retry_intent(updated))
+        return claimed
+
+    def finish_retry_intent(
+        self,
+        request_id: str,
+        lease_token: str,
+        *,
+        now: datetime,
+    ) -> bool:
+        with self._transaction(write=True) as connection:
+            cursor = connection.execute(
+                """UPDATE monitor_retry_outbox
+                   SET state='dispatched',lease_token=NULL,lease_expires_at=NULL,updated_at=?
+                   WHERE request_id=? AND state='dispatching' AND lease_token=?""",
+                (_timestamp(now), str(UUID(request_id)), lease_token),
+            )
+        return cursor.rowcount == 1
 
     def _insert_boundary(
         self, connection: sqlite3.Connection, task_id: str, spec: BoundarySpec, now: datetime
@@ -651,6 +1058,36 @@ class MonitorStore:
             ).fetchall()
         return [self._run(row) for row in rows]
 
+    def list_run_page(
+        self,
+        task_id: str,
+        *,
+        limit: int,
+        before_end_at: datetime | None = None,
+        before_run_id: str | None = None,
+    ) -> list[RunRecord]:
+        if limit < 1:
+            raise ValueError("run page limit must be positive")
+        parameters: list[Any] = [str(UUID(task_id))]
+        cursor_sql = ""
+        if before_end_at is not None or before_run_id is not None:
+            if before_end_at is None or before_run_id is None:
+                raise ValueError("run cursor requires both sort values")
+            cursor_time = _timestamp(before_end_at)
+            cursor_sql = " AND (end_at<? OR (end_at=? AND run_id<?))"
+            parameters.extend(
+                (cursor_time, cursor_time, str(UUID(before_run_id)))
+            )
+        parameters.append(limit)
+        with self._transaction() as connection:
+            rows = connection.execute(
+                "SELECT * FROM monitor_runs WHERE task_id=?"
+                + cursor_sql
+                + " ORDER BY end_at DESC,run_id DESC LIMIT ?",
+                parameters,
+            ).fetchall()
+        return [self._run(row) for row in rows]
+
     def get_run(self, run_id: str) -> RunRecord | None:
         with self._transaction() as connection:
             row = connection.execute("SELECT * FROM monitor_runs WHERE run_id=?", (run_id,)).fetchone()
@@ -782,6 +1219,33 @@ class MonitorStore:
             }
             for row in rows
         ]
+
+    def attempts_for_runs(
+        self, run_ids: list[str]
+    ) -> dict[str, list[dict[str, Any]]]:
+        normalized = [str(UUID(run_id)) for run_id in dict.fromkeys(run_ids)]
+        result = {run_id: [] for run_id in normalized}
+        if not normalized:
+            return result
+        placeholders = ",".join("?" for _ in normalized)
+        with self._transaction() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM monitor_run_attempts
+                    WHERE run_id IN ({placeholders}) ORDER BY run_id,attempt""",
+                normalized,
+            ).fetchall()
+        for row in rows:
+            result[row["run_id"]].append(
+                {
+                    "attempt": row["attempt"],
+                    "trigger": row["trigger"],
+                    "status": row["status"],
+                    "started_at": _datetime(row["started_at"]),
+                    "finished_at": _datetime(row["finished_at"]),
+                    "errors": _errors(row["errors_json"]),
+                }
+            )
+        return result
 
     def claim_run(
         self,

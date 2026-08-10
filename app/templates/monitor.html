@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Config Atlas · 版本监控</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.4">
+  <link rel="stylesheet" href="{{ url_for('static', path='monitor.css') }}?v=1.0.0">
+  <script defer src="{{ url_for('static', path='monitor_request.js') }}?v=1.0.0"></script>
+  <script defer src="{{ url_for('static', path='monitor.js') }}?v=1.0.0"></script>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar" aria-label="主导航">
+    <div class="brand"><div class="brand-mark" aria-hidden="true">CA</div><div><strong>Config Atlas</strong><span>EXCEL REVIEW · READ ONLY</span></div></div>
+    <nav class="sidebar-nav">
+      <p class="nav-label">系统配置</p>
+      <a class="nav-item" href="/"><span class="nav-icon" aria-hidden="true">⌂</span><span>基础连接</span></a>
+      <p class="nav-label">对比工具</p>
+      <a class="nav-item" href="/compare"><span class="nav-icon" aria-hidden="true">⇄</span><span>版本比对</span><span class="nav-current">M2</span></a>
+      <a class="nav-item active" href="/monitor" aria-current="page"><span class="nav-icon" aria-hidden="true">◉</span><span>版本监控</span><span class="nav-current">M3</span></a>
+      <p class="nav-label">结果</p>
+      <a class="nav-item" href="/compare/history"><span class="nav-icon" aria-hidden="true">▤</span><span>历史任务</span></a>
+    </nav>
+    <div class="sidebar-footer"><span class="sidebar-readonly"><span class="status-dot status-ok"></span> SVN 只读</span><span class="sidebar-version">M3 · 每日监控</span></div>
+  </aside>
+  <div class="app-content monitor-content">
+    <header class="topbar monitor-topbar">
+      <div><p class="eyebrow">VERSION MONITOR / DAILY QA</p><h1>版本监控</h1><p class="subtitle">固定分支 · 上海时区 · 最终净值</p></div>
+      <a class="monitor-primary-link" href="/monitor/tasks">任务列表</a>
+    </header>
+    <nav class="monitor-tabs" aria-label="版本监控页面"><a class="is-active" href="/monitor" aria-current="page">新建与概览</a><a href="/monitor/tasks">全部任务</a></nav>
+    <main class="monitor-main">
+      <p class="monitor-alert is-hidden" id="monitor-alert" role="alert"></p>
+      <section class="monitor-create" aria-labelledby="monitor-create-title">
+        <div class="monitor-section-heading"><div><p class="eyebrow">NEW MONITOR</p><h2 id="monitor-create-title">新建监控任务</h2></div><span>Asia/Shanghai</span></div>
+        <form id="monitor-create-form" class="monitor-form">
+          <label><span>任务名称</span><input id="monitor-name" name="name" required maxlength="128" autocomplete="off" placeholder="例如：每日战斗配置回归"></label>
+          <label><span>固定分支</span><select id="monitor-endpoint" name="endpoint_id" required><option value="">正在读取端点</option></select></label>
+          <label><span>生效时间</span><input id="monitor-effective-at" name="effective_at" type="datetime-local" step="1" required></label>
+          <label><span>结束时间（可选）</span><input id="monitor-end-at" name="end_at" type="datetime-local" step="1"></label>
+          <label><span>每日触发时间</span><input id="monitor-trigger" name="daily_trigger_time" type="time" step="1" value="18:00:00" required></label>
+          <div class="monitor-form-actions"><button class="monitor-primary" id="monitor-create-submit" type="submit">创建并同步</button><span id="monitor-create-status" role="status" aria-live="polite"></span></div>
+        </form>
+      </section>
+      <section class="monitor-recent" aria-labelledby="monitor-recent-title">
+        <div class="monitor-section-heading"><div><p class="eyebrow">RECENT TASKS</p><h2 id="monitor-recent-title">最近任务</h2></div><div class="monitor-heading-actions"><span id="monitor-recent-updated"></span><button class="monitor-icon-button" id="monitor-refresh" type="button" title="刷新任务" aria-label="刷新任务">↻</button></div></div>
+        <div class="monitor-table-scroll">
+          <table class="monitor-table"><thead><tr><th>任务</th><th>业务状态</th><th>调度</th><th>下次截止</th><th>最近报告</th><th>积压</th></tr></thead><tbody id="monitor-recent-rows"><tr><td colspan="6" class="monitor-loading">正在读取任务</td></tr></tbody></table>
+        </div>
+        <div class="monitor-empty is-hidden" id="monitor-recent-empty"><strong>暂无监控任务</strong><span>创建后会在此显示运行与报告状态</span></div>
+      </section>
+    </main>
+  </div>
+</div>
+</body>
+</html>

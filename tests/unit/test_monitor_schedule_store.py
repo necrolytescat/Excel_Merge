@@ -72,7 +72,13 @@ def test_database_is_isolated_versioned_wal_and_foreign_keys(tmp_path):
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert [row[0] for row in connection.execute(
             "SELECT version FROM monitor_schema_migrations ORDER BY version"
-        ).fetchall()] == [1, 2, 3, 4]
+        ).fetchall()] == [1, 2, 3, 4, 5]
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='monitor_commands'"
+        ).fetchone()
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='monitor_retry_outbox'"
+        ).fetchone()
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(monitor_tasks)")
         }
@@ -106,7 +112,7 @@ def test_version_one_database_migrates_without_recreating_tables(tmp_path):
     with store._connect() as upgraded:
         assert [row[0] for row in upgraded.execute(
             "SELECT version FROM monitor_schema_migrations ORDER BY version"
-        )] == [1, 2, 3, 4]
+        )] == [1, 2, 3, 4, 5]
         assert "ended_reason" in {
             row[1] for row in upgraded.execute("PRAGMA table_info(monitor_tasks)")
         }

@@ -325,6 +325,45 @@ class FileSystemMonitorReportPublisher:
             html_sha256=html_sha,
         )
 
+    def resolve_latest_html(
+        self,
+        *,
+        task_id: str,
+        run_id: str,
+        logical_cutoff_at: datetime,
+        reference: str,
+        expected_html_sha256: str,
+    ) -> tuple[bytes, str]:
+        report_id = parse_report_reference(reference)
+        try:
+            self._validate_directories(task_id, create=False)
+        except (MonitorReportPublishError, OSError) as error:
+            raise MonitorReportReferenceError(
+                "report directory ownership is invalid"
+            ) from error
+        _, _, latest_path = self._paths(task_id, logical_cutoff_at)
+        if not self._regular_file(latest_path):
+            raise MonitorReportReferenceError("latest report artifact is unavailable")
+        offline_html = latest_path.read_bytes()
+        html_sha = hashlib.sha256(offline_html).hexdigest()
+        if html_sha != expected_html_sha256:
+            raise MonitorReportReferenceError("latest report HTML checksum mismatch")
+        try:
+            payload = _decode_embedded_report(offline_html)
+        except MonitorReportReferenceError:
+            raise
+        except Exception as error:
+            raise MonitorReportReferenceError("latest report HTML is invalid") from error
+        cutoff = logical_cutoff_at.astimezone(timezone.utc)
+        if (
+            payload.report_id != report_id
+            or str(payload.task_id) != self._task_segment(task_id)
+            or str(payload.run_id) != str(UUID(run_id))
+            or payload.interval.logical_cutoff_at != cutoff
+        ):
+            raise MonitorReportReferenceError("latest report ownership mismatch")
+        return offline_html, html_sha
+
     def load_registered(
         self,
         *,
