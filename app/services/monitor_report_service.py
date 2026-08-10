@@ -294,6 +294,13 @@ def render_monitor_report_html(report: MonitorReportPayload) -> bytes:
     return document.encode("utf-8")
 
 
+def render_legacy_compatible_report_html(raw_html: bytes) -> bytes:
+    """Repair the one released template whose JS contained literal newlines."""
+    if b'.join("\n")' not in raw_html:
+        return raw_html
+    return render_monitor_report_html(_decode_embedded_report(raw_html))
+
+
 def _decode_embedded_report(raw_html: bytes) -> MonitorReportPayload:
     match = _EMBEDDED_REPORT.search(raw_html)
     if match is None:
@@ -370,7 +377,7 @@ _HTML_TEMPLATE = """<!doctype html>
     var byId=function(id){return document.getElementById(id)};
     var text=function(tag,value,className){var node=document.createElement(tag);node.textContent=value==null?"-":value;if(className){node.className=className}return node};
     var formatTime=function(value){return value?new Intl.DateTimeFormat("zh-CN",{dateStyle:"medium",timeStyle:"medium",timeZone:"Asia/Shanghai"}).format(new Date(value)):"-"};
-    var valueOf=function(side){if(!side){return "-"}if(side.row_values){return Object.entries(side.row_values).map(function(pair){return pair[0]+": "+pair[1]}).join("\n")}if(side.field_definition){var d=side.field_definition;return "显示名: "+(d.display_name||"-")+"\n类型: "+d.declared_type+"\n范围: "+d.scope}return side.display_value};
+    var valueOf=function(side){if(!side){return "-"}if(side.row_values){return Object.entries(side.row_values).map(function(pair){return pair[0]+": "+pair[1]}).join("\\n")}if(side.field_definition){var d=side.field_definition;return "显示名: "+(d.display_name||"-")+"\\n类型: "+d.declared_type+"\\n范围: "+d.scope}return side.display_value};
     byId("report-title").textContent=report.task_name+" - 版本监控报告";
     var meta=[["状态",report.status==="partial"?"部分成功":"成功",report.status],["固定分支",report.branch.label],["分支路径",report.branch.repository_relative_path],["报告区间",formatTime(report.interval.start_at)+" 至 "+formatTime(report.interval.end_at)],["Revision",report.revisions.start_revision+" → "+report.revisions.end_revision],["计划截止",formatTime(report.interval.logical_cutoff_at)],["生成时间",formatTime(report.generated_at)]];
     meta.forEach(function(item){var box=document.createElement("div");box.append(text("dt",item[0]));box.append(text("dd",item[1],item[2]?"status "+item[2]:""));byId("report-meta").append(box)});

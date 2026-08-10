@@ -203,7 +203,9 @@ def command_payload(request_id=None):
     }
 
 
-def publish_report(service: MonitorWebService, task_id: str):
+def publish_report(
+    service: MonitorWebService, task_id: str, *, legacy_blank_html: bool = False
+):
     task = service.get_task(task_id)
     run = service.store.list_runs(task_id)[-1]
     claim = service.store.claim_run(
@@ -237,6 +239,8 @@ def publish_report(service: MonitorWebService, task_id: str):
     report = MonitorReportPayload.model_validate(data)
     canonical = serialize_monitor_json(report)
     html = render_monitor_report_html(report)
+    if legacy_blank_html:
+        html = html.replace(b'.join("\\n")', b'.join("\n")')
     draft = ReportDraft(
         payload=report,
         canonical_json=canonical,
@@ -1215,6 +1219,47 @@ def test_task_list_uses_sql_page_and_batched_overviews(tmp_path, monkeypatch):
         )
         assert cached.status_code == 304
         assert not cached.content
+
+
+def test_legacy_blank_report_is_repaired_without_rewriting_artifacts(tmp_path):
+    service = build_service(tmp_path)
+    app = create_app(
+        config={"svn": {"provider": "mock"}},
+        provider=MockSVNProvider(),
+        monitor_web_service=service,
+    )
+    with TestClient(app) as client:
+        task = client.post("/api/monitor/tasks", json=create_payload()).json()
+        client.post(
+            f"/api/monitor/tasks/{task['task_id']}/pause",
+            json=command_payload(),
+        )
+        run, draft = publish_report(
+            service, task["task_id"], legacy_blank_html=True
+        )
+        expected = render_monitor_report_html(draft.payload)
+
+        for url in (
+            f"/api/monitor/runs/{run.run_id}/report",
+            f"/api/monitor/tasks/{task['task_id']}/latest-report",
+        ):
+            response = client.get(url)
+            assert response.status_code == 200
+            assert response.content == expected
+            assert response.headers["etag"] == (
+                f'"{hashlib.sha256(expected).hexdigest()}"'
+            )
+
+        publication = service.store.get_publication(run.run_id)
+        stored = service.publisher.resolve(
+            task_id=task["task_id"],
+            run_id=run.run_id,
+            logical_cutoff_at=run.end_at,
+            reference=publication.report_ref,
+            expected_json_sha256=publication.json_sha256,
+            expected_html_sha256=publication.html_sha256,
+        )
+        assert stored.offline_html == draft.offline_html
 
 
 def test_latest_report_survives_history_retention_cleanup(tmp_path):

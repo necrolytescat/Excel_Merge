@@ -32,7 +32,10 @@ from app.services.monitor_api_contract import (
     encode_cursor,
 )
 from app.services.monitor_report_artifacts import FileSystemMonitorReportPublisher
-from app.services.monitor_report_service import MonitorReportReferenceError
+from app.services.monitor_report_service import (
+    MonitorReportReferenceError,
+    render_legacy_compatible_report_html,
+)
 from app.services.monitor_store import (
     MonitorIdempotencyConflict,
     MonitorStateConflict,
@@ -752,7 +755,8 @@ class MonitorWebService:
             raise MonitorWebError(
                 "MONITOR_REPORT_NOT_FOUND", "监控报告不可用", 404
             ) from error
-        return resolved.offline_html, resolved.html_sha256
+        content = render_legacy_compatible_report_html(resolved.offline_html)
+        return content, hashlib.sha256(content).hexdigest()
 
     def load_run_report(self, run_id: UUID) -> tuple[bytes, str]:
         return self._load_report(str(run_id), allow_expired=False)
@@ -765,13 +769,15 @@ class MonitorWebService:
         if run.task_id != str(task_id):
             raise MonitorWebError("MONITOR_REPORT_NOT_FOUND", "监控报告不存在", 404)
         try:
-            return self.publisher.resolve_latest_html(
+            content, _ = self.publisher.resolve_latest_html(
                 task_id=run.task_id,
                 run_id=run.run_id,
                 logical_cutoff_at=run.end_at,
                 reference=publication.report_ref,
                 expected_html_sha256=publication.html_sha256,
             )
+            content = render_legacy_compatible_report_html(content)
+            return content, hashlib.sha256(content).hexdigest()
         except MonitorReportReferenceError as error:
             raise MonitorWebError(
                 "MONITOR_REPORT_NOT_FOUND", "监控报告不可用", 404

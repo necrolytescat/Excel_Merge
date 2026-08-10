@@ -22,6 +22,7 @@ from app.services.monitor_report_service import (
     ReportDraft,
     build_monitor_report,
     parse_report_reference,
+    render_legacy_compatible_report_html,
     render_monitor_report_html,
     report_reference,
 )
@@ -196,10 +197,23 @@ def test_html_has_all_filters_empty_state_partial_state_and_structural_dash():
     assert "本报告为部分成功" in html
     assert 'item.row_key==null?"-":item.row_key' in html
     assert "没有符合当前筛选条件的变化" in html
+    assert '.join("\\n")' in html
+    assert '+"\\n类型: "' in html
+    assert '+"\\n范围: "' in html
+    assert '.join("\n")' not in html
 
     empty = render_monitor_report_html(empty_report()).decode("utf-8")
     assert '"changes": []' in empty
     assert '"status": "succeeded"' in empty
+
+
+def test_legacy_blank_report_is_repaired_without_changing_valid_report():
+    current = render_monitor_report_html(report_from())
+    legacy = current.replace(b'.join("\\n")', b'.join("\n")')
+
+    assert legacy != current
+    assert render_legacy_compatible_report_html(legacy) == current
+    assert render_legacy_compatible_report_html(current) is current
 
 
 def test_html_placeholder_text_in_task_name_does_not_replace_the_title():
