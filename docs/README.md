@@ -20,16 +20,18 @@
 
 维护左侧导航“版本监控”模块时，先读取：
 
-1. `M3-VERSION-MONITORING-PRD.md`：已确认的产品语义、时间边界、报告和运行保证；
-2. `M3-VERSION-MONITORING-IMPLEMENTATION.md`：架构、契约、分阶段实施和验收门禁；
-3. `VERSION-COMPARISON-HANDBOOK.md`：复用的 Table/TableCsv 配对与业务 Diff 边界；
-4. `HISTORY-TASKS-HANDBOOK.md`：独立持久化、日志和 SVN 缓存生命周期边界。
+1. `M3-VERSION-MONITORING-HANDBOOK.md`：长期架构、代码导航、冻结规则、验收步骤和故障定位；
+2. `M3-VERSION-MONITORING-PRD.md`：产品语义、时间边界、报告和运行保证；
+3. `M3-VERSION-MONITORING-IMPLEMENTATION.md`：历史架构、分阶段实施和验收门禁；
+4. `VERSION-COMPARISON-HANDBOOK.md`：复用的 Table/TableCsv 配对与业务 Diff 边界；
+5. `HISTORY-TASKS-HANDBOOK.md`：独立持久化、日志和 SVN 缓存生命周期边界。
 
 ## 当前有效文档
 
 | 文档 | 用途 |
 |---|---|
 | `VERSION-COMPARISON-HANDBOOK.md` | 版本对比模块长期工作手册和接手入口 |
+| `M3-VERSION-MONITORING-HANDBOOK.md` | 版本监控长期维护、验收和排障入口 |
 | `M3-VERSION-MONITORING-PRD.md` | 版本监控已确认需求和验收基线 |
 | `M3-VERSION-MONITORING-IMPLEMENTATION.md` | 版本监控分阶段实施计划 |
 | `ROADMAP.md` | 当前产品能力与后续方向 |
@@ -60,4 +62,5 @@ M0/M1 的其他历史资料继续保留在现有路径。早期 PRD、调研报�
 | `tests/excel/left`、`tests/excel/right` | 固定本地 Excel/CSV 回归样例，只读使用 |
 | `var/m2-fixtures/d3c-be317423.m2fixture` | 当前冻结 Replay 夹具，Git 仅跟踪这一份 |
 | `var/m2-batch/` | 本地批量运行状态，不进入 Git |
+| `var/m3-monitor/` | 本地监控 SQLite、报告和运行状态，不进入 Git |
 | `.cache/` | 可再生输出，不是契约源 |
