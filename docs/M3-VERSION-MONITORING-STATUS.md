@@ -12,7 +12,7 @@
 | Phase 0 | 已完成 | `codex/m3-p0-contracts`、`codex/m3-phase0-contract-audit` | `443c396` | 四份严格契约、确定性 SVN Mock、55 项聚焦测试 |
 | Phase 1 | 已完成 | `codex/m3-p1-diff-engine` | `9a52656` | 固定分支历史、最终净值、字段事件归因通过 |
 | Phase 2 | 已完成 | `codex/m3-p2-runner-store` | `f6afcb0` | SQLite、边界链、租约重试、独立 Runner 通过 |
-| Phase 3 | 未开始 | `codex/m3-p3-report-lifecycle` | - | - |
+| Phase 3 | 已完成 | `codex/m3-p3-report-lifecycle` | `2254229` | 离线 HTML、可恢复原子发布、latest 与 30 天治理通过 |
 | Phase 4 | 未开始 | `codex/m3-p4-windows-scheduler` | - | - |
 | Phase 5 | 未开始 | `codex/m3-p5-monitor-ui` | - | - |
 | Phase 6 | 未开始 | `codex/m3-p6-real-acceptance` | - | - |
@@ -67,3 +67,13 @@
 - 验收结果：Phase 2 34 passed；P0/P1 77 passed；直接相关 M2 29 passed
 - 核心交付：migration v2、逻辑边界幂等、pause/end final 恢复、自动重试最多 3 次、无 Web Runner
 - 已知限制：因缺少 `config/settings.json`，依赖该本机配置的测试未运行，且未创建占位配置
+
+### Phase 3
+
+- 阶段分支：`codex/m3-p3-report-lifecycle`
+- 验收提交：`c75d2be662c16ad4bbf319656aa904155372a6b9`、`2254229b7e20f5f7e215feddedf65145368580ef`
+- 验收结果：M3 Phase 0-3 聚焦 164 passed；直接相关 M1/M2 回归 27 passed；排除 6 个本机配置依赖文件后的广泛回归 258 passed；py_compile 与 git diff --check 通过
+- 核心交付：规范 JSON/HTML 与稳定 SHA、单文件离线筛选报告、注入防护、不透明引用与归属校验、同目录原子发布、可恢复 publication manifest、latest 单调推进、5 分钟租约续期、30 天隔离清理
+- 验收返修：修复同秒不同微秒截止点文件名冲突、完全失败误覆盖 latest、unresolved-only partial 契约矛盾、确定性发布错误误重试、全任务保留治理和 SVN 公开错误分类
+- 后续硬门禁：Phase 4 必须提供不依赖 Web 或活动监控任务的每日维护唤醒，负责触发全部任务的 30 天报告清理
+- 已知限制：未真实访问 SVN；真实 in-app 浏览器视觉验收两次被 Windows `CreateProcessWithLogonW failed: 1385` 阻断；因缺少 `config/settings.json`，依赖该本机配置的 6 个测试文件未运行，且未创建占位配置
