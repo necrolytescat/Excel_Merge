@@ -590,6 +590,104 @@ def test_scheduler_failure_returns_task_state_and_sync_repairs_it(tmp_path):
         assert repaired.json()["scheduler"]["sync_status"] == "synced"
 
 
+def test_task_list_filters_derived_public_statuses_with_query_and_cursor(tmp_path):
+    service = build_service(tmp_path)
+
+    def create_named(name: str):
+        return service.create_task(
+            MonitorTaskCreateRequestPayload.model_validate(
+                {**create_payload(), "name": name}
+            )
+        )[0]
+
+    active = create_named("Status Filter active")
+    syncing = create_named("Status Filter syncing")
+    syncing_record = service.store.get_task(str(syncing.task_id))
+    service.store.update_task(
+        str(syncing.task_id),
+        {"scheduler_sync_status": "pending"},
+        NOW,
+        expected_generation=syncing_record.generation,
+        expected_lifecycle="active",
+    )
+    scheduler_error = create_named("Status Filter scheduler error")
+    error_record = service.store.get_task(str(scheduler_error.task_id))
+    service.store.update_task(
+        str(scheduler_error.task_id),
+        {
+            "scheduler_sync_status": "error",
+            "scheduler_error": MonitorPublicErrorPayload(
+                code="MONITOR_SCHEDULER_SYNC_FAILED",
+                stage="scheduler",
+                message="计划任务同步失败",
+                retryable=True,
+            ),
+        },
+        NOW,
+        expected_generation=error_record.generation,
+        expected_lifecycle="active",
+    )
+    paused = create_named("Status Filter paused")
+    service.task_command(paused.task_id, "pause", uuid4())
+
+    app = create_app(
+        config={"svn": {"provider": "mock"}},
+        provider=MockSVNProvider(),
+        monitor_web_service=service,
+    )
+    with TestClient(app) as client:
+        active_page = client.get("/api/monitor/tasks", params={"status": "active"})
+        assert [item["task_id"] for item in active_page.json()["items"]] == [
+            str(active.task_id)
+        ]
+        syncing_page = client.get(
+            "/api/monitor/tasks", params={"status": "syncing"}
+        )
+        assert [item["task_id"] for item in syncing_page.json()["items"]] == [
+            str(syncing.task_id)
+        ]
+        error_page = client.get(
+            "/api/monitor/tasks", params={"status": "scheduler_error"}
+        )
+        assert [item["task_id"] for item in error_page.json()["items"]] == [
+            str(scheduler_error.task_id)
+        ]
+        filters = [
+            ("limit", "1"),
+            ("q", "status filter"),
+            ("status", "active"),
+            ("status", "paused"),
+            ("status", "scheduler_error"),
+        ]
+        first = client.get("/api/monitor/tasks", params=filters)
+        assert first.status_code == 200
+        assert len(first.json()["items"]) == 1
+        assert first.json()["has_more"] is True
+        cached = client.get(
+            "/api/monitor/tasks",
+            params=filters,
+            headers={"If-None-Match": first.headers["etag"]},
+        )
+        assert cached.status_code == 304
+        second = client.get(
+            "/api/monitor/tasks",
+            params=[*filters, ("cursor", first.json()["next_cursor"])],
+        )
+        assert second.status_code == 200
+        assert first.json()["items"][0]["task_id"] != second.json()["items"][0]["task_id"]
+        wrong_scope = client.get(
+            "/api/monitor/tasks",
+            params=[
+                ("limit", "1"),
+                ("q", "different"),
+                ("status", "active"),
+                ("cursor", first.json()["next_cursor"]),
+            ],
+        )
+        assert wrong_scope.status_code == 400
+        assert wrong_scope.json()["error"]["code"] == "MONITOR_INVALID_CURSOR"
+
+
 def test_run_list_uses_sql_page_and_batched_attempts(tmp_path, monkeypatch):
     service = build_service(tmp_path)
     payload = create_payload()

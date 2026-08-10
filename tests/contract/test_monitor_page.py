@@ -37,6 +37,9 @@ def test_monitor_pages_and_static_assets_are_served():
     assert "monitor_request.js?v=1.0.0" in overview.text
     assert "monitor_tasks.js?v=1.0.0" in tasks.text
     assert 'id="monitor-create-form"' in overview.text
+    assert 'id="monitor-create-alert"' in overview.text
+    assert 'id="monitor-recent-alert"' in overview.text
+    assert 'id="monitor-alert"' not in overview.text
     assert 'id="monitor-task-filter"' in tasks.text
     assert 'id="monitor-detail-dialog"' in tasks.text
 
@@ -84,6 +87,10 @@ def test_monitor_scripts_keep_url_etag_and_safe_dom_contracts():
     assert "listUrl(cursor, append ? 50 : 30)" in task_script
     assert "Math.max(30" not in task_script
     assert "reportExpired" in task_script
+    assert "MonitorTaskRefreshPolicy.shouldPauseAutomaticRefresh" in task_script
+    assert "已加载多页，为保留当前列表已暂停自动刷新" in task_script
+    assert 'statusBadge("expired")' in task_script
+    assert 'expired: "已过期"' in task_script
     assert "crypto.randomUUID" not in overview_script
     assert "crypto.randomUUID" not in task_script
     assert 'params.set("q"' in task_script
@@ -112,13 +119,30 @@ def test_monitor_scripts_keep_url_etag_and_safe_dom_contracts():
     assert "overflow-x: auto" in styles
     assert ":focus-visible" in styles
     assert "overflow-wrap: anywhere" in styles
+    assert '.monitor-status[data-status="expired"]' in styles
+
+    recent_loader = overview_script.split(
+        "async function loadRecent", 1
+    )[1].split("async function createTask", 1)[0]
+    create_handler = overview_script.split("async function createTask", 1)[1]
+    assert 'setAlert("monitor-recent-alert", "")' in recent_loader
+    assert "monitor-create-alert" not in recent_loader
+    assert "monitor-create-alert" in create_handler
+    assert "monitor-recent-alert" not in create_handler
 
 
 def test_monitor_request_id_is_reused_after_unknown_network_result():
     script = textwrap.dedent(
         """
         const assert = require("assert");
-        const { MonitorRequestLedger } = require("./app/static/monitor_request.js");
+        const {
+          MonitorRequestLedger,
+          shouldPauseAutomaticRefresh,
+        } = require("./app/static/monitor_request.js");
+        assert.strictEqual(shouldPauseAutomaticRefresh(true, 30), false);
+        assert.strictEqual(shouldPauseAutomaticRefresh(true, 31), true);
+        assert.strictEqual(shouldPauseAutomaticRefresh(true, 130), true);
+        assert.strictEqual(shouldPauseAutomaticRefresh(false, 130), false);
         const requestBodies = [];
         let callCount = 0;
         let uuidCount = 0;
@@ -147,6 +171,40 @@ def test_monitor_request_id_is_reused_after_unknown_network_result():
           assert.strictEqual(requestBodies[0].request_id, requestBodies[1].request_id);
           await ledger.send("/api/monitor/tasks/one", options);
           assert.notStrictEqual(requestBodies[1].request_id, requestBodies[2].request_id);
+
+          const parseBodies = [];
+          let parseCalls = 0;
+          let parseUuidCount = 0;
+          const parseLedger = new MonitorRequestLedger({
+            uuidFactory: () => "10000000-0000-4000-8000-" + String(++parseUuidCount).padStart(12, "0"),
+            fetchImpl: async (url, requestOptions) => {
+              parseCalls += 1;
+              parseBodies.push(JSON.parse(requestOptions.body));
+              return {
+                ok: true,
+                status: 201,
+                headers: { get: () => '\"etag\"' },
+                json: async () => {
+                  if (parseCalls === 1) throw new Error("truncated response body");
+                  return { schema_version: "m3.monitor-task.v1" };
+                },
+              };
+            },
+          });
+          await assert.rejects(
+            () => parseLedger.send("/api/monitor/tasks", {
+              method: "POST",
+              schemaVersion: "m3.monitor-task-create.request.v1",
+              payload: { name: "QA", endpoint_id: "KR", effective_at: "2026-08-10T10:00:00Z", end_at: null, daily_trigger_time: "18:00:00" },
+            }),
+            /响应体无法确认/,
+          );
+          await parseLedger.send("/api/monitor/tasks", {
+            method: "POST",
+            schemaVersion: "m3.monitor-task-create.request.v1",
+            payload: { name: "QA", endpoint_id: "KR", effective_at: "2026-08-10T10:00:00Z", end_at: null, daily_trigger_time: "18:00:00" },
+          });
+          assert.strictEqual(parseBodies[0].request_id, parseBodies[1].request_id);
         })().catch((error) => { console.error(error); process.exit(1); });
         """
     )

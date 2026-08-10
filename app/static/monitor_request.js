@@ -2,7 +2,12 @@
   "use strict";
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
-  if (root) root.MonitorRequestLedger = api.MonitorRequestLedger;
+  if (root) {
+    root.MonitorRequestLedger = api.MonitorRequestLedger;
+    root.MonitorTaskRefreshPolicy = {
+      shouldPauseAutomaticRefresh: api.shouldPauseAutomaticRefresh,
+    };
+  }
 })(typeof globalThis === "object" ? globalThis : this, function () {
   "use strict";
 
@@ -15,6 +20,10 @@
       }, {});
     }
     return value;
+  }
+
+  function shouldPauseAutomaticRefresh(automatic, loadedCount) {
+    return Boolean(automatic && loadedCount > 30);
   }
 
   class MonitorRequestLedger {
@@ -49,8 +58,16 @@
       } catch (error) {
         throw error;
       }
+      let body;
+      try {
+        body = await response.json();
+      } catch (error) {
+        throw new Error("版本监控响应体无法确认");
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        throw new Error("版本监控响应格式无法确认");
+      }
       this.pending.delete(key);
-      const body = await response.json().catch(() => ({}));
       if (!response.ok) throw body;
       return {
         body,
@@ -60,5 +77,5 @@
     }
   }
 
-  return { MonitorRequestLedger };
+  return { MonitorRequestLedger, shouldPauseAutomaticRefresh };
 });

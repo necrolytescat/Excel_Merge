@@ -299,6 +299,89 @@ def test_first_short_interval_is_left_open_right_closed_and_public_is_unsynced(s
     assert task.scheduler.desired_state == "enabled"
 
 
+def test_task_page_translates_public_statuses_and_keeps_query_cursor_scope(state):
+    store, service, clock = state
+
+    def create_named(name: str) -> str:
+        base = command(effective_at=at(10, 9), task_id=str(uuid4()))
+        return str(
+            service.create(
+                CreateMonitorTask(**{**base.__dict__, "name": name})
+            ).task_id
+        )
+
+    active_id = create_named("Target active")
+    active = store.get_task(active_id)
+    store.update_task(
+        active_id,
+        {
+            "scheduler_sync_status": "synced",
+            "scheduler_last_synced_at": clock.value,
+        },
+        clock.value,
+        expected_generation=active.generation,
+        expected_lifecycle="active",
+    )
+    syncing_id = create_named("Target syncing")
+    error_id = create_named("Target scheduler error")
+    error_task = store.get_task(error_id)
+    store.update_task(
+        error_id,
+        {
+            "scheduler_sync_status": "error",
+            "scheduler_error": MonitorPublicErrorPayload(
+                code="MONITOR_SCHEDULER_SYNC_FAILED",
+                stage="scheduler",
+                message="计划任务同步失败",
+                retryable=True,
+            ),
+        },
+        clock.value,
+        expected_generation=error_task.generation,
+        expected_lifecycle="active",
+    )
+    paused_id = create_named("Target paused")
+    service.pause(paused_id)
+
+    assert [item.task_id for item in store.list_task_page(
+        limit=10, statuses=["active"]
+    )] == [active_id]
+    assert [item.task_id for item in store.list_task_page(
+        limit=10, statuses=["syncing"]
+    )] == [syncing_id]
+    assert [item.task_id for item in store.list_task_page(
+        limit=10, statuses=["scheduler_error"]
+    )] == [error_id]
+    combined = store.list_task_page(
+        limit=10,
+        statuses=["active", "paused", "scheduler_error"],
+        query="target",
+    )
+    assert {item.task_id for item in combined} == {
+        active_id,
+        paused_id,
+        error_id,
+    }
+    first = store.list_task_page(
+        limit=2,
+        statuses=["active", "paused", "scheduler_error"],
+        query="target",
+    )
+    second = store.list_task_page(
+        limit=2,
+        statuses=["active", "paused", "scheduler_error"],
+        query="target",
+        before_created_at=first[-1].created_at,
+        before_task_id=first[-1].task_id,
+    )
+    assert len(first) == 2
+    assert {item.task_id for item in first}.isdisjoint(
+        {item.task_id for item in second}
+    )
+    with pytest.raises(ValueError, match="unknown public"):
+        store.list_task_page(limit=10, statuses=["not-a-status"])
+
+
 def test_shanghai_daily_cutoffs_cross_utc_date_and_end_is_unique():
     specs = scheduled_boundaries(
         after=at(9, 15),

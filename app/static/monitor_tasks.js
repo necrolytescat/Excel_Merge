@@ -10,7 +10,7 @@
     synced: "已同步", drifted: "存在漂移", error: "同步失败",
     not_present: "未创建", enabled: "启用", disabled: "停用", removed: "移除",
     scheduled: "定时触发", automatic_retry: "自动重试", manual_retry: "人工重试",
-    pause: "暂停边界", end: "结束边界",
+    pause: "暂停边界", end: "结束边界", expired: "已过期",
   };
   const EDITABLE = new Set(["active", "scheduler_error", "paused"]);
   const commandLedger = new globalThis.MonitorRequestLedger();
@@ -103,7 +103,8 @@
     const alert = $(id);
     alert.textContent = message || "";
     alert.classList.toggle("is-hidden", !message);
-    alert.classList.toggle("is-success", Boolean(message && success));
+    alert.classList.toggle("is-success", Boolean(message && success === true));
+    alert.classList.toggle("is-info", Boolean(message && success === "info"));
   }
 
   function persistUrl(taskId = state.selectedTask && state.selectedTask.task_id) {
@@ -218,6 +219,17 @@
   }
 
   async function loadTasks({ append = false, automatic = false } = {}) {
+    if (globalThis.MonitorTaskRefreshPolicy.shouldPauseAutomaticRefresh(
+      automatic, state.tasks.length
+    )) {
+      window.clearTimeout(state.pollTimer);
+      setAlert(
+        "monitor-task-alert",
+        "已加载多页，为保留当前列表已暂停自动刷新；点击刷新可重新读取最新首屏",
+        "info",
+      );
+      return;
+    }
     if (state.loading) return;
     state.loading = true;
     const generation = ++state.requestGeneration;
@@ -424,7 +436,7 @@
         }));
         report.append(node("small", { text: "保留至 " + formatInstant(run.report_expires_at) }));
       } else if (["succeeded", "partial"].includes(run.status) && reportExpired) {
-        report.append(statusBadge("archived"));
+        report.append(statusBadge("expired"));
         report.append(node("small", { text: "历史报告已过期" }));
       } else if (run.status === "failed" && !archived) {
         const retry = actionButton("人工重试", () => {

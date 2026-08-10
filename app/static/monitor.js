@@ -94,8 +94,8 @@
     $("monitor-effective-at").value = shifted.toISOString().slice(0, 16);
   }
 
-  function setAlert(message, success = false) {
-    const alert = $("monitor-alert");
+  function setAlert(id, message, success = false) {
+    const alert = $(id);
     alert.textContent = message || "";
     alert.classList.toggle("is-hidden", !message);
     alert.classList.toggle("is-success", Boolean(message && success));
@@ -120,7 +120,7 @@
       clear(select);
       select.append(node("option", { value: "", text: "固定分支读取失败" }));
       select.disabled = true;
-      setAlert(errorMessage(error));
+      setAlert("monitor-create-alert", errorMessage(error));
     }
   }
 
@@ -225,12 +225,12 @@
       }
       setRecentEmpty("暂无监控任务", "创建后会在此显示运行与报告状态");
       updateSuccessTime();
-      setAlert("");
+      setAlert("monitor-recent-alert", "");
     } catch (error) {
       const suffix = state.lastSuccessAt
         ? "；最后成功刷新 " + state.lastSuccessAt.toLocaleTimeString("zh-CN", { hourCycle: "h23" })
         : "";
-      setAlert("刷新失败，当前数据可能已过期" + suffix + "：" + errorMessage(error));
+      setAlert("monitor-recent-alert", "刷新失败，当前数据可能已过期" + suffix + "：" + errorMessage(error));
       if (!state.etag) {
         renderRecent([]);
         setRecentEmpty("任务读取失败", "请检查服务状态后重试");
@@ -249,18 +249,18 @@
     const endValue = $("monitor-end-at").value;
     const endAt = endValue ? shanghaiInputToUtc(endValue) : null;
     if (!effectiveAt || (endValue && !endAt)) {
-      setAlert("时间格式无效");
+      setAlert("monitor-create-alert", "时间格式无效");
       return;
     }
     if (endAt && endAt <= effectiveAt) {
-      setAlert("结束时间必须晚于生效时间");
+      setAlert("monitor-create-alert", "结束时间必须晚于生效时间");
       return;
     }
     const submit = $("monitor-create-submit");
     const status = $("monitor-create-status");
     submit.disabled = true;
     status.textContent = "正在验证分支并同步计划任务";
-    setAlert("");
+    setAlert("monitor-create-alert", "");
     try {
       const response = await commandLedger.send("/api/monitor/tasks", {
         method: "POST",
@@ -280,12 +280,12 @@
       $("monitor-trigger").value = "18:00:00";
       setDefaultEffectiveAt();
       status.textContent = "";
-      setAlert("任务已创建，调度状态：" + (STATUS_LABELS[response.body.status] || response.body.status), true);
+      setAlert("monitor-create-alert", "任务已创建，调度状态：" + (STATUS_LABELS[response.body.status] || response.body.status), true);
       state.etag = "";
       await loadRecent();
     } catch (error) {
       status.textContent = "";
-      setAlert(errorMessage(error));
+      setAlert("monitor-create-alert", errorMessage(error));
     } finally {
       submit.disabled = false;
     }

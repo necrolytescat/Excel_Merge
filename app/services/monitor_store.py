@@ -500,9 +500,25 @@ class MonitorStore:
         parameters: list[Any] = []
         normalized_statuses = sorted(set(statuses or []))
         if normalized_statuses:
-            placeholders = ",".join("?" for _ in normalized_statuses)
-            where.append(f"lifecycle IN ({placeholders})")
-            parameters.extend(normalized_statuses)
+            public_status_predicates = {
+                "active": "(lifecycle='active' AND scheduler_sync_status='synced')",
+                "syncing": "(lifecycle='active' AND scheduler_sync_status='pending')",
+                "scheduler_error": (
+                    "(lifecycle='active' AND scheduler_sync_status "
+                    "IN ('drifted','error','not_present'))"
+                ),
+                "paused": "lifecycle='paused'",
+                "ended": "lifecycle='ended'",
+                "archived": "lifecycle='archived'",
+            }
+            try:
+                predicates = [
+                    public_status_predicates[status]
+                    for status in normalized_statuses
+                ]
+            except KeyError as error:
+                raise ValueError("unknown public monitor task status") from error
+            where.append("(" + " OR ".join(predicates) + ")")
         else:
             where.append("lifecycle<>'archived'")
         needle = (query or "").strip().lower()

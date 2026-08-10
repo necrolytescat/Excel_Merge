@@ -176,6 +176,7 @@ select:focus-visible { outline: 3px solid #aab8ff; outline-offset: 2px; }
   line-height: 1.55;
 }
 .monitor-alert.is-success { border-color: #12b76a; background: #ecfdf3; color: #067647; }
+.monitor-alert.is-info { border-color: #2f5bea; background: #eef4ff; color: #175cd3; }
 
 .monitor-table-scroll { width: 100%; overflow-x: auto; border-top: 1px solid #dfe3ea; }
 .monitor-table { width: 100%; min-width: 780px; border-collapse: collapse; table-layout: fixed; }
@@ -245,6 +246,7 @@ select:focus-visible { outline: 3px solid #aab8ff; outline-offset: 2px; }
 .monitor-status[data-status="syncing"],
 .monitor-status[data-status="pending"] { background: #eef4ff; color: #175cd3; }
 .monitor-status[data-status="archived"] { background: #f2f4f7; color: #667085; }
+.monitor-status[data-status="expired"] { background: #f2f4f7; color: #475467; }
 
 .monitor-empty {
   display: grid;

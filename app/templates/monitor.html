@@ -31,9 +31,9 @@
     </header>
     <nav class="monitor-tabs" aria-label="版本监控页面"><a class="is-active" href="/monitor" aria-current="page">新建与概览</a><a href="/monitor/tasks">全部任务</a></nav>
     <main class="monitor-main">
-      <p class="monitor-alert is-hidden" id="monitor-alert" role="alert"></p>
       <section class="monitor-create" aria-labelledby="monitor-create-title">
         <div class="monitor-section-heading"><div><p class="eyebrow">NEW MONITOR</p><h2 id="monitor-create-title">新建监控任务</h2></div><span>Asia/Shanghai</span></div>
+        <p class="monitor-alert is-hidden" id="monitor-create-alert" role="alert"></p>
         <form id="monitor-create-form" class="monitor-form">
           <label><span>任务名称</span><input id="monitor-name" name="name" required maxlength="128" autocomplete="off" placeholder="例如：每日战斗配置回归"></label>
           <label><span>固定分支</span><select id="monitor-endpoint" name="endpoint_id" required><option value="">正在读取端点</option></select></label>
@@ -45,6 +45,7 @@
       </section>
       <section class="monitor-recent" aria-labelledby="monitor-recent-title">
         <div class="monitor-section-heading"><div><p class="eyebrow">RECENT TASKS</p><h2 id="monitor-recent-title">最近任务</h2></div><div class="monitor-heading-actions"><span id="monitor-recent-updated"></span><button class="monitor-icon-button" id="monitor-refresh" type="button" title="刷新任务" aria-label="刷新任务">↻</button></div></div>
+        <p class="monitor-alert is-hidden" id="monitor-recent-alert" role="alert"></p>
         <div class="monitor-table-scroll">
           <table class="monitor-table"><thead><tr><th>任务</th><th>业务状态</th><th>调度</th><th>下次截止</th><th>最近报告</th><th>积压</th></tr></thead><tbody id="monitor-recent-rows"><tr><td colspan="6" class="monitor-loading">正在读取任务</td></tr></tbody></table>
         </div>
