@@ -14,7 +14,7 @@
 | Phase 2 | 已完成 | `codex/m3-p2-runner-store` | `f6afcb0` | SQLite、边界链、租约重试、独立 Runner 通过 |
 | Phase 3 | 已完成 | `codex/m3-p3-report-lifecycle` | `2254229` | 离线 HTML、可恢复原子发布、latest 与 30 天治理通过 |
 | Phase 4 | 已完成 | `codex/m3-p4-windows-scheduler` | `8c27a63` | Windows 计划任务、登录补跑、维护唤醒与公开失败链通过 |
-| Phase 5 | 未开始 | `codex/m3-p5-monitor-ui` | - | - |
+| Phase 5 | 已完成 | `codex/m3-p5-monitor-ui` | `60e3fa8` | 严格 API、导航、新建页、任务列表与受控报告入口通过 |
 | Phase 6 | 未开始 | `codex/m3-p6-real-acceptance` | - | - |
 
 ## 主控规则
@@ -87,3 +87,15 @@
 - 验收返修：配置装配与到期物化失败进入公开失败链；确定性错误不触发 Windows 重试；未知瞬时异常脱敏并返回 exit 75；fallback 服从 `schedule_effective_at`、最终结束原子落库且按 generation 隔离；完整校验 Trigger Enabled、Principal、Action Context 和登录 SID 漂移
 - 真实 Windows 验收：在隔离任务名、隔离临时数据库下完成 Create、XML 查询与验证、Run、maintenance 和 finally Delete；删除后 `exists=false` 且 System32 Query 确认任务不存在；临时数据库目录已删除，无孤立测试任务
 - 已知限制：最终两次错误边界返修后未再次执行真实 `schtasks.exe` 写入验收，相关变更由 Fake/解析器与 CLI 回归覆盖；未真实访问 SVN；因缺少 `config/settings.json`，依赖该本机配置的 6 个测试文件未运行，且未创建占位配置
+
+### Phase 5
+
+- 阶段分支：`codex/m3-p5-monitor-ui`
+- 契约提交：`f47dfae`、`ebe7548`、`c742b61`
+- 实现与返修提交：`c85464a`、`9f4a3ad`、`97fb0e5`、`56733a0`、`60e3fa8238d8d68f4c8865ec02215a40f648e619`
+- 验收结果：最终 M3 Phase 0-5 聚焦 256 passed；排除 6 个本机配置依赖文件后的主控广泛回归 349 passed；前端/UI 复验 45 passed；后端 retry 最终专项 12 passed；JavaScript 语法、py_compile 与 git diff --check 通过
+- 核心交付：左侧“版本监控”入口、任务创建与概览、二级任务列表和详情；任务筛选与 URL 恢复、状态和调度异常、Runner 心跳、遗漏数量、Run 与变化统计、生命周期操作、人工重试、latest 与历史报告入口；严格请求/响应/错误契约、分页游标、ETag/304、受控报告读取和安全响应头
+- 幂等与恢复：schema v6 持久化所有写命令结果；相同 request ID 精确重放首次 201/202/4xx；retry 404、状态 409、并发 loser 与 202 outbox 同事务落账；未知异常保留 pending 并由启动恢复；事件驱动 dispatcher 按租约精确唤醒，不使用分钟级报告轮询
+- 生命周期与性能：固定分支身份只由服务端冻结；归档与活动 retry 原子互斥，归档后 Runner 兜底拒绝；公开派生状态正确筛选；任务和 Run 使用 SQL 分页及批量摘要，避免全表扫描和 N+1；history 30 天后返回 410，受控 latest 在任务未彻底删除前保持可读
+- 前端返修：断网或响应体中断时复用 request ID；自动刷新失败显示陈旧状态；筛选请求隔离旧响应；多页列表不自动收缩且请求不超过上限；过期报告不显示死链接；长文本和 360px 布局受控；动态业务文本使用安全 DOM API
+- 已知限制：in-app 浏览器按技能流程由阶段任务和主控分别尝试，均被 Windows `CreateProcessWithLogonW failed: 1385` 阻断，因此未完成真实桌面/移动截图和视觉交互验收；本地 Mock 服务曾在 `127.0.0.1:5571` 正常监听，验收后已关闭；未真实访问 SVN；依赖缺失 `config/settings.json` 的 6 个测试文件未运行，且未创建占位配置
