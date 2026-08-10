@@ -91,6 +91,7 @@ class MonitorApiErrorCode(str, Enum):
     INVALID_CURSOR = "MONITOR_INVALID_CURSOR"
     ENDPOINT_NOT_FOUND = "MONITOR_ENDPOINT_NOT_FOUND"
     ENDPOINT_DISABLED = "MONITOR_ENDPOINT_DISABLED"
+    BRANCH_CONFIGURATION_INVALID = "MONITOR_BRANCH_CONFIGURATION_INVALID"
     DATASET_CONFIGURATION_INVALID = "MONITOR_DATASET_CONFIGURATION_INVALID"
     TASK_NOT_FOUND = "MONITOR_TASK_NOT_FOUND"
     RUN_NOT_FOUND = "MONITOR_RUN_NOT_FOUND"
@@ -436,17 +437,26 @@ class MonitorTaskPayload(StrictMonitorPayload):
             and self.pending_run_count < 1
         ):
             raise ValueError("queued/running latest run requires pending_run_count")
-        if self.latest_report is not None and self.latest_run is not None:
-            if (
-                self.latest_report.interval.logical_cutoff_at
-                > self.latest_run.interval.logical_cutoff_at
-            ):
-                raise ValueError("latest report cannot follow latest run")
-            if self.latest_run.status in {
+        if self.latest_report is not None and self.latest_run is None:
+            raise ValueError("latest report requires latest run")
+        if self.latest_run is not None:
+            latest_published = self.latest_run.status in {
                 MonitorRunStatus.SUCCEEDED,
                 MonitorRunStatus.PARTIAL,
-            } and self.latest_report.run_id != self.latest_run.run_id:
-                raise ValueError("published latest run must also be latest report")
+            }
+            if latest_published:
+                if self.latest_report is None or (
+                    self.latest_report.run_id != self.latest_run.run_id
+                    or self.latest_report.status != self.latest_run.status.value
+                    or self.latest_report.interval != self.latest_run.interval
+                    or self.latest_report.summary != self.latest_run.summary
+                ):
+                    raise ValueError("published latest run must equal latest report")
+            elif self.latest_report is not None and (
+                self.latest_report.interval.logical_cutoff_at
+                >= self.latest_run.interval.logical_cutoff_at
+            ):
+                raise ValueError("retained latest report must precede unpublished latest run")
         return self
 
 
@@ -475,17 +485,26 @@ class MonitorTaskListItemPayload(StrictMonitorPayload):
             and self.pending_run_count < 1
         ):
             raise ValueError("queued/running latest run requires pending_run_count")
-        if self.latest_report is not None and self.latest_run is not None:
-            if (
-                self.latest_report.interval.logical_cutoff_at
-                > self.latest_run.interval.logical_cutoff_at
-            ):
-                raise ValueError("latest report cannot follow latest run")
-            if self.latest_run.status in {
+        if self.latest_report is not None and self.latest_run is None:
+            raise ValueError("latest report requires latest run")
+        if self.latest_run is not None:
+            latest_published = self.latest_run.status in {
                 MonitorRunStatus.SUCCEEDED,
                 MonitorRunStatus.PARTIAL,
-            } and self.latest_report.run_id != self.latest_run.run_id:
-                raise ValueError("published latest run must also be latest report")
+            }
+            if latest_published:
+                if self.latest_report is None or (
+                    self.latest_report.run_id != self.latest_run.run_id
+                    or self.latest_report.status != self.latest_run.status.value
+                    or self.latest_report.interval != self.latest_run.interval
+                    or self.latest_report.summary != self.latest_run.summary
+                ):
+                    raise ValueError("published latest run must equal latest report")
+            elif self.latest_report is not None and (
+                self.latest_report.interval.logical_cutoff_at
+                >= self.latest_run.interval.logical_cutoff_at
+            ):
+                raise ValueError("retained latest report must precede unpublished latest run")
         return self
 
 

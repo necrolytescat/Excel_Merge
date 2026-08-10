@@ -239,6 +239,7 @@ def test_phase_five_query_and_error_contracts_reject_internal_fields():
         "MONITOR_INVALID_CURSOR",
         "MONITOR_ENDPOINT_NOT_FOUND",
         "MONITOR_ENDPOINT_DISABLED",
+        "MONITOR_BRANCH_CONFIGURATION_INVALID",
         "MONITOR_DATASET_CONFIGURATION_INVALID",
         "MONITOR_TASK_NOT_FOUND",
         "MONITOR_RUN_NOT_FOUND",
@@ -287,6 +288,8 @@ def test_task_contract_keeps_latest_report_independent_from_latest_run():
         "summary": None,
         "report_ref": None,
     }
+    task["latest_run"]["interval"]["end_at"] = "2026-08-11T10:00:00Z"
+    task["latest_run"]["interval"]["logical_cutoff_at"] = "2026-08-11T10:00:00Z"
     payload = MonitorTaskPayload.model_validate(task)
     assert payload.latest_report.run_id != payload.latest_run.run_id
     assert payload.pending_run_count == 0
@@ -312,7 +315,13 @@ def test_task_latest_and_pending_cross_field_invariants():
 
     task = load_json(CONTRACTS / "m3.monitor-task.v1.example.json")
     task["latest_run"] = None
-    MonitorTaskPayload.model_validate(task)
+    with pytest.raises(ValidationError):
+        MonitorTaskPayload.model_validate(task)
+
+    task = load_json(CONTRACTS / "m3.monitor-task.v1.example.json")
+    task["latest_run"]["summary"]["change_count"] = 4
+    with pytest.raises(ValidationError):
+        MonitorTaskPayload.model_validate(task)
 
 
 def test_monitor_etag_projection_and_weak_condition_are_frozen():
@@ -346,6 +355,13 @@ def test_monitor_cursor_is_bound_to_scope_and_filters():
         decode_cursor(cursor, scope="tasks", filters={"status": []}, sort_size=2)
     with pytest.raises(MonitorCursorError):
         decode_cursor(cursor, scope="runs:other", filters=filters, sort_size=2)
+    invalid_sort = encode_cursor(
+        scope="tasks",
+        filters=filters,
+        sort_values=["not-a-time", "not-a-uuid"],
+    )
+    with pytest.raises(MonitorCursorError):
+        decode_cursor(invalid_sort, scope="tasks", filters=filters, sort_size=2)
 
 
 def test_monitor_contracts_reject_unknown_nested_fields_and_internal_diagnostics():

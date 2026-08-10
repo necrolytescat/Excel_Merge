@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime
 import hashlib
 import json
 from typing import Any
+from uuid import UUID
 
 
 class MonitorCursorError(ValueError):
@@ -82,4 +84,12 @@ def decode_cursor(
         or not all(isinstance(item, str) for item in data["sort"])
     ):
         raise MonitorCursorError("invalid monitor cursor")
+    try:
+        instant = datetime.fromisoformat(data["sort"][0].replace("Z", "+00:00"))
+        if instant.tzinfo is None or instant.utcoffset() is None:
+            raise ValueError
+        if str(UUID(data["sort"][1])) != data["sort"][1]:
+            raise ValueError
+    except (ValueError, TypeError, IndexError) as error:
+        raise MonitorCursorError("invalid monitor cursor") from error
     return data["sort"]
