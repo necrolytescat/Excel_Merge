@@ -27,7 +27,11 @@ from app.services.monitor_report_service import (
     render_monitor_report_html,
     report_reference,
 )
-from app.services.monitor_store import MonitorStateConflict, MonitorStore
+from app.services.monitor_store import (
+    MonitorIdempotencyConflict,
+    MonitorStateConflict,
+    MonitorStore,
+)
 from app.services.monitor_task_service import MonitorTaskService
 from app.services.monitor_web_service import (
     COMMAND_NAMESPACE,
@@ -563,39 +567,198 @@ def test_retry_and_archive_are_atomic_and_only_one_can_win(tmp_path):
     service.close()
 
 
+def test_retry_denial_is_persisted_and_replayed_after_winner_dispatches(tmp_path):
+    service = build_service(tmp_path)
+    _, run = fail_and_end_task(service)
+    winner_id = uuid4()
+    loser_id = uuid4()
+    service.accept_retry(UUID(run.run_id), winner_id)
+    try:
+        service.accept_retry(UUID(run.run_id), loser_id)
+        raise AssertionError("active retry must deny the second request")
+    except MonitorWebError as error:
+        assert (error.code, error.status_code) == ("MONITOR_STATE_CONFLICT", 409)
+
+    with service.store._connect() as connection:
+        denied = connection.execute(
+            "SELECT * FROM monitor_commands WHERE request_id=?",
+            (str(loser_id),),
+        ).fetchone()
+        assert (denied["state"], denied["response_status"]) == ("completed", 409)
+        assert json.loads(denied["response_json"]) == {
+            "error": {
+                "code": "MONITOR_STATE_CONFLICT",
+                "message": "当前运行状态不允许人工重试",
+            }
+        }
+        assert denied["payload_hash"] == hashlib.sha256(b"{}").hexdigest()
+        assert connection.execute(
+            "SELECT COUNT(*) FROM monitor_retry_outbox WHERE request_id=?",
+            (str(loser_id),),
+        ).fetchone()[0] == 0
+
+    intent = service.store.claim_retry_intents(
+        now=NOW,
+        lease_for=timedelta(minutes=5),
+    )[0]
+    assert service.store.finish_retry_intent(
+        intent.request_id,
+        intent.lease_token,
+        now=NOW,
+    )
+    try:
+        service.accept_retry(UUID(run.run_id), loser_id)
+        raise AssertionError("completed denial must replay")
+    except MonitorWebError as error:
+        assert (error.code, error.status_code) == ("MONITOR_STATE_CONFLICT", 409)
+    with service.store._connect() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM monitor_retry_outbox WHERE request_id=?",
+            (str(loser_id),),
+        ).fetchone()[0] == 0
+
+    try:
+        service.store.accept_retry_intent(
+            request_id=str(loser_id),
+            run_id=run.run_id,
+            method="POST",
+            target=f"POST /api/monitor/runs/{run.run_id}/retry",
+            payload_hash="different-payload",
+            payload_json='{"different":true}',
+            response_status=202,
+            response_json="{}",
+            conflict_response_json="{}",
+            now=NOW,
+        )
+        raise AssertionError("same request_id with another payload must conflict")
+    except MonitorIdempotencyConflict:
+        pass
+    service.close()
+
+
+def test_retry_unique_index_fallback_persists_denial_without_loser_outbox(tmp_path):
+    service = build_service(tmp_path)
+    _, run = fail_and_end_task(service)
+    competitor_id = uuid4()
+    loser_id = uuid4()
+    timestamp = NOW.isoformat().replace("+00:00", "Z")
+    target = f"POST /api/monitor/runs/{run.run_id}/retry"
+    with service.store._transaction(write=True) as connection:
+        connection.execute(
+            """INSERT INTO monitor_commands
+               (request_id,method,target,payload_hash,payload_json,state,
+                response_status,response_json,created_at,updated_at)
+               VALUES (?,?,?,?,?,'completed',202,'{}',?,?)""",
+            (
+                str(competitor_id),
+                "POST",
+                target,
+                "competitor",
+                "{}",
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.execute(
+            f"""CREATE TRIGGER inject_competing_retry
+                BEFORE INSERT ON monitor_retry_outbox
+                WHEN NEW.request_id='{loser_id}'
+                BEGIN
+                    INSERT INTO monitor_retry_outbox
+                    (request_id,task_id,run_id,state,created_at,updated_at)
+                    VALUES
+                    ('{competitor_id}',NEW.task_id,NEW.run_id,'pending',
+                     NEW.created_at,NEW.updated_at);
+                END"""
+        )
+
+    try:
+        service.accept_retry(UUID(run.run_id), loser_id)
+        raise AssertionError("partial unique conflict must deny the loser")
+    except MonitorWebError as error:
+        assert (error.code, error.status_code) == ("MONITOR_STATE_CONFLICT", 409)
+    with service.store._connect() as connection:
+        denied = connection.execute(
+            "SELECT state,response_status FROM monitor_commands WHERE request_id=?",
+            (str(loser_id),),
+        ).fetchone()
+        assert tuple(denied) == ("completed", 409)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM monitor_retry_outbox WHERE request_id=?",
+            (str(loser_id),),
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM monitor_retry_outbox WHERE request_id=?",
+            (str(competitor_id),),
+        ).fetchone()[0] == 0
+    service.close()
+
+
 def test_one_run_allows_only_one_active_retry_and_blocks_archive(tmp_path):
     service = build_service(tmp_path)
     task_id, run = fail_and_end_task(service)
     barrier = Barrier(2)
 
     def retry():
+        request_id = uuid4()
         barrier.wait()
         try:
-            return service.accept_retry(UUID(run.run_id), uuid4())
+            return request_id, service.accept_retry(UUID(run.run_id), request_id)
         except MonitorWebError as error:
-            return error
+            return request_id, error
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = [executor.submit(retry), executor.submit(retry)]
         results = [future.result() for future in results]
-    accepted = [result for result in results if isinstance(result, tuple)]
-    rejected = [result for result in results if isinstance(result, MonitorWebError)]
+    accepted = [result for result in results if isinstance(result[1], tuple)]
+    rejected = [
+        result for result in results if isinstance(result[1], MonitorWebError)
+    ]
     assert len(accepted) == 1
-    assert accepted[0][1] == 202
-    assert accepted[0][0].run_id == UUID(run.run_id)
+    assert accepted[0][1][1] == 202
+    assert accepted[0][1][0].run_id == UUID(run.run_id)
     assert len(rejected) == 1
-    assert rejected[0].status_code == 409
+    loser_id, denied = rejected[0]
+    assert denied.status_code == 409
     with service.store._connect() as connection:
         assert connection.execute(
             """SELECT COUNT(*) FROM monitor_retry_outbox
                WHERE run_id=? AND state IN ('pending','dispatching')""",
             (run.run_id,),
         ).fetchone()[0] == 1
+        loser = connection.execute(
+            "SELECT state,response_status FROM monitor_commands WHERE request_id=?",
+            (str(loser_id),),
+        ).fetchone()
+        assert tuple(loser) == ("completed", 409)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM monitor_retry_outbox WHERE request_id=?",
+            (str(loser_id),),
+        ).fetchone()[0] == 0
     try:
         service.tasks.archive(task_id)
         raise AssertionError("active retry must block archive")
     except MonitorStateConflict:
         pass
+    intent = service.store.claim_retry_intents(
+        now=NOW,
+        lease_for=timedelta(minutes=5),
+    )[0]
+    service.store.finish_retry_intent(
+        intent.request_id,
+        intent.lease_token,
+        now=NOW,
+    )
+    try:
+        service.accept_retry(UUID(run.run_id), loser_id)
+        raise AssertionError("concurrent loser must replay its first denial")
+    except MonitorWebError as error:
+        assert (error.code, error.status_code) == ("MONITOR_STATE_CONFLICT", 409)
+    with service.store._connect() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM monitor_retry_outbox WHERE request_id=?",
+            (str(loser_id),),
+        ).fetchone()[0] == 0
     service.close()
 
 

@@ -588,6 +588,17 @@ class MonitorWebService:
             sort_keys=True,
             separators=(",", ":"),
         )
+        conflict_response_json = json.dumps(
+            {
+                "error": {
+                    "code": "MONITOR_STATE_CONFLICT",
+                    "message": "当前运行状态不允许人工重试",
+                }
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         target = self._command_target("POST", f"/api/monitor/runs/{run_id}/retry")
         payload_json = canonical_json(
             {
@@ -605,6 +616,7 @@ class MonitorWebService:
                 payload_json=payload_json,
                 response_status=202,
                 response_json=response_json,
+                conflict_response_json=conflict_response_json,
                 now=self._now(),
             )
         except MonitorIdempotencyConflict as error:
@@ -619,6 +631,12 @@ class MonitorWebService:
             raise MonitorWebError(
                 "MONITOR_STATE_CONFLICT", "当前运行状态不允许人工重试", 409
             ) from error
+        if int(command.response_status) >= 400:
+            envelope = json.loads(command.response_json)
+            error = envelope["error"]
+            raise MonitorWebError(
+                error["code"], error["message"], int(command.response_status)
+            )
         self.wake_retry_dispatcher()
         return MonitorRetryAcceptedPayload.model_validate_json(command.response_json), 202
 

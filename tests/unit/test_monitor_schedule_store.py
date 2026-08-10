@@ -165,6 +165,10 @@ def test_version_six_migration_collapses_legacy_duplicate_active_retries(tmp_pat
         payload_json="{}",
         response_status=202,
         response_json="{}",
+        conflict_response_json=(
+            '{"error":{"code":"MONITOR_STATE_CONFLICT",'
+            '"message":"当前运行状态不允许人工重试"}}'
+        ),
         now=clock.value,
     )
     with store._transaction(write=True) as connection:

@@ -759,6 +759,7 @@ class MonitorStore:
         payload_json: str,
         response_status: int,
         response_json: str,
+        conflict_response_json: str,
         now: datetime,
     ) -> CommandRecord:
         request_id = str(UUID(request_id))
@@ -794,7 +795,27 @@ class MonitorStore:
                 (run_id,),
             ).fetchone()
             if active is not None:
-                raise MonitorStateConflict("monitor run already has an active retry")
+                connection.execute(
+                    """INSERT INTO monitor_commands
+                       (request_id,method,target,payload_hash,payload_json,state,
+                        response_status,response_json,created_at,updated_at)
+                       VALUES (?,?,?,?,?,'completed',409,?,?,?)""",
+                    (
+                        request_id,
+                        method,
+                        target,
+                        payload_hash,
+                        payload_json,
+                        conflict_response_json,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                denied = connection.execute(
+                    "SELECT * FROM monitor_commands WHERE request_id=?",
+                    (request_id,),
+                ).fetchone()
+                return self._command(denied)
             connection.execute(
                 """INSERT INTO monitor_commands
                    (request_id,method,target,payload_hash,payload_json,state,response_status,response_json,
@@ -820,9 +841,17 @@ class MonitorStore:
                     (request_id, run["task_id"], run_id, timestamp, timestamp),
                 )
             except sqlite3.IntegrityError as error:
-                raise MonitorStateConflict(
-                    "monitor run already has an active retry"
-                ) from error
+                if (
+                    getattr(error, "sqlite_errorcode", None)
+                    != sqlite3.SQLITE_CONSTRAINT_UNIQUE
+                ):
+                    raise
+                connection.execute(
+                    """UPDATE monitor_commands
+                       SET response_status=409,response_json=?,updated_at=?
+                       WHERE request_id=?""",
+                    (conflict_response_json, timestamp, request_id),
+                )
             completed = connection.execute(
                 "SELECT * FROM monitor_commands WHERE request_id=?", (request_id,)
             ).fetchone()
