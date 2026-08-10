@@ -281,7 +281,7 @@ def create_app(
         service = getattr(app.state, "monitor_web_service", None)
         if service is not None:
             service.recover_pending_commands()
-            service.dispatch_retry_intents()
+            service.start_retry_dispatcher()
 
     def close_monitor_web_service() -> None:
         service = getattr(app.state, "monitor_web_service", None)
@@ -324,6 +324,20 @@ def create_app(
             status_code = response.status_code
             response.headers["X-Request-ID"] = str(request_id)
             return response
+        except Exception:
+            if request.url.path.startswith("/api/monitor/"):
+                status_code = 500
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "error": {
+                            "code": "MONITOR_API_INTERNAL_ERROR",
+                            "message": "版本监控服务内部错误",
+                        }
+                    },
+                    headers={"X-Request-ID": str(request_id)},
+                )
+            raise
         finally:
             if not (
                 request.method == "GET"

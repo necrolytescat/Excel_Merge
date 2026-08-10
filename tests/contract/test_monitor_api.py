@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
 import sys
+from threading import Barrier, Event
+import time as wall_time
 from uuid import UUID, uuid4, uuid5
 
 from fastapi.testclient import TestClient
@@ -24,9 +27,13 @@ from app.services.monitor_report_service import (
     render_monitor_report_html,
     report_reference,
 )
-from app.services.monitor_store import MonitorStore
+from app.services.monitor_store import MonitorStateConflict, MonitorStore
 from app.services.monitor_task_service import MonitorTaskService
-from app.services.monitor_web_service import COMMAND_NAMESPACE, MonitorWebService
+from app.services.monitor_web_service import (
+    COMMAND_NAMESPACE,
+    MonitorWebError,
+    MonitorWebService,
+)
 from app.services.windows_scheduler import (
     FakeSchedulerGateway,
     MonitorSchedulerService,
@@ -99,9 +106,15 @@ class Runner:
         self.calls.append((run_id, trigger))
 
 
-def build_service(tmp_path: Path) -> MonitorWebService:
+def build_service(
+    tmp_path: Path,
+    *,
+    clock=None,
+    runner=None,
+) -> MonitorWebService:
+    current_time = clock or (lambda: NOW)
     store = MonitorStore(tmp_path / "monitor.sqlite3")
-    tasks = MonitorTaskService(store, clock=lambda: NOW)
+    tasks = MonitorTaskService(store, clock=current_time)
     scheduler = MonitorSchedulerService(
         store,
         FakeSchedulerGateway(),
@@ -109,7 +122,7 @@ def build_service(tmp_path: Path) -> MonitorWebService:
         working_directory=tmp_path,
         python_executable=sys.executable,
         run_as="S-1-5-21-100",
-        clock=lambda: NOW,
+        clock=current_time,
     )
     return MonitorWebService(
         store=store,
@@ -119,10 +132,50 @@ def build_service(tmp_path: Path) -> MonitorWebService:
         history=BranchHistoryService(History()),
         endpoint_registry=lambda: ENDPOINTS,
         dataset_layout=LAYOUT,
-        runner=Runner(),
+        runner=runner or Runner(),
         publisher=FileSystemMonitorReportPublisher(tmp_path / "reports"),
-        clock=lambda: NOW,
+        clock=current_time,
     )
+
+
+def fail_and_end_task(service: MonitorWebService):
+    task, _ = service.create_task(
+        MonitorTaskCreateRequestPayload.model_validate(create_payload())
+    )
+    task_id = str(task.task_id)
+    service.scheduled_tasks.pause(task_id)
+    run = service.store.list_runs(task_id)[-1]
+    claim = service.store.claim_run(
+        run.run_id,
+        now=NOW,
+        lease_for=timedelta(minutes=5),
+        trigger="manual_retry",
+    )
+    service.store.finish_run(
+        run.run_id,
+        claim.lease_token,
+        now=NOW + timedelta(seconds=1),
+        status="failed",
+        errors=[
+            MonitorPublicErrorPayload(
+                code="MONITOR_PARSE_FAILED",
+                stage="csv_parse",
+                message="工作簿解析失败",
+                retryable=False,
+            )
+        ],
+    )
+    service.scheduled_tasks.end(task_id)
+    return task_id, service.store.get_run(run.run_id)
+
+
+def wait_until(predicate, timeout=2.0):
+    deadline = wall_time.monotonic() + timeout
+    while wall_time.monotonic() < deadline:
+        if predicate():
+            return True
+        wall_time.sleep(0.01)
+    return predicate()
 
 
 def create_payload(request_id=None):
@@ -402,6 +455,166 @@ def test_monitor_retry_acceptance_is_durable_and_replayed(tmp_path):
             ).fetchone()[0] == 1
 
 
+def test_retry_dispatcher_reclaims_failed_dispatch_only_after_lease(tmp_path):
+    class FlakyRunner:
+        def __init__(self):
+            self.calls = []
+            self.first = Event()
+            self.second = Event()
+
+        def run_run(self, run_id, *, trigger):
+            self.calls.append((run_id, trigger))
+            if len(self.calls) == 1:
+                self.first.set()
+                raise RuntimeError("transient dispatch failure")
+            self.second.set()
+
+    current = [NOW]
+    runner = FlakyRunner()
+    service = build_service(
+        tmp_path,
+        clock=lambda: current[0],
+        runner=runner,
+    )
+    _, run = fail_and_end_task(service)
+    service.start_retry_dispatcher()
+    service.accept_retry(UUID(run.run_id), uuid4())
+    assert runner.first.wait(2)
+
+    def outbox():
+        with service.store._connect() as connection:
+            return connection.execute(
+                """SELECT state,dispatch_count FROM monitor_retry_outbox
+                   WHERE run_id=?""",
+                (run.run_id,),
+            ).fetchone()
+
+    assert wait_until(lambda: outbox()["state"] == "dispatching")
+    service.wake_retry_dispatcher()
+    wall_time.sleep(0.05)
+    assert len(runner.calls) == 1
+    assert outbox()["dispatch_count"] == 1
+
+    current[0] += timedelta(minutes=5)
+    service.wake_retry_dispatcher()
+    assert runner.second.wait(2)
+    assert wait_until(lambda: outbox()["state"] == "dispatched")
+    assert len(runner.calls) == 2
+    assert outbox()["dispatch_count"] == 2
+    service.close()
+    assert not service._dispatcher_thread.is_alive()
+
+
+def test_retry_dispatcher_recovers_pending_intent_after_restart(tmp_path):
+    first = build_service(tmp_path)
+    _, run = fail_and_end_task(first)
+    first.accept_retry(UUID(run.run_id), uuid4())
+    with first.store._connect() as connection:
+        assert connection.execute(
+            "SELECT state FROM monitor_retry_outbox WHERE run_id=?",
+            (run.run_id,),
+        ).fetchone()[0] == "pending"
+    first.close()
+
+    runner = Runner()
+    restarted = build_service(tmp_path, runner=runner)
+    restarted.start_retry_dispatcher()
+    assert wait_until(lambda: runner.calls == [(run.run_id, "manual_retry")])
+    with restarted.store._connect() as connection:
+        assert wait_until(
+            lambda: connection.execute(
+                "SELECT state FROM monitor_retry_outbox WHERE run_id=?",
+                (run.run_id,),
+            ).fetchone()[0]
+            == "dispatched"
+        )
+    restarted.close()
+    assert not restarted._dispatcher_thread.is_alive()
+
+
+def test_retry_and_archive_are_atomic_and_only_one_can_win(tmp_path):
+    service = build_service(tmp_path)
+    task_id, run = fail_and_end_task(service)
+    barrier = Barrier(2)
+
+    def retry():
+        barrier.wait()
+        try:
+            service.accept_retry(UUID(run.run_id), uuid4())
+            return "retry"
+        except Exception as error:
+            return error
+
+    def archive():
+        barrier.wait()
+        try:
+            service.tasks.archive(task_id)
+            return "archive"
+        except Exception as error:
+            return error
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = [executor.submit(retry), executor.submit(archive)]
+        results = [future.result() for future in results]
+    winners = [result for result in results if isinstance(result, str)]
+    assert winners in (["retry"], ["archive"])
+    loser = next(result for result in results if not isinstance(result, str))
+    assert isinstance(loser, (MonitorWebError, MonitorStateConflict))
+    service.close()
+
+
+def test_one_run_allows_only_one_active_retry_and_blocks_archive(tmp_path):
+    service = build_service(tmp_path)
+    task_id, run = fail_and_end_task(service)
+    barrier = Barrier(2)
+
+    def retry():
+        barrier.wait()
+        try:
+            return service.accept_retry(UUID(run.run_id), uuid4())
+        except MonitorWebError as error:
+            return error
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = [executor.submit(retry), executor.submit(retry)]
+        results = [future.result() for future in results]
+    accepted = [result for result in results if isinstance(result, tuple)]
+    rejected = [result for result in results if isinstance(result, MonitorWebError)]
+    assert len(accepted) == 1
+    assert accepted[0][1] == 202
+    assert accepted[0][0].run_id == UUID(run.run_id)
+    assert len(rejected) == 1
+    assert rejected[0].status_code == 409
+    with service.store._connect() as connection:
+        assert connection.execute(
+            """SELECT COUNT(*) FROM monitor_retry_outbox
+               WHERE run_id=? AND state IN ('pending','dispatching')""",
+            (run.run_id,),
+        ).fetchone()[0] == 1
+    try:
+        service.tasks.archive(task_id)
+        raise AssertionError("active retry must block archive")
+    except MonitorStateConflict:
+        pass
+    service.close()
+
+
+def test_archived_task_manual_claim_does_not_create_attempt(tmp_path):
+    service = build_service(tmp_path)
+    task_id, run = fail_and_end_task(service)
+    archived = service.tasks.archive(task_id)
+    assert archived.status == "archived"
+    before = service.store.get_run(run.run_id).attempt_count
+    assert service.store.claim_run(
+        run.run_id,
+        now=NOW + timedelta(minutes=1),
+        lease_for=timedelta(minutes=5),
+        trigger="manual_retry",
+    ) is None
+    assert service.store.get_run(run.run_id).attempt_count == before
+    service.close()
+
+
 def test_monitor_api_unavailable_and_validation_errors_are_sanitized(tmp_path):
     app = create_app(
         config={"svn": {"provider": "mock"}},
@@ -427,6 +640,136 @@ def test_monitor_api_unavailable_and_validation_errors_are_sanitized(tmp_path):
         assert invalid.status_code == 400
         assert invalid.json()["error"]["code"] == "MONITOR_INVALID_REQUEST"
         assert "fields" not in invalid.text
+
+
+def test_monitor_unknown_errors_are_scoped_sanitized_and_command_recovers(tmp_path):
+    service = build_service(tmp_path)
+    app = create_app(
+        config={"svn": {"provider": "mock"}},
+        provider=MockSVNProvider(),
+        monitor_web_service=service,
+    )
+
+    @app.get("/api/non-monitor-crash")
+    def non_monitor_crash():
+        raise RuntimeError("non-monitor-private-detail")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        original_list = service.list_tasks
+
+        def fail_list(**_):
+            raise RuntimeError(r"C:\private\monitor.sqlite3 secret traceback")
+
+        service.list_tasks = fail_list
+        failed = client.get("/api/monitor/tasks")
+        assert failed.status_code == 500
+        assert failed.json() == {
+            "error": {
+                "code": "MONITOR_API_INTERNAL_ERROR",
+                "message": "版本监控服务内部错误",
+            }
+        }
+        assert "private" not in failed.text
+        service.list_tasks = original_list
+
+        outside = client.get("/api/non-monitor-crash")
+        assert outside.status_code == 500
+        assert "MONITOR_API_INTERNAL_ERROR" not in outside.text
+
+        task = client.post("/api/monitor/tasks", json=create_payload()).json()
+        request_id = uuid4()
+        original_pause = service.scheduled_tasks.pause
+
+        def fail_pause(_):
+            raise RuntimeError(r"C:\private\schtasks stderr")
+
+        service.scheduled_tasks.pause = fail_pause
+        command = client.post(
+            f"/api/monitor/tasks/{task['task_id']}/pause",
+            json=command_payload(request_id),
+        )
+        assert command.status_code == 500
+        assert command.json()["error"]["code"] == "MONITOR_API_INTERNAL_ERROR"
+        assert [item.request_id for item in service.store.list_pending_commands()] == [
+            str(request_id)
+        ]
+
+        service.scheduled_tasks.pause = original_pause
+        assert service.recover_pending_commands() == 1
+        assert service.store.list_pending_commands() == []
+
+
+def test_monitor_patch_rejects_syncing_but_allows_other_editable_states(tmp_path):
+    service = build_service(tmp_path)
+    app = create_app(
+        config={"svn": {"provider": "mock"}},
+        provider=MockSVNProvider(),
+        monitor_web_service=service,
+    )
+    with TestClient(app) as client:
+        task = client.post("/api/monitor/tasks", json=create_payload()).json()
+        task_id = task["task_id"]
+        current = service.store.get_task(task_id)
+        service.store.update_task(
+            task_id,
+            {"scheduler_sync_status": "pending"},
+            NOW,
+            expected_generation=current.generation,
+            expected_scheduler_sync_status="synced",
+        )
+        syncing = client.patch(
+            f"/api/monitor/tasks/{task_id}",
+            json={
+                "schema_version": "m3.monitor-task-patch.request.v1",
+                "request_id": str(uuid4()),
+                "daily_trigger_time": "21:00:00",
+                "end_at": None,
+            },
+        )
+        assert syncing.status_code == 409
+        assert syncing.json()["error"]["code"] == "MONITOR_STATE_CONFLICT"
+
+        service.store.update_task(
+            task_id,
+            {
+                "scheduler_sync_status": "error",
+                "scheduler_error": MonitorPublicErrorPayload(
+                    code="MONITOR_SCHEDULER_SYNC_FAILED",
+                    stage="scheduler",
+                    message="计划任务同步失败",
+                    retryable=True,
+                ),
+            },
+            NOW,
+            expected_generation=current.generation,
+            expected_scheduler_sync_status="pending",
+        )
+        scheduler_error = client.patch(
+            f"/api/monitor/tasks/{task_id}",
+            json={
+                "schema_version": "m3.monitor-task-patch.request.v1",
+                "request_id": str(uuid4()),
+                "daily_trigger_time": "21:30:00",
+                "end_at": None,
+            },
+        )
+        assert scheduler_error.status_code == 200, scheduler_error.text
+
+        paused = client.post(
+            f"/api/monitor/tasks/{task_id}/pause",
+            json=command_payload(),
+        )
+        assert paused.status_code == 200
+        paused_patch = client.patch(
+            f"/api/monitor/tasks/{task_id}",
+            json={
+                "schema_version": "m3.monitor-task-patch.request.v1",
+                "request_id": str(uuid4()),
+                "daily_trigger_time": "22:00:00",
+                "end_at": None,
+            },
+        )
+        assert paused_patch.status_code == 200
 
 
 def test_create_replay_precedes_endpoint_layout_and_svn_validation(tmp_path):

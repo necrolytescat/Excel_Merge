@@ -72,12 +72,16 @@ def test_database_is_isolated_versioned_wal_and_foreign_keys(tmp_path):
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert [row[0] for row in connection.execute(
             "SELECT version FROM monitor_schema_migrations ORDER BY version"
-        ).fetchall()] == [1, 2, 3, 4, 5]
+        ).fetchall()] == [1, 2, 3, 4, 5, 6]
         assert connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='monitor_commands'"
         ).fetchone()
         assert connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='monitor_retry_outbox'"
+        ).fetchone()
+        assert connection.execute(
+            """SELECT 1 FROM sqlite_master
+               WHERE type='index' AND name='monitor_retry_outbox_run_active_idx'"""
         ).fetchone()
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(monitor_tasks)")
@@ -112,13 +116,98 @@ def test_version_one_database_migrates_without_recreating_tables(tmp_path):
     with store._connect() as upgraded:
         assert [row[0] for row in upgraded.execute(
             "SELECT version FROM monitor_schema_migrations ORDER BY version"
-        )] == [1, 2, 3, 4, 5]
+        )] == [1, 2, 3, 4, 5, 6]
         assert "ended_reason" in {
             row[1] for row in upgraded.execute("PRAGMA table_info(monitor_tasks)")
         }
         assert upgraded.execute(
             "SELECT COUNT(*) FROM monitor_run_publications"
         ).fetchone()[0] == 0
+
+
+def test_version_six_migration_collapses_legacy_duplicate_active_retries(tmp_path):
+    path = tmp_path / "retry-upgrade" / "monitor.sqlite3"
+    store = MonitorStore(path)
+    clock = Clock(at(10, 10))
+    tasks = MonitorTaskService(store, clock=clock)
+    task = tasks.create(command(effective_at=at(10, 9)))
+    clock.value = at(10, 11)
+    tasks.pause(str(task.task_id))
+    run = store.list_runs(str(task.task_id))[-1]
+    claim = store.claim_run(
+        run.run_id,
+        now=clock.value,
+        lease_for=timedelta(minutes=5),
+        trigger="manual_retry",
+    )
+    store.finish_run(
+        run.run_id,
+        claim.lease_token,
+        now=clock.value,
+        status="failed",
+        errors=[
+            MonitorPublicErrorPayload(
+                code="MONITOR_PARSE_FAILED",
+                stage="csv_parse",
+                message="parse failed",
+                retryable=False,
+            )
+        ],
+    )
+    first = str(uuid4())
+    second = str(uuid4())
+    store.accept_retry_intent(
+        request_id=first,
+        run_id=run.run_id,
+        method="POST",
+        target=f"POST /api/monitor/runs/{run.run_id}/retry",
+        payload_hash="first",
+        payload_json="{}",
+        response_status=202,
+        response_json="{}",
+        now=clock.value,
+    )
+    with store._transaction(write=True) as connection:
+        connection.execute("DROP INDEX monitor_retry_outbox_run_active_idx")
+        connection.execute("DELETE FROM monitor_schema_migrations WHERE version=6")
+        timestamp = clock.value.isoformat().replace("+00:00", "Z")
+        connection.execute(
+            """INSERT INTO monitor_commands
+               (request_id,method,target,payload_hash,payload_json,state,
+                response_status,response_json,created_at,updated_at)
+               VALUES (?,?,?,?,?,'completed',202,'{}',?,?)""",
+            (
+                second,
+                "POST",
+                f"POST /api/monitor/runs/{run.run_id}/retry",
+                "second",
+                "{}",
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.execute(
+            """INSERT INTO monitor_retry_outbox
+               (request_id,task_id,run_id,state,created_at,updated_at)
+               VALUES (?,?,?,'pending',?,?)""",
+            (second, str(task.task_id), run.run_id, timestamp, timestamp),
+        )
+
+    upgraded = MonitorStore(path)
+    with upgraded._connect() as connection:
+        assert connection.execute(
+            """SELECT COUNT(*) FROM monitor_retry_outbox
+               WHERE run_id=? AND state IN ('pending','dispatching')""",
+            (run.run_id,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM monitor_retry_outbox WHERE run_id=?",
+            (run.run_id,),
+        ).fetchone()[0] == 2
+        assert connection.execute(
+            """SELECT 1 FROM sqlite_master
+               WHERE type='index' AND name='monitor_retry_outbox_run_active_idx'"""
+        ).fetchone()
 
 
 def test_migration_fails_closed_for_legacy_noncanonical_task_uuid(tmp_path):

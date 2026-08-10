@@ -16,7 +16,7 @@ from app.services.monitor_schedule import BoundarySpec, BoundaryType, SHANGHAI, 
 
 
 DEFAULT_DATABASE_PATH = Path("var/m3-monitor/monitor.sqlite3")
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class MonitorLeaseLost(RuntimeError):
@@ -272,6 +272,27 @@ MIGRATION_5 = (
     "CREATE INDEX monitor_retry_outbox_state_idx ON monitor_retry_outbox(state,lease_expires_at)",
 )
 
+MIGRATION_6 = (
+    """UPDATE monitor_retry_outbox AS current
+       SET state='dispatched',lease_token=NULL,lease_expires_at=NULL
+       WHERE current.state IN ('pending','dispatching')
+         AND EXISTS (
+             SELECT 1 FROM monitor_retry_outbox AS winner
+             WHERE winner.run_id=current.run_id
+               AND winner.state IN ('pending','dispatching')
+               AND (
+                   winner.created_at < current.created_at
+                   OR (
+                       winner.created_at=current.created_at
+                       AND winner.request_id < current.request_id
+                   )
+               )
+         )""",
+    """CREATE UNIQUE INDEX monitor_retry_outbox_run_active_idx
+       ON monitor_retry_outbox(run_id)
+       WHERE state IN ('pending','dispatching')""",
+)
+
 
 class MonitorStore:
     def __init__(self, database_path: str | Path = DEFAULT_DATABASE_PATH):
@@ -363,6 +384,13 @@ class MonitorStore:
                 connection.execute(
                     "INSERT INTO monitor_schema_migrations(version, applied_at) VALUES (?, ?)",
                     (5, _timestamp(datetime.now(timezone.utc))),
+                )
+            if 6 not in versions:
+                for statement in MIGRATION_6:
+                    connection.execute(statement)
+                connection.execute(
+                    "INSERT INTO monitor_schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (6, _timestamp(datetime.now(timezone.utc))),
                 )
             connection.commit()
         except Exception:
@@ -760,6 +788,13 @@ class MonitorStore:
                 raise KeyError(run_id)
             if run["status"] != "failed" or run["lifecycle"] == "archived":
                 raise MonitorStateConflict("monitor run cannot be retried")
+            active = connection.execute(
+                """SELECT request_id FROM monitor_retry_outbox
+                   WHERE run_id=? AND state IN ('pending','dispatching')""",
+                (run_id,),
+            ).fetchone()
+            if active is not None:
+                raise MonitorStateConflict("monitor run already has an active retry")
             connection.execute(
                 """INSERT INTO monitor_commands
                    (request_id,method,target,payload_hash,payload_json,state,response_status,response_json,
@@ -777,12 +812,17 @@ class MonitorStore:
                     timestamp,
                 ),
             )
-            connection.execute(
-                """INSERT INTO monitor_retry_outbox
-                   (request_id,task_id,run_id,state,created_at,updated_at)
-                   VALUES (?,?,?,'pending',?,?)""",
-                (request_id, run["task_id"], run_id, timestamp, timestamp),
-            )
+            try:
+                connection.execute(
+                    """INSERT INTO monitor_retry_outbox
+                       (request_id,task_id,run_id,state,created_at,updated_at)
+                       VALUES (?,?,?,'pending',?,?)""",
+                    (request_id, run["task_id"], run_id, timestamp, timestamp),
+                )
+            except sqlite3.IntegrityError as error:
+                raise MonitorStateConflict(
+                    "monitor run already has an active retry"
+                ) from error
             completed = connection.execute(
                 "SELECT * FROM monitor_commands WHERE request_id=?", (request_id,)
             ).fetchone()
@@ -841,6 +881,66 @@ class MonitorStore:
                 (_timestamp(now), str(UUID(request_id)), lease_token),
             )
         return cursor.rowcount == 1
+
+    def next_retry_intent_wakeup(self, *, now: datetime) -> datetime | None:
+        current = require_utc(now)
+        with self._transaction() as connection:
+            pending = connection.execute(
+                "SELECT 1 FROM monitor_retry_outbox WHERE state='pending' LIMIT 1"
+            ).fetchone()
+            if pending is not None:
+                return current
+            row = connection.execute(
+                """SELECT MIN(lease_expires_at) AS wakeup_at
+                   FROM monitor_retry_outbox WHERE state='dispatching'"""
+            ).fetchone()
+        return _datetime(row["wakeup_at"])
+
+    def archive_task(
+        self,
+        task_id: str,
+        *,
+        expected_generation: int,
+        now: datetime,
+    ) -> TaskRecord:
+        task_id = str(UUID(task_id))
+        with self._transaction(write=True) as connection:
+            self._assert_task_state(
+                connection,
+                task_id,
+                expected_generation=expected_generation,
+                expected_lifecycle="ended",
+            )
+            pending_run = connection.execute(
+                """SELECT 1 FROM monitor_runs
+                   WHERE task_id=? AND status IN ('queued','running') LIMIT 1""",
+                (task_id,),
+            ).fetchone()
+            if pending_run is not None:
+                raise MonitorStateConflict("monitor task still has pending runs")
+            active_retry = connection.execute(
+                """SELECT 1 FROM monitor_retry_outbox
+                   WHERE task_id=? AND state IN ('pending','dispatching') LIMIT 1""",
+                (task_id,),
+            ).fetchone()
+            if active_retry is not None:
+                raise MonitorStateConflict("monitor task still has an active retry")
+            cursor = connection.execute(
+                """UPDATE monitor_tasks
+                   SET lifecycle='archived',generation=generation+1,
+                       scheduler_desired_state='removed',scheduler_sync_status='pending',
+                       scheduler_error_json=NULL,archived_at=?,updated_at=?
+                   WHERE task_id=? AND lifecycle='ended' AND generation=?""",
+                (_timestamp(now), _timestamp(now), task_id, expected_generation),
+            )
+            if cursor.rowcount != 1:
+                raise MonitorStateConflict(
+                    "monitor task state changed during transition"
+                )
+            row = connection.execute(
+                "SELECT * FROM monitor_tasks WHERE task_id=?", (task_id,)
+            ).fetchone()
+        return self._task(row)
 
     def _insert_boundary(
         self, connection: sqlite3.Connection, task_id: str, spec: BoundarySpec, now: datetime
@@ -1273,8 +1373,15 @@ class MonitorStore:
     ) -> LeaseClaim | None:
         current = require_utc(now)
         with self._transaction(write=True) as connection:
-            row = connection.execute("SELECT * FROM monitor_runs WHERE run_id=?", (run_id,)).fetchone()
+            row = connection.execute(
+                """SELECT r.*,t.lifecycle AS task_lifecycle
+                   FROM monitor_runs r JOIN monitor_tasks t ON t.task_id=r.task_id
+                   WHERE r.run_id=?""",
+                (run_id,),
+            ).fetchone()
             if row is None or row["status"] in {"succeeded", "partial"}:
+                return None
+            if row["task_lifecycle"] == "archived":
                 return None
             actual_trigger = trigger
             if row["status"] == "running":

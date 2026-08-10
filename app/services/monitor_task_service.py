@@ -359,24 +359,10 @@ class MonitorTaskService:
             return self.to_public_task(task)
         if task.lifecycle != "ended":
             raise ValueError("only an ended monitor task can be archived")
-        if any(
-            run.status in {"queued", "running"}
-            for run in self.store.list_runs(task_id)
-        ):
-            raise ValueError("monitor task still has pending runs")
-        updated = self.store.update_task(
+        updated = self.store.archive_task(
             task_id,
-            {
-                "lifecycle": "archived",
-                "generation": task.generation + 1,
-                "scheduler_desired_state": "removed",
-                "scheduler_sync_status": "pending",
-                "scheduler_error": None,
-                "archived_at": now,
-            },
-            now,
             expected_generation=task.generation,
-            expected_lifecycle="ended",
+            now=now,
         )
         return self.to_public_task(updated)
 

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
+from threading import Event, Lock, Thread
 from typing import Any, Callable, Protocol
 from uuid import UUID, uuid5
 
@@ -97,9 +98,58 @@ class MonitorWebService:
         self.publisher = publisher
         self.clock = clock or _utc_now
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="m3-web-retry")
+        self._dispatcher_stop = Event()
+        self._dispatcher_wakeup = Event()
+        self._dispatcher_lock = Lock()
+        self._dispatcher_thread: Thread | None = None
+        self._closed = False
 
     def close(self) -> None:
-        self._executor.shutdown(wait=False, cancel_futures=False)
+        with self._dispatcher_lock:
+            if self._closed:
+                return
+            self._closed = True
+            thread = self._dispatcher_thread
+            self._dispatcher_stop.set()
+            self._dispatcher_wakeup.set()
+        if thread is not None:
+            thread.join()
+        self._executor.shutdown(wait=True, cancel_futures=False)
+
+    def start_retry_dispatcher(self) -> None:
+        with self._dispatcher_lock:
+            if self._closed:
+                raise RuntimeError("monitor web service is closed")
+            if self._dispatcher_thread is not None:
+                return
+            self._dispatcher_stop.clear()
+            thread = Thread(
+                target=self._retry_dispatch_loop,
+                name="m3-web-retry-dispatcher",
+                daemon=True,
+            )
+            self._dispatcher_thread = thread
+            thread.start()
+
+    def wake_retry_dispatcher(self) -> None:
+        self._dispatcher_wakeup.set()
+
+    def _retry_dispatch_loop(self) -> None:
+        while not self._dispatcher_stop.is_set():
+            self._dispatcher_wakeup.clear()
+            try:
+                self.dispatch_retry_intents()
+                now = self._now()
+                wakeup_at = self.store.next_retry_intent_wakeup(now=now)
+            except Exception:
+                self._dispatcher_wakeup.wait(1.0)
+                continue
+            timeout = (
+                max(0.0, (wakeup_at - now).total_seconds())
+                if wakeup_at is not None
+                else None
+            )
+            self._dispatcher_wakeup.wait(timeout)
 
     def _now(self) -> datetime:
         return self.clock().astimezone(timezone.utc)
@@ -322,6 +372,23 @@ class MonitorWebService:
         self, task_id: UUID, payload: MonitorTaskPatchRequestPayload
     ) -> tuple[MonitorTaskPayload, int]:
         target = self._command_target("PATCH", f"/api/monitor/tasks/{task_id}")
+
+        def modify_when_ready() -> MonitorTaskPayload:
+            current = self.tasks.to_public_task(
+                self.tasks._require_task(str(task_id))
+            )
+            if current.status == "syncing":
+                raise MonitorWebError(
+                    "MONITOR_STATE_CONFLICT",
+                    "任务正在同步系统调度，请稍后再试",
+                    409,
+                )
+            return self.scheduled_tasks.modify_schedule(
+                str(task_id),
+                daily_trigger_time=payload.daily_trigger_time,
+                end_at=payload.end_at,
+            )
+
         return self._run_command(
             request_id=payload.request_id,
             method="PATCH",
@@ -329,11 +396,7 @@ class MonitorWebService:
             payload_hash=self._payload_hash(payload),
             payload_json=self._payload_json(payload),
             response_status=200,
-            action=lambda: self.scheduled_tasks.modify_schedule(
-                str(task_id),
-                daily_trigger_time=payload.daily_trigger_time,
-                end_at=payload.end_at,
-            ),
+            action=modify_when_ready,
         )
 
     def task_command(
@@ -556,7 +619,7 @@ class MonitorWebService:
             raise MonitorWebError(
                 "MONITOR_STATE_CONFLICT", "当前运行状态不允许人工重试", 409
             ) from error
-        self.dispatch_retry_intents()
+        self.wake_retry_dispatcher()
         return MonitorRetryAcceptedPayload.model_validate_json(command.response_json), 202
 
     def dispatch_retry_intents(self) -> int:
@@ -564,7 +627,8 @@ class MonitorWebService:
             now=self._now(), lease_for=timedelta(minutes=5)
         )
         for intent in intents:
-            self._executor.submit(self._dispatch_retry, intent)
+            future = self._executor.submit(self._dispatch_retry, intent)
+            future.add_done_callback(lambda _: self.wake_retry_dispatcher())
         return len(intents)
 
     def recover_pending_commands(self) -> int:
@@ -597,7 +661,7 @@ class MonitorWebService:
                         self.task_command(
                             UUID(task_id_text), command_name, request.request_id
                         )
-            except (MonitorWebError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            except Exception:
                 continue
         remaining = {
             command.request_id for command in self.store.list_pending_commands()
