@@ -10,7 +10,7 @@
 |---|---|---|---|---|
 | Planning | 已完成 | `codex/m3-version-monitoring-report` | 本文件所在提交 | PRD 与实施计划已冻结 |
 | Phase 0 | 已完成 | `codex/m3-p0-contracts`、`codex/m3-phase0-contract-audit` | `443c396` | 四份严格契约、确定性 SVN Mock、55 项聚焦测试 |
-| Phase 1 | 未开始 | `codex/m3-p1-diff-engine` | - | - |
+| Phase 1 | 已完成 | `codex/m3-p1-diff-engine` | `9a52656` | 固定分支历史、最终净值、字段事件归因通过 |
 | Phase 2 | 未开始 | `codex/m3-p2-runner-store` | - | - |
 | Phase 3 | 未开始 | `codex/m3-p3-report-lifecycle` | - | - |
 | Phase 4 | 未开始 | `codex/m3-p4-windows-scheduler` | - | - |
@@ -50,3 +50,12 @@
 - 验收结果：聚焦契约测试 55 passed；其余可收集契约回归 99 passed
 - 冻结内容：四份严格 M3 契约及规范示例、确定性 SVN Mock、任务生命周期、Run/attempt、报告统计、未知与无法归因、左开右闭区间和仓库全局 Revision 间隙语义
 - 已知限制：完整 `tests/contract` 因缺少 `config/settings.json` 在收集阶段中止；未创建占位配置
+
+### Phase 1
+
+- 阶段分支：`codex/m3-p1-diff-engine`
+- 验收提交：`9a52656bfa35b76b31abc1be130ed91c338c6a3a`
+- 验收结果：阶段聚焦测试及旧 Provider 回归 84 passed；直接相关 M2 清单、TableCsv 和 semantic diff 回归 29 passed
+- 完成内容：面向固定 SVN 分支的只读 History Protocol 与 CLI 附加实现、严格目标分支路径和 UTC 左开右闭过滤、固定 Revision 快照最终净值计算，以及按 Revision 升序回放的字段事件归因
+- 产品补充规则：`field_added`、`field_removed`、`field_definition_modified` 使用 `row_key=null`，且不计入 `changed_row_count`
+- 已知限制：验收未真实访问 SVN；因缺少 `config/settings.json`，依赖该本机配置的测试未运行，且未创建占位配置
