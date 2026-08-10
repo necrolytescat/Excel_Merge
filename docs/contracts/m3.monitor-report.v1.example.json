@@ -1,0 +1,155 @@
+{
+  "schema_version": "m3.monitor-report.v1",
+  "report_id": "40000000-0000-4000-8000-000000000001",
+  "run_id": "30000000-0000-4000-8000-000000000001",
+  "task_id": "10000000-0000-4000-8000-000000000001",
+  "task_name": "每日战斗配置回归",
+  "status": "partial",
+  "branch": {
+    "endpoint_id": "KR_FIX_1_0",
+    "label": "KR FIX 1.0",
+    "repository_uuid": "20000000-0000-4000-8000-000000000001",
+    "repository_relative_path": "branches/KR-Fix-1.0",
+    "bound_revision": 100,
+    "copy_boundary_revision": 10
+  },
+  "interval": {
+    "start_at": "2026-08-09T10:00:00Z",
+    "end_at": "2026-08-10T10:00:00Z",
+    "start_inclusive": false,
+    "end_inclusive": true,
+    "logical_cutoff_at": "2026-08-10T10:00:00Z",
+    "boundary_kind": "scheduled"
+  },
+  "revisions": {
+    "start_revision": 100,
+    "end_revision": 106
+  },
+  "generated_at": "2026-08-10T10:02:00Z",
+  "summary": {
+    "workbook_count": 2,
+    "changed_workbook_count": 1,
+    "sheet_count": 1,
+    "changed_row_count": 3,
+    "changed_field_count": 1,
+    "author_count": 3,
+    "change_count": 3,
+    "error_count": 1,
+    "by_change_type": {
+      "field_modified": 1,
+      "row_added": 1,
+      "row_deleted": 1,
+      "field_added": 0,
+      "field_removed": 0,
+      "field_definition_modified": 0
+    }
+  },
+  "coverage": {
+    "data_source": "reliable_table_csv",
+    "compared_scope": "exported_business_fields",
+    "interval_semantics": "left_open_right_closed",
+    "excluded_content": [
+      "scope_none_fields",
+      "unexported_fields",
+      "excel_notes",
+      "formulas",
+      "styles",
+      "macros"
+    ],
+    "unknown_author_count": 0,
+    "unattributed_change_count": 0,
+    "failed_workbook_count": 1
+  },
+  "changes": [
+    {
+      "change_type": "field_modified",
+      "workbook": "CombatConfig.xlsm",
+      "sheet_name": "Role",
+      "primary_key_field": "Id",
+      "row_key": "100",
+      "field_name": "Hp",
+      "display_name": "生命值",
+      "source": {
+        "display_value": "100",
+        "normalized_value": "100",
+        "field_definition": null,
+        "row_values": null
+      },
+      "target": {
+        "display_value": "110",
+        "normalized_value": "110",
+        "field_definition": null,
+        "row_values": null
+      },
+      "attribution": {
+        "status": "attributed",
+        "author": "bob",
+        "revision": 102,
+        "changed_at": "2026-08-10T02:00:00Z",
+        "commit_message": "调整角色生命值"
+      }
+    },
+    {
+      "change_type": "row_added",
+      "workbook": "CombatConfig.xlsm",
+      "sheet_name": "Role",
+      "primary_key_field": "Id",
+      "row_key": "300",
+      "field_name": null,
+      "display_name": null,
+      "source": null,
+      "target": {
+        "display_value": null,
+        "normalized_value": null,
+        "field_definition": null,
+        "row_values": {
+          "Id": "300",
+          "Hp": "80"
+        }
+      },
+      "attribution": {
+        "status": "attributed",
+        "author": "carol",
+        "revision": 105,
+        "changed_at": "2026-08-10T05:00:00Z",
+        "commit_message": "新增角色 300"
+      }
+    },
+    {
+      "change_type": "row_deleted",
+      "workbook": "CombatConfig.xlsm",
+      "sheet_name": "Role",
+      "primary_key_field": "Id",
+      "row_key": "200",
+      "field_name": null,
+      "display_name": null,
+      "source": {
+        "display_value": null,
+        "normalized_value": null,
+        "field_definition": null,
+        "row_values": {
+          "Id": "200",
+          "Hp": "90"
+        }
+      },
+      "target": null,
+      "attribution": {
+        "status": "attributed",
+        "author": "dave",
+        "revision": 106,
+        "changed_at": "2026-08-10T06:00:00Z",
+        "commit_message": "移除角色 200"
+      }
+    }
+  ],
+  "errors": [
+    {
+      "code": "MONITOR_PARSE_FAILED",
+      "stage": "csv_parse",
+      "message": "一个工作簿的 TableCsv 无法按冻结规则解析",
+      "retryable": false,
+      "workbook": "BrokenConfig.xlsm",
+      "sheet_name": "Broken"
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "schema_version": "m3.monitor-run.v1",
+  "run_id": "30000000-0000-4000-8000-000000000001",
+  "task_id": "10000000-0000-4000-8000-000000000001",
+  "status": "partial",
+  "interval": {
+    "start_at": "2026-08-09T10:00:00Z",
+    "end_at": "2026-08-10T10:00:00Z",
+    "start_inclusive": false,
+    "end_inclusive": true,
+    "logical_cutoff_at": "2026-08-10T10:00:00Z",
+    "boundary_kind": "scheduled"
+  },
+  "start_revision": 100,
+  "end_revision": 106,
+  "attempt_count": 1,
+  "attempts": [
+    {
+      "attempt": 1,
+      "trigger": "scheduled",
+      "status": "partial",
+      "started_at": "2026-08-10T10:00:05Z",
+      "finished_at": "2026-08-10T10:02:00Z",
+      "errors": [
+        {
+          "code": "MONITOR_PARSE_FAILED",
+          "stage": "csv_parse",
+          "message": "一个工作簿的 TableCsv 无法按冻结规则解析",
+          "retryable": false,
+          "workbook": "BrokenConfig.xlsm",
+          "sheet_name": "Broken"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "workbook_count": 2,
+    "changed_workbook_count": 1,
+    "change_count": 3,
+    "error_count": 1
+  },
+  "report_ref": "m3r_AAAAAAAAAAAAAAAAAAAAAA",
+  "report_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "report_expires_at": "2026-09-09T10:02:00Z",
+  "errors": [
+    {
+      "code": "MONITOR_PARSE_FAILED",
+      "stage": "csv_parse",
+      "message": "一个工作簿的 TableCsv 无法按冻结规则解析",
+      "retryable": false,
+      "workbook": "BrokenConfig.xlsm",
+      "sheet_name": "Broken"
+    }
+  ],
+  "created_at": "2026-08-10T10:00:00Z",
+  "started_at": "2026-08-10T10:00:05Z",
+  "finished_at": "2026-08-10T10:02:00Z",
+  "updated_at": "2026-08-10T10:02:00Z"
+}

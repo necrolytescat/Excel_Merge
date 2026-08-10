@@ -1,0 +1,53 @@
+{
+  "schema_version": "m3.monitor-task.v1",
+  "task_id": "10000000-0000-4000-8000-000000000001",
+  "name": "每日战斗配置回归",
+  "status": "active",
+  "branch": {
+    "endpoint_id": "KR_FIX_1_0",
+    "label": "KR FIX 1.0",
+    "repository_uuid": "20000000-0000-4000-8000-000000000001",
+    "repository_relative_path": "branches/KR-Fix-1.0",
+    "bound_revision": 100,
+    "copy_boundary_revision": 10
+  },
+  "schedule": {
+    "timezone": "Asia/Shanghai",
+    "effective_at": "2026-08-09T10:00:00Z",
+    "end_at": null,
+    "daily_trigger_time": "18:00:00",
+    "next_logical_cutoff_at": "2026-08-11T10:00:00Z"
+  },
+  "scheduler": {
+    "generation": 1,
+    "desired_state": "enabled",
+    "sync_status": "synced",
+    "last_synced_at": "2026-08-09T09:55:00Z",
+    "last_error": null
+  },
+  "latest_run": {
+    "run_id": "30000000-0000-4000-8000-000000000001",
+    "status": "partial",
+    "interval": {
+      "start_at": "2026-08-09T10:00:00Z",
+      "end_at": "2026-08-10T10:00:00Z",
+      "start_inclusive": false,
+      "end_inclusive": true,
+      "logical_cutoff_at": "2026-08-10T10:00:00Z",
+      "boundary_kind": "scheduled"
+    },
+    "summary": {
+      "workbook_count": 2,
+      "changed_workbook_count": 1,
+      "change_count": 3,
+      "error_count": 1
+    },
+    "report_ref": "m3r_AAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "last_runner_heartbeat_at": "2026-08-10T10:01:30Z",
+  "created_at": "2026-08-09T09:50:00Z",
+  "updated_at": "2026-08-10T10:02:00Z",
+  "paused_at": null,
+  "ended_at": null,
+  "archived_at": null
+}
