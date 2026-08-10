@@ -23,7 +23,7 @@
   },
   "revisions": {
     "start_revision": 100,
-    "end_revision": 106
+    "end_revision": 110
   },
   "generated_at": "2026-08-10T10:02:00Z",
   "summary": {
@@ -84,7 +84,7 @@
       "attribution": {
         "status": "attributed",
         "author": "bob",
-        "revision": 102,
+        "revision": 103,
         "changed_at": "2026-08-10T02:00:00Z",
         "commit_message": "调整角色生命值"
       }
@@ -110,7 +110,7 @@
       "attribution": {
         "status": "attributed",
         "author": "carol",
-        "revision": 105,
+        "revision": 108,
         "changed_at": "2026-08-10T05:00:00Z",
         "commit_message": "新增角色 300"
       }
@@ -136,7 +136,7 @@
       "attribution": {
         "status": "attributed",
         "author": "dave",
-        "revision": 106,
+        "revision": 110,
         "changed_at": "2026-08-10T06:00:00Z",
         "commit_message": "移除角色 200"
       }

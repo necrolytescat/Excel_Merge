@@ -12,7 +12,7 @@
     "boundary_kind": "scheduled"
   },
   "start_revision": 100,
-  "end_revision": 106,
+  "end_revision": 110,
   "attempt_count": 1,
   "attempts": [
     {

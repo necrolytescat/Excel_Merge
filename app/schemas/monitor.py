@@ -200,6 +200,40 @@ class MonitorSchedulerPayload(StrictMonitorPayload):
         return self
 
 
+def _validate_task_lifecycle(
+    status: MonitorTaskStatus,
+    schedule: MonitorSchedulePayload,
+    scheduler: MonitorSchedulerPayload,
+) -> None:
+    if status == MonitorTaskStatus.SYNCING:
+        if scheduler.sync_status != MonitorSchedulerSyncStatus.PENDING:
+            raise ValueError("syncing task must have pending scheduler state")
+    elif status == MonitorTaskStatus.ACTIVE:
+        if (
+            scheduler.sync_status != MonitorSchedulerSyncStatus.SYNCED
+            or scheduler.desired_state != "enabled"
+        ):
+            raise ValueError("active task requires a synced enabled scheduler")
+    elif status == MonitorTaskStatus.PAUSED:
+        if scheduler.desired_state != "disabled":
+            raise ValueError("paused task requires a disabled scheduler")
+    elif status == MonitorTaskStatus.SCHEDULER_ERROR:
+        if scheduler.sync_status not in {
+            MonitorSchedulerSyncStatus.DRIFTED,
+            MonitorSchedulerSyncStatus.ERROR,
+        }:
+            raise ValueError("scheduler_error task requires scheduler drift/error")
+    elif scheduler.desired_state == "enabled":
+        raise ValueError("ended or archived task cannot keep an enabled scheduler")
+
+    if status in {
+        MonitorTaskStatus.PAUSED,
+        MonitorTaskStatus.ENDED,
+        MonitorTaskStatus.ARCHIVED,
+    } and schedule.next_logical_cutoff_at is not None:
+        raise ValueError("inactive task cannot expose a next logical cutoff")
+
+
 class MonitorTimeIntervalPayload(StrictMonitorPayload):
     start_at: UtcDateTime
     end_at: UtcDateTime
@@ -244,7 +278,9 @@ class MonitorRunDigestPayload(StrictMonitorPayload):
     @model_validator(mode="after")
     def validate_terminal_result(self) -> "MonitorRunDigestPayload":
         published = self.status in {MonitorRunStatus.SUCCEEDED, MonitorRunStatus.PARTIAL}
-        if published != (self.summary is not None and self.report_ref is not None):
+        has_summary = self.summary is not None
+        has_report_ref = self.report_ref is not None
+        if has_summary != published or has_report_ref != published:
             raise ValueError("published run digest requires summary and report_ref")
         return self
 
@@ -269,21 +305,7 @@ class MonitorTaskPayload(StrictMonitorPayload):
     def validate_state(self) -> "MonitorTaskPayload":
         if self.updated_at < self.created_at:
             raise ValueError("updated_at cannot precede created_at")
-        if self.status == MonitorTaskStatus.SYNCING:
-            if self.scheduler.sync_status != MonitorSchedulerSyncStatus.PENDING:
-                raise ValueError("syncing task must have pending scheduler state")
-        elif self.status == MonitorTaskStatus.ACTIVE:
-            if (
-                self.scheduler.sync_status != MonitorSchedulerSyncStatus.SYNCED
-                or self.scheduler.desired_state != "enabled"
-            ):
-                raise ValueError("active task requires a synced enabled scheduler")
-        elif self.status == MonitorTaskStatus.SCHEDULER_ERROR:
-            if self.scheduler.sync_status not in {
-                MonitorSchedulerSyncStatus.DRIFTED,
-                MonitorSchedulerSyncStatus.ERROR,
-            }:
-                raise ValueError("scheduler_error task requires scheduler drift/error")
+        _validate_task_lifecycle(self.status, self.schedule, self.scheduler)
         if (self.status == MonitorTaskStatus.PAUSED) != (self.paused_at is not None):
             raise ValueError("paused status and paused_at must appear together")
         if self.status == MonitorTaskStatus.ENDED and self.ended_at is None:
@@ -304,6 +326,13 @@ class MonitorTaskListItemPayload(StrictMonitorPayload):
     last_runner_heartbeat_at: UtcDateTime | None = None
     created_at: UtcDateTime
     updated_at: UtcDateTime
+
+    @model_validator(mode="after")
+    def validate_state(self) -> "MonitorTaskListItemPayload":
+        if self.updated_at < self.created_at:
+            raise ValueError("updated_at cannot precede created_at")
+        _validate_task_lifecycle(self.status, self.schedule, self.scheduler)
+        return self
 
 
 class MonitorTaskListPayload(StrictMonitorPayload):
@@ -336,8 +365,12 @@ class MonitorRunAttemptPayload(StrictMonitorPayload):
             raise ValueError("only terminal attempts have finished_at")
         if self.finished_at is not None and self.finished_at < self.started_at:
             raise ValueError("attempt finished_at cannot precede started_at")
-        if self.status == MonitorAttemptStatus.FAILED and not self.errors:
-            raise ValueError("failed attempt requires a public error")
+        incomplete = self.status in {
+            MonitorAttemptStatus.PARTIAL,
+            MonitorAttemptStatus.FAILED,
+        }
+        if incomplete != bool(self.errors):
+            raise ValueError("only partial or failed attempts contain public errors")
         return self
 
 
@@ -373,6 +406,10 @@ class MonitorRunPayload(StrictMonitorPayload):
     def validate_state(self) -> "MonitorRunPayload":
         if self.attempt_count != len(self.attempts):
             raise ValueError("attempt_count must equal the number of public attempts")
+        if [attempt.attempt for attempt in self.attempts] != list(
+            range(1, self.attempt_count + 1)
+        ):
+            raise ValueError("attempt numbers must be contiguous and start at one")
         if (self.start_revision is None) != (self.end_revision is None):
             raise ValueError("start_revision and end_revision must appear together")
         if (
@@ -394,19 +431,43 @@ class MonitorRunPayload(StrictMonitorPayload):
                 or any(value is None for value in report_fields)
             ):
                 raise ValueError("published run requires revisions, summary, and report metadata")
-        elif any(value is not None for value in report_fields) or self.summary is not None:
-            raise ValueError("unpublished run cannot contain report metadata or summary")
+            if self.summary.error_count != len(self.errors):
+                raise ValueError("summary error_count must equal run errors length")
+        elif (
+            self.start_revision is not None
+            or any(value is not None for value in report_fields)
+            or self.summary is not None
+        ):
+            raise ValueError("unpublished run cannot contain revisions or report metadata")
 
         if self.status == MonitorRunStatus.QUEUED:
-            if self.started_at is not None or self.finished_at is not None:
-                raise ValueError("queued run cannot have execution timestamps")
+            if (
+                self.attempts
+                or self.errors
+                or self.started_at is not None
+                or self.finished_at is not None
+            ):
+                raise ValueError(
+                    "queued run cannot have attempts, errors, or execution timestamps"
+                )
         elif self.status == MonitorRunStatus.RUNNING:
-            if self.started_at is None or self.finished_at is not None:
+            if (
+                self.started_at is None
+                or self.finished_at is not None
+                or not self.attempts
+                or self.attempts[-1].status != MonitorAttemptStatus.RUNNING
+            ):
                 raise ValueError("running run requires started_at and no finished_at")
-        elif self.finished_at is None:
-            raise ValueError("terminal run requires finished_at")
-        if self.status == MonitorRunStatus.FAILED and not self.errors:
-            raise ValueError("failed run requires a public error")
+        elif (
+            self.started_at is None
+            or self.finished_at is None
+            or not self.attempts
+            or self.attempts[-1].status.value != self.status.value
+        ):
+            raise ValueError("terminal run must match its final completed attempt")
+
+        if self.attempts and self.errors != self.attempts[-1].errors:
+            raise ValueError("run errors must match the final attempt errors")
         return self
 
 
@@ -613,6 +674,52 @@ class MonitorReportPayload(StrictMonitorPayload):
             actual_counts[change.change_type.value] += 1
         if self.summary.by_change_type.model_dump() != actual_counts:
             raise ValueError("by_change_type must match changes")
+
+        changed_workbooks = {change.workbook for change in self.changes}
+        changed_sheets = {
+            (change.workbook, change.sheet_name) for change in self.changes
+        }
+        changed_rows = {
+            (change.workbook, change.sheet_name, change.row_key)
+            for change in self.changes
+        }
+        changed_fields = {
+            (change.workbook, change.sheet_name, change.row_key, change.field_name)
+            for change in self.changes
+            if change.field_name is not None
+        }
+        known_authors = {
+            change.attribution.author
+            for change in self.changes
+            if change.attribution.status == "attributed"
+        }
+        unknown_author_count = sum(
+            change.attribution.status == "unknown_author" for change in self.changes
+        )
+        unattributed_change_count = sum(
+            change.attribution.status == "unresolved" for change in self.changes
+        )
+        failed_workbooks = {
+            error.workbook for error in self.errors if error.workbook is not None
+        }
+        expected_summary_counts = {
+            "changed_workbook_count": len(changed_workbooks),
+            "sheet_count": len(changed_sheets),
+            "changed_row_count": len(changed_rows),
+            "changed_field_count": len(changed_fields),
+            "author_count": len(known_authors),
+        }
+        for field_name, expected_count in expected_summary_counts.items():
+            if getattr(self.summary, field_name) != expected_count:
+                raise ValueError(f"summary {field_name} must match changes")
+        if self.summary.workbook_count < len(changed_workbooks | failed_workbooks):
+            raise ValueError("workbook_count cannot omit changed or failed workbooks")
+        if self.coverage.unknown_author_count != unknown_author_count:
+            raise ValueError("unknown_author_count must match changes")
+        if self.coverage.unattributed_change_count != unattributed_change_count:
+            raise ValueError("unattributed_change_count must match changes")
+        if self.coverage.failed_workbook_count != len(failed_workbooks):
+            raise ValueError("failed_workbook_count must match errors")
         if self.status == "succeeded" and (
             self.errors or self.coverage.unattributed_change_count > 0
         ):

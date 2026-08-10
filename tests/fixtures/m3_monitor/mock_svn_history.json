@@ -3,6 +3,23 @@
   "repository_uuid": "20000000-0000-4000-8000-000000000001",
   "target_branch": "branches/KR-Fix-1.0",
   "other_branch": "branches/KR-Fix-2.0",
+  "revision_numbering": {
+    "scope": "repository_global",
+    "target_branch_log_revisions": [
+      101,
+      103,
+      104,
+      106,
+      108,
+      110
+    ],
+    "other_branch_only_revisions": [
+      102,
+      105,
+      107,
+      109
+    ]
+  },
   "interval": {
     "start_at": "2026-08-09T10:00:00Z",
     "end_at": "2026-08-10T10:00:00Z",
@@ -10,7 +27,7 @@
     "end_inclusive": true
   },
   "start_revision": 100,
-  "end_revision": 106,
+  "end_revision": 110,
   "start_rows": {
     "100": {
       "Id": "100",
@@ -54,7 +71,7 @@
       ]
     },
     {
-      "revision": 102,
+      "revision": 103,
       "changed_at": "2026-08-10T02:00:00Z",
       "author": "bob",
       "message": "调整角色生命值",
@@ -72,7 +89,7 @@
       "ignored_events": []
     },
     {
-      "revision": 103,
+      "revision": 104,
       "changed_at": "2026-08-10T03:00:00Z",
       "author": "alice",
       "message": "临时调整后回退",
@@ -90,7 +107,7 @@
       "ignored_events": []
     },
     {
-      "revision": 104,
+      "revision": 106,
       "changed_at": "2026-08-10T04:00:00Z",
       "author": "alice",
       "message": "恢复起始值",
@@ -108,7 +125,7 @@
       "ignored_events": []
     },
     {
-      "revision": 105,
+      "revision": 108,
       "changed_at": "2026-08-10T05:00:00Z",
       "author": "carol",
       "message": "新增角色 300",
@@ -128,7 +145,7 @@
       "ignored_events": []
     },
     {
-      "revision": 106,
+      "revision": 110,
       "changed_at": "2026-08-10T06:00:00Z",
       "author": "dave",
       "message": "删除旧角色并提交不可解析样例",
@@ -168,11 +185,11 @@
   "expected": {
     "included_revisions": [
       101,
-      102,
       103,
       104,
-      105,
-      106
+      106,
+      108,
+      110
     ],
     "ignored_revision_paths": [
       "branches/KR-Fix-2.0/TableCsv/Role.csv"
@@ -184,19 +201,19 @@
         "field_name": "Hp",
         "source": "100",
         "target": "110",
-        "final_revision": 102,
+        "final_revision": 103,
         "final_author": "bob"
       },
       {
         "change_type": "row_added",
         "row_key": "300",
-        "final_revision": 105,
+        "final_revision": 108,
         "final_author": "carol"
       },
       {
         "change_type": "row_deleted",
         "row_key": "200",
-        "final_revision": 106,
+        "final_revision": 110,
         "final_author": "dave"
       }
     ],
