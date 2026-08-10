@@ -328,6 +328,90 @@ def _read_ooxml_table_records(
     return records
 
 
+def _resolve_ooxml_table_bounds(
+    table_ref: str | None,
+    sheet_data: ET.Element | None,
+    *,
+    sheet_name: str,
+    table_width: int | None,
+) -> tuple[int, int, int, int] | None:
+    if table_ref is None:
+        return None
+    if not table_ref.strip():
+        raise M2ProcessingError(
+            "M2_MANIFEST_FIELD_MISSING",
+            "manifest_parse",
+            "main Sheet 的 manifest Excel Table 范围无效",
+            sheet_name=sheet_name,
+            details={"table_ref": table_ref},
+        )
+    raw_bounds = range_boundaries(table_ref)
+
+    min_column, min_row, max_column, max_row = raw_bounds
+    resolved_bounds: tuple[int, int, int, int] | None = None
+    if all(bound is not None for bound in raw_bounds):
+        resolved_bounds = (
+            int(min_column),
+            int(min_row),
+            int(max_column),
+            int(max_row),
+        )
+
+    if resolved_bounds is None:
+        if min_row is None or max_row is None:
+            raise M2ProcessingError(
+                "M2_MANIFEST_FIELD_MISSING",
+                "manifest_parse",
+                "main Sheet 的 manifest Excel Table 缺少可靠行边界",
+                sheet_name=sheet_name,
+                details={"table_ref": table_ref},
+            )
+        coordinates: list[tuple[int, int]] = []
+        if sheet_data is not None:
+            for fallback_row, row_node in enumerate(
+                sheet_data.findall(f"{{{_SHEET_NS}}}row"),
+                start=1,
+            ):
+                row_number = int(row_node.attrib.get("r", fallback_row))
+                if row_number < min_row or row_number > max_row:
+                    continue
+                for cell in row_node.findall(f"{{{_SHEET_NS}}}c"):
+                    column_number = _column_index(cell.attrib.get("r", "A1")) + 1
+                    if min_column is not None and column_number < min_column:
+                        continue
+                    if max_column is not None and column_number > max_column:
+                        continue
+                    coordinates.append((column_number, row_number))
+
+        if not coordinates:
+            raise M2ProcessingError(
+                "M2_MANIFEST_FIELD_MISSING",
+                "manifest_parse",
+                "main Sheet 的 manifest Excel Table 缺失列边界且无法可靠恢复",
+                sheet_name=sheet_name,
+                details={"table_ref": table_ref},
+            )
+
+        used_columns = [column for column, _ in coordinates]
+        resolved_bounds = (
+            int(min_column) if min_column is not None else min(used_columns),
+            int(min_row),
+            int(max_column) if max_column is not None else max(used_columns),
+            int(max_row),
+        )
+        inferred_width = resolved_bounds[2] - resolved_bounds[0] + 1
+        if table_width is None or inferred_width != table_width:
+            raise M2ProcessingError(
+                "M2_MANIFEST_FIELD_MISSING",
+                "manifest_parse",
+                "main Sheet 的 manifest Excel Table 缺失列边界且无法可靠恢复",
+                sheet_name=sheet_name,
+                details={"table_ref": table_ref},
+            )
+
+    return resolved_bounds
+
+
 def _parse_with_ooxml(
     raw: bytes,
     *,
@@ -340,13 +424,28 @@ def _parse_with_ooxml(
         actual_name, sheet_path = _resolve_sheet_path(archive, sheet_name)
         shared_strings = _read_shared_strings(archive)
         root = ET.fromstring(archive.read(sheet_path))
+        table_records = _read_ooxml_table_records(archive, root, sheet_path)
+        required_fields = (sheet_field, csv_name_field, export_flag_field)
         table_ref = _select_manifest_table_ref(
-            _read_ooxml_table_records(archive, root, sheet_path),
+            table_records,
             sheet_name=actual_name,
-            required_fields=(sheet_field, csv_name_field, export_flag_field),
+            required_fields=required_fields,
         )
-        bounds = range_boundaries(table_ref) if table_ref is not None else None
+        table_width = next(
+            (
+                len(fields)
+                for ref, fields in table_records
+                if ref == table_ref and set(required_fields) <= fields
+            ),
+            None,
+        )
         sheet_data = root.find(f"{{{_SHEET_NS}}}sheetData")
+        bounds = _resolve_ooxml_table_bounds(
+            table_ref,
+            sheet_data,
+            sheet_name=actual_name,
+            table_width=table_width,
+        )
         rows: list[tuple[int, list[Any]]] = []
         if sheet_data is not None:
             for row_node in sheet_data.findall(f"{{{_SHEET_NS}}}row"):

@@ -45,6 +45,50 @@ def _set_formula_cache(raw: bytes, reference: str, value: str) -> bytes:
     )
 
 
+def _with_broken_styles_and_table_ref(raw: bytes, table_ref: str) -> bytes:
+    with ZipFile(BytesIO(raw)) as archive:
+        styles_root = ET.fromstring(archive.read("xl/styles.xml"))
+        table_root = ET.fromstring(archive.read("xl/tables/table1.xml"))
+        sheet_root = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+
+    fills = styles_root.find(f"{{{_SHEET_NS}}}fills")
+    assert fills is not None
+    fill = ET.SubElement(fills, f"{{{_SHEET_NS}}}fill")
+    gradient = ET.SubElement(fill, f"{{{_SHEET_NS}}}gradientFill")
+    for color in ("FF000000", "FFFFFFFF"):
+        stop = ET.SubElement(
+            gradient,
+            f"{{{_SHEET_NS}}}stop",
+            {"position": "0"},
+        )
+        ET.SubElement(stop, f"{{{_SHEET_NS}}}color", {"rgb": color})
+    fills.attrib["count"] = str(len(fills))
+
+    table_root.attrib["ref"] = table_ref
+    auto_filter = table_root.find(f"{{{_SHEET_NS}}}autoFilter")
+    if auto_filter is not None:
+        auto_filter.attrib["ref"] = table_ref
+    dimension = sheet_root.find(f"{{{_SHEET_NS}}}dimension")
+    if dimension is not None:
+        sheet_root.remove(dimension)
+
+    raw = _replace_zip_member(
+        raw,
+        "xl/styles.xml",
+        ET.tostring(styles_root, encoding="utf-8", xml_declaration=True),
+    )
+    raw = _replace_zip_member(
+        raw,
+        "xl/tables/table1.xml",
+        ET.tostring(table_root, encoding="utf-8", xml_declaration=True),
+    )
+    return _replace_zip_member(
+        raw,
+        "xl/worksheets/sheet1.xml",
+        ET.tostring(sheet_root, encoding="utf-8", xml_declaration=True),
+    )
+
+
 def _table_manifest_workbook(
     rows: list[list[object]],
     *,
@@ -126,6 +170,106 @@ def test_manifest_parser_falls_back_to_ooxml(monkeypatch):
     assert [(item.sheet_name, item.tbx_name, item.is_export) for item in manifest.entries] == [
         ("Base", "AtlasConfig_Base", "1")
     ]
+
+
+@pytest.mark.parametrize("table_ref", ["A1:C2", "1:2"])
+def test_manifest_ooxml_fallback_infers_missing_table_boundaries(table_ref):
+    raw = _table_manifest_workbook(
+        [
+            ["sheetName", "tbxName", "isExport"],
+            ["Base", "AtlasConfig_Base", 1],
+        ],
+        table_ref="A1:C2",
+        extra_rows=[["Ghost", "GhostCsv", 1]],
+    )
+    raw = _with_broken_styles_and_table_ref(raw, table_ref)
+
+    with pytest.raises(ValueError, match="could not read stylesheet") as captured:
+        manifest_parser.load_workbook(BytesIO(raw))
+    assert captured.value.__cause__ is not None
+    assert "Duplicate position 0" in str(captured.value.__cause__)
+
+    manifest = manifest_parser.parse_workbook_manifest(raw)
+
+    assert manifest.parser == "ooxml"
+    assert [
+        (item.sheet_name, item.tbx_name, item.is_export)
+        for item in manifest.entries
+    ] == [("Base", "AtlasConfig_Base", "1")]
+
+
+def test_manifest_ooxml_row_bounds_reject_horizontal_cells_outside_table():
+    raw = _table_manifest_workbook(
+        [
+            ["sheetName", "tbxName", "isExport", "helper"],
+            ["Base", "AtlasConfig_Base", 1, "outside table"],
+        ],
+        table_ref="A1:C2",
+        extra_rows=[["Ghost", "GhostCsv", 1]],
+    )
+    raw = _with_broken_styles_and_table_ref(raw, "1:2")
+
+    with pytest.raises(M2ProcessingError) as captured:
+        manifest_parser.parse_workbook_manifest(raw)
+
+    assert captured.value.code == "M2_MANIFEST_FIELD_MISSING"
+    assert captured.value.details == {"table_ref": "1:2"}
+
+
+@pytest.mark.parametrize(
+    "table_ref",
+    ["", "A:C"],
+)
+def test_manifest_ooxml_fallback_rejects_unprovable_table_boundary(table_ref):
+    raw = _table_manifest_workbook(
+        [
+            ["sheetName", "tbxName", "isExport"],
+            ["Base", "AtlasConfig_Base", 1],
+        ],
+        table_ref="A1:C2",
+        extra_rows=[["Ghost", "GhostCsv", 1]],
+    )
+    raw = _with_broken_styles_and_table_ref(raw, table_ref)
+
+    with pytest.raises(M2ProcessingError) as captured:
+        manifest_parser.parse_workbook_manifest(raw)
+
+    assert captured.value.code == "M2_MANIFEST_FIELD_MISSING"
+    assert captured.value.details == {"table_ref": table_ref}
+
+
+def test_manifest_ooxml_fallback_preserves_malformed_boundary_error_contract():
+    raw = _table_manifest_workbook(
+        [
+            ["sheetName", "tbxName", "isExport"],
+            ["Base", "AtlasConfig_Base", 1],
+        ],
+        table_ref="A1:C2",
+    )
+    raw = _with_broken_styles_and_table_ref(raw, "invalid-range")
+
+    with pytest.raises(M2ProcessingError) as captured:
+        manifest_parser.parse_workbook_manifest(raw)
+
+    assert captured.value.code == "M2_WORKBOOK_PARSE_FAILED"
+    assert captured.value.details == {"parsers": ["openpyxl", "ooxml"]}
+
+
+def test_manifest_ooxml_fallback_preserves_reversed_boundary_error_contract():
+    raw = _table_manifest_workbook(
+        [
+            ["sheetName", "tbxName", "isExport"],
+            ["Base", "AtlasConfig_Base", 1],
+        ],
+        table_ref="A1:C2",
+    )
+    raw = _with_broken_styles_and_table_ref(raw, "C1:A2")
+
+    with pytest.raises(M2ProcessingError) as captured:
+        manifest_parser.parse_workbook_manifest(raw)
+
+    assert captured.value.code == "M2_MANIFEST_FIELD_MISSING"
+    assert captured.value.details == {"header_match_count": 0}
 
 
 @pytest.mark.parametrize("force_ooxml", [False, True])
