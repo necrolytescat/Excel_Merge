@@ -19,6 +19,8 @@ MONITOR_TASK_SCHEMA_VERSION = "m3.monitor-task.v1"
 MONITOR_TASK_LIST_SCHEMA_VERSION = "m3.monitor-task-list.v1"
 MONITOR_RUN_SCHEMA_VERSION = "m3.monitor-run.v1"
 MONITOR_REPORT_SCHEMA_VERSION = "m3.monitor-report.v1"
+MONITOR_RUN_LIST_SCHEMA_VERSION = "m3.monitor-run-list.v1"
+MONITOR_ENDPOINT_OPTIONS_SCHEMA_VERSION = "m3.monitor-endpoint-options.v1"
 
 
 def _utc_datetime(value: datetime) -> datetime:
@@ -32,6 +34,85 @@ UtcDateTime = Annotated[datetime, AfterValidator(_utc_datetime)]
 
 class StrictMonitorPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class MonitorTaskCreateRequestPayload(StrictMonitorPayload):
+    schema_version: Literal["m3.monitor-task-create.request.v1"]
+    request_id: UUID
+    name: str = Field(..., min_length=1, max_length=128, strict=True)
+    endpoint_id: str = Field(
+        ..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._-]+$", strict=True
+    )
+    effective_at: UtcDateTime
+    end_at: UtcDateTime | None = None
+    daily_trigger_time: time
+
+    @field_validator("daily_trigger_time")
+    @classmethod
+    def validate_trigger(cls, value: time) -> time:
+        if value.tzinfo is not None or value.microsecond:
+            raise ValueError("daily_trigger_time must be a whole-second wall time")
+        return value
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "MonitorTaskCreateRequestPayload":
+        if self.end_at is not None and self.end_at <= self.effective_at:
+            raise ValueError("end_at must be later than effective_at")
+        return self
+
+
+class MonitorTaskPatchRequestPayload(StrictMonitorPayload):
+    schema_version: Literal["m3.monitor-task-patch.request.v1"]
+    request_id: UUID
+    daily_trigger_time: time
+    end_at: UtcDateTime | None
+
+    @field_validator("daily_trigger_time")
+    @classmethod
+    def validate_trigger(cls, value: time) -> time:
+        if value.tzinfo is not None or value.microsecond:
+            raise ValueError("daily_trigger_time must be a whole-second wall time")
+        return value
+
+
+class MonitorCommandRequestPayload(StrictMonitorPayload):
+    schema_version: Literal["m3.monitor-command.request.v1"]
+    request_id: UUID
+
+
+class MonitorRunRetryRequestPayload(StrictMonitorPayload):
+    schema_version: Literal["m3.monitor-run-retry.request.v1"]
+    request_id: UUID
+
+
+class MonitorApiErrorPayload(StrictMonitorPayload):
+    code: str = Field(..., min_length=1, max_length=96, pattern=r"^MONITOR_[A-Z0-9_]+$")
+    message: str = Field(..., min_length=1, max_length=256, strict=True)
+
+    @field_validator("message")
+    @classmethod
+    def reject_control_characters(cls, value: str) -> str:
+        if any(ord(character) < 32 for character in value):
+            raise ValueError("public text cannot contain control characters")
+        return value
+
+
+class MonitorApiErrorEnvelope(StrictMonitorPayload):
+    error: MonitorApiErrorPayload
+
+
+class MonitorEndpointOptionPayload(StrictMonitorPayload):
+    endpoint_id: str = Field(
+        ..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._-]+$", strict=True
+    )
+    label: str = Field(..., min_length=1, max_length=256, strict=True)
+
+
+class MonitorEndpointOptionsPayload(StrictMonitorPayload):
+    schema_version: Literal[MONITOR_ENDPOINT_OPTIONS_SCHEMA_VERSION] = (
+        MONITOR_ENDPOINT_OPTIONS_SCHEMA_VERSION
+    )
+    items: list[MonitorEndpointOptionPayload] = Field(default_factory=list)
 
 
 class MonitorTaskStatus(str, Enum):
@@ -285,6 +366,13 @@ class MonitorRunDigestPayload(StrictMonitorPayload):
         return self
 
 
+class MonitorLatestReportPayload(StrictMonitorPayload):
+    run_id: UUID
+    status: Literal["succeeded", "partial"]
+    interval: MonitorTimeIntervalPayload
+    summary: MonitorRunSummaryPayload
+
+
 class MonitorTaskPayload(StrictMonitorPayload):
     schema_version: Literal[MONITOR_TASK_SCHEMA_VERSION] = MONITOR_TASK_SCHEMA_VERSION
     task_id: UUID
@@ -294,6 +382,8 @@ class MonitorTaskPayload(StrictMonitorPayload):
     schedule: MonitorSchedulePayload
     scheduler: MonitorSchedulerPayload
     latest_run: MonitorRunDigestPayload | None = None
+    latest_report: MonitorLatestReportPayload | None = None
+    pending_run_count: int = Field(..., ge=0, strict=True)
     last_runner_heartbeat_at: UtcDateTime | None = None
     created_at: UtcDateTime
     updated_at: UtcDateTime
@@ -323,6 +413,8 @@ class MonitorTaskListItemPayload(StrictMonitorPayload):
     schedule: MonitorSchedulePayload
     scheduler: MonitorSchedulerPayload
     latest_run: MonitorRunDigestPayload | None = None
+    latest_report: MonitorLatestReportPayload | None = None
+    pending_run_count: int = Field(..., ge=0, strict=True)
     last_runner_heartbeat_at: UtcDateTime | None = None
     created_at: UtcDateTime
     updated_at: UtcDateTime
@@ -470,6 +562,21 @@ class MonitorRunPayload(StrictMonitorPayload):
         if self.attempts and self.errors != self.attempts[-1].errors:
             raise ValueError("run errors must match the final attempt errors")
         return self
+
+
+class MonitorRunListPayload(StrictMonitorPayload):
+    schema_version: Literal[MONITOR_RUN_LIST_SCHEMA_VERSION] = (
+        MONITOR_RUN_LIST_SCHEMA_VERSION
+    )
+    items: list[MonitorRunPayload] = Field(default_factory=list)
+    next_cursor: str | None = Field(
+        default=None,
+        max_length=512,
+        pattern=r"^[A-Za-z0-9_-]+$",
+        strict=True,
+    )
+    has_more: bool = Field(..., strict=True)
+    as_of: UtcDateTime
 
 
 class MonitorFieldDefinitionValuePayload(StrictMonitorPayload):

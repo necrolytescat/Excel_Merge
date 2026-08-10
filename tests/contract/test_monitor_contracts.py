@@ -8,15 +8,22 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.monitor import (
+    MonitorApiErrorEnvelope,
     MonitorBoundaryKind,
     MonitorChangeType,
+    MonitorCommandRequestPayload,
+    MonitorEndpointOptionsPayload,
     MonitorErrorCode,
     MonitorErrorStage,
     MonitorReportPayload,
+    MonitorRunListPayload,
     MonitorRunPayload,
+    MonitorRunRetryRequestPayload,
     MonitorRunStatus,
     MonitorSchedulerSyncStatus,
+    MonitorTaskCreateRequestPayload,
     MonitorTaskListPayload,
+    MonitorTaskPatchRequestPayload,
     MonitorTaskPayload,
     MonitorTaskStatus,
     serialize_monitor_json,
@@ -135,6 +142,115 @@ def test_monitor_examples_reject_unknown_top_level_fields(filename, model):
 
     with pytest.raises(ValidationError):
         model.model_validate(data)
+
+
+def test_phase_five_request_contracts_are_strict_and_require_body_request_id():
+    create = {
+        "schema_version": "m3.monitor-task-create.request.v1",
+        "request_id": "40000000-0000-4000-8000-000000000001",
+        "name": "QA 每日报告",
+        "endpoint_id": "KR_FIX_1_0",
+        "effective_at": "2026-08-09T10:00:00Z",
+        "end_at": None,
+        "daily_trigger_time": "18:00:00",
+    }
+    MonitorTaskCreateRequestPayload.model_validate(create)
+    with pytest.raises(ValidationError):
+        MonitorTaskCreateRequestPayload.model_validate({**create, "url": "https://private"})
+    with pytest.raises(ValidationError):
+        MonitorTaskCreateRequestPayload.model_validate(
+            {key: value for key, value in create.items() if key != "request_id"}
+        )
+
+    patch = {
+        "schema_version": "m3.monitor-task-patch.request.v1",
+        "request_id": create["request_id"],
+        "daily_trigger_time": "19:00:00",
+        "end_at": None,
+    }
+    MonitorTaskPatchRequestPayload.model_validate(patch)
+    with pytest.raises(ValidationError):
+        MonitorTaskPatchRequestPayload.model_validate(
+            {key: value for key, value in patch.items() if key != "end_at"}
+        )
+    with pytest.raises(ValidationError):
+        MonitorTaskPatchRequestPayload.model_validate({**patch, "name": "不可修改"})
+
+    MonitorCommandRequestPayload.model_validate(
+        {
+            "schema_version": "m3.monitor-command.request.v1",
+            "request_id": create["request_id"],
+        }
+    )
+    MonitorRunRetryRequestPayload.model_validate(
+        {
+            "schema_version": "m3.monitor-run-retry.request.v1",
+            "request_id": create["request_id"],
+        }
+    )
+
+
+def test_phase_five_query_and_error_contracts_reject_internal_fields():
+    MonitorEndpointOptionsPayload.model_validate(
+        {
+            "schema_version": "m3.monitor-endpoint-options.v1",
+            "items": [{"endpoint_id": "KR_FIX_1_0", "label": "KR FIX 1.0"}],
+        }
+    )
+    with pytest.raises(ValidationError):
+        MonitorEndpointOptionsPayload.model_validate(
+            {
+                "schema_version": "m3.monitor-endpoint-options.v1",
+                "items": [
+                    {
+                        "endpoint_id": "KR_FIX_1_0",
+                        "label": "KR FIX 1.0",
+                        "url": "https://private",
+                    }
+                ],
+            }
+        )
+
+    MonitorRunListPayload.model_validate(
+        {
+            "schema_version": "m3.monitor-run-list.v1",
+            "items": [make_run("partial")],
+            "next_cursor": None,
+            "has_more": False,
+            "as_of": "2026-08-10T10:03:00Z",
+        }
+    )
+    MonitorApiErrorEnvelope.model_validate(
+        {"error": {"code": "MONITOR_STATE_CONFLICT", "message": "当前状态不允许此操作"}}
+    )
+    with pytest.raises(ValidationError):
+        MonitorApiErrorEnvelope.model_validate(
+            {
+                "error": {
+                    "code": "MONITOR_INTERNAL_ERROR",
+                    "message": "请求失败",
+                    "traceback": "private",
+                }
+            }
+        )
+
+
+def test_task_contract_keeps_latest_report_independent_from_latest_run():
+    task = load_json(CONTRACTS / "m3.monitor-task.v1.example.json")
+    task["latest_run"] = {
+        "run_id": "30000000-0000-4000-8000-000000000002",
+        "status": "failed",
+        "interval": deepcopy(task["latest_report"]["interval"]),
+        "summary": None,
+        "report_ref": None,
+    }
+    payload = MonitorTaskPayload.model_validate(task)
+    assert payload.latest_report.run_id != payload.latest_run.run_id
+    assert payload.pending_run_count == 0
+
+    task["pending_run_count"] = -1
+    with pytest.raises(ValidationError):
+        MonitorTaskPayload.model_validate(task)
 
 
 def test_monitor_contracts_reject_unknown_nested_fields_and_internal_diagnostics():

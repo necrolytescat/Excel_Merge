@@ -250,6 +250,15 @@ MonitorDiffService
 
 所有变更命令使用 request ID 保证接口幂等。活动任务的彻底删除不进入第一批页面主操作；如实现，必须使用固定确认文本并验证任务已结束或归档。
 
+Phase 5 冻结补充：
+
+- POST/PATCH body 中 request ID 数据库全局唯一，命令事实与迁移持久化；相同请求精确重放首次结果，不同请求冲突返回 409；
+- 创建只收 enabled endpoint ID；PATCH 只完整替换 trigger/end，固定身份、生效时间与时区不可改；
+- archive 仅 ended 且无 queued/running Run；manual retry 仅 failed，202 后台执行；
+- task/list 独立返回 latest report 与 pending run count；历史报告 30 天后 410，task latest 永久受控可读；
+- scheduler-sync 显式检查并修复，列表刷新不得逐项调用 schtasks；
+- task/list/runs 使用 ETag，报告 HTML 使用发布 SHA 和安全头。
+
 左侧导航和页面视觉应沿用现有工作台，不重排已验收的版本对比页面。监控任务列表以扫描效率为主，不使用营销式卡片布局。
 
 ## 10. 分阶段实施
