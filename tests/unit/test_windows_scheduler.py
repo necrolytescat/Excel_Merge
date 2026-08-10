@@ -23,6 +23,7 @@ from app.schemas.monitor import (
     MonitorReportPayload,
     serialize_monitor_json,
 )
+from app.services.config_service import ConfigStore
 from app.services.monitor_report_artifacts import FileSystemMonitorReportPublisher
 from app.services.monitor_report_service import (
     REPORT_RETENTION,
@@ -1005,6 +1006,125 @@ def test_scheduler_managed_unknown_materialize_error_exits_for_windows_retry(
     assert MonitorStore(database).list_runs(str(task.task_id)) == []
     assert "Traceback" not in captured.out + captured.err
     assert "private transient" not in captured.out + captured.err
+
+
+def test_scheduler_managed_bootstrap_exception_is_redacted_and_retryable(
+    tmp_path, monkeypatch, capsys
+):
+    config = tmp_path / "private-bootstrap-settings.json"
+
+    def fail_read(self):
+        raise Exception(f"private bootstrap failure at {self.path}")
+
+    monkeypatch.setattr(ConfigStore, "read", fail_read)
+    exit_code = runner_main(
+        [
+            "--task-id",
+            str(uuid4()),
+            "--generation",
+            "1",
+            "--database",
+            str(tmp_path / "bootstrap" / "monitor.sqlite3"),
+            "--config",
+            str(config),
+            "--scheduler-managed",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 75
+    assert payload == {
+        "processed": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "retryable_failures": 1,
+    }
+    assert "Traceback" not in captured.out + captured.err
+    assert str(config) not in captured.out + captured.err
+    assert "private bootstrap" not in captured.out + captured.err
+
+
+def test_scheduler_reconcile_exception_is_redacted_and_retryable(
+    tmp_path, monkeypatch, capsys
+):
+    private_path = tmp_path / "private-reconcile-location"
+
+    def fail_reconcile(**kwargs):
+        raise Exception(f"private reconcile failure at {private_path}")
+
+    monkeypatch.setattr(
+        "app.monitor_runner.reconcile_inactive_scheduler",
+        fail_reconcile,
+    )
+    exit_code = runner_main(
+        [
+            "--task-id",
+            str(uuid4()),
+            "--generation",
+            "1",
+            "--database",
+            str(tmp_path / "reconcile" / "monitor.sqlite3"),
+            "--config",
+            str(tmp_path / "missing-settings.json"),
+            "--scheduler-managed",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 75
+    assert payload["processed"] == payload["failed"] == 0
+    assert payload["retryable_failures"] == 1
+    assert "Traceback" not in captured.out + captured.err
+    assert str(private_path) not in captured.out + captured.err
+    assert "private reconcile" not in captured.out + captured.err
+
+
+def test_manual_bootstrap_exception_is_nonzero_and_redacted(
+    tmp_path, monkeypatch, capsys
+):
+    config = tmp_path / "private-manual-settings.json"
+
+    def fail_read(self):
+        raise Exception(f"private manual failure at {self.path}")
+
+    monkeypatch.setattr(ConfigStore, "read", fail_read)
+    exit_code = runner_main(
+        [
+            "--run-id",
+            str(uuid4()),
+            "--database",
+            str(tmp_path / "manual" / "monitor.sqlite3"),
+            "--config",
+            str(config),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 75
+    assert payload["processed"] == payload["failed"] == 0
+    assert payload["retryable_failures"] == 1
+    assert "Traceback" not in captured.out + captured.err
+    assert str(config) not in captured.out + captured.err
+    assert "private manual" not in captured.out + captured.err
+
+
+def test_cli_parameter_errors_stay_argparse_errors_before_bootstrap(monkeypatch):
+    monkeypatch.setattr(
+        ConfigStore,
+        "read",
+        lambda self: pytest.fail("bootstrap must not run for invalid parameters"),
+    )
+
+    with pytest.raises(SystemExit) as missing_generation:
+        runner_main(["--task-id", str(uuid4())])
+    with pytest.raises(SystemExit) as invalid_run_id:
+        runner_main(["--run-id", "not-a-uuid"])
+
+    assert missing_generation.value.code == 2
+    assert invalid_run_id.value.code == 2
 
 
 def test_materialize_error_without_due_cutoff_is_noop_and_keeps_boundary(tmp_path, monkeypatch):

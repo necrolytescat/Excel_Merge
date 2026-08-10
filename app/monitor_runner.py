@@ -865,6 +865,12 @@ def reconcile_inactive_scheduler(
     ).status
 
 
+def _temporary_cli_failure() -> int:
+    result = RunnerResult(0, 0, 0, 1)
+    print(json.dumps(result.__dict__, ensure_ascii=False, separators=(",", ":")))
+    return 75
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run due M3 version monitoring reports")
     target = parser.add_mutually_exclusive_group(required=True)
@@ -877,26 +883,39 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--database", default=os.environ.get("EXCEL_MERGE_MONITOR_DB", str(DEFAULT_DATABASE_PATH)))
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
     args = parser.parse_args(argv)
-    if args.maintenance:
-        result = run_maintenance(database_path=args.database)
-    else:
-        runner = build_runner(database_path=args.database, config_path=args.config)
     if args.task_id:
         if args.generation is None or args.generation <= 0:
             parser.error("--task-id requires a positive --generation")
-        result = runner.run_task(args.task_id, args.generation)
-    elif args.run_id:
-        result = runner.run_run(
-            args.run_id,
-            trigger="automatic_retry" if args.automatic_retry else "manual_retry",
-        )
-    scheduler_status = "not_required"
-    if args.scheduler_managed and args.task_id:
-        scheduler_status = reconcile_inactive_scheduler(
-            task_id=args.task_id,
-            database_path=args.database,
-            working_directory=Path.cwd(),
-        )
+        try:
+            UUID(args.task_id)
+        except ValueError:
+            parser.error("--task-id requires a valid UUID")
+    if args.run_id:
+        try:
+            UUID(args.run_id)
+        except ValueError:
+            parser.error("--run-id requires a valid UUID")
+    try:
+        if args.maintenance:
+            result = run_maintenance(database_path=args.database)
+        else:
+            runner = build_runner(database_path=args.database, config_path=args.config)
+        if args.task_id:
+            result = runner.run_task(args.task_id, args.generation)
+        elif args.run_id:
+            result = runner.run_run(
+                args.run_id,
+                trigger="automatic_retry" if args.automatic_retry else "manual_retry",
+            )
+        scheduler_status = "not_required"
+        if args.scheduler_managed and args.task_id:
+            scheduler_status = reconcile_inactive_scheduler(
+                task_id=args.task_id,
+                database_path=args.database,
+                working_directory=Path.cwd(),
+            )
+    except Exception:
+        return _temporary_cli_failure()
     print(json.dumps(result.__dict__, ensure_ascii=False, separators=(",", ":")))
     if scheduler_status in {"error", "stale"}:
         return 75
