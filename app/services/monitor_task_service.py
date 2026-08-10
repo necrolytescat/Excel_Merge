@@ -86,8 +86,7 @@ class MonitorTaskService:
         trigger = command.daily_trigger_time
         if trigger.tzinfo is not None or trigger.microsecond:
             raise ValueError("daily_trigger_time must be a whole-second wall time")
-        task_id = command.task_id or str(uuid4())
-        UUID(task_id)
+        task_id = str(UUID(command.task_id)) if command.task_id else str(uuid4())
         existing = self.store.get_task(task_id)
         if existing is not None:
             requested_identity = (
@@ -167,6 +166,7 @@ class MonitorTaskService:
                         "generation": task.generation + 1,
                         "scheduler_desired_state": "disabled",
                         "scheduler_sync_status": "pending",
+                        "scheduler_error": None,
                         "ended_at": task.end_at,
                         "ended_reason": "configured",
                     },
@@ -222,6 +222,7 @@ class MonitorTaskService:
                 "end_at": end,
                 "generation": task.generation + 1,
                 "scheduler_sync_status": "pending",
+                "scheduler_error": None,
             },
             now,
             expected_generation=task.generation,
@@ -254,6 +255,7 @@ class MonitorTaskService:
                 "generation": generation,
                 "scheduler_desired_state": "disabled",
                 "scheduler_sync_status": "pending",
+                "scheduler_error": None,
                 "paused_at": now,
             },
             now=now,
@@ -279,6 +281,7 @@ class MonitorTaskService:
                     "generation": generation,
                     "scheduler_desired_state": "disabled",
                     "scheduler_sync_status": "pending",
+                    "scheduler_error": None,
                     "paused_at": None,
                     "ended_at": task.end_at,
                     "ended_reason": "configured",
@@ -297,6 +300,7 @@ class MonitorTaskService:
                 "generation": generation,
                 "scheduler_desired_state": "enabled",
                 "scheduler_sync_status": "pending",
+                "scheduler_error": None,
                 "paused_at": None,
             },
             now=now,
@@ -334,6 +338,7 @@ class MonitorTaskService:
                 "generation": generation,
                 "scheduler_desired_state": "disabled",
                 "scheduler_sync_status": "pending",
+                "scheduler_error": None,
                 "paused_at": None,
                 "ended_at": now,
                 "ended_reason": "user",
@@ -364,12 +369,20 @@ class MonitorTaskService:
                 trigger=trigger,
                 end_at=task.end_at,
             )
-        public_status = {
-            "active": "syncing",
-            "paused": "paused",
-            "ended": "ended",
-            "archived": "archived",
-        }[task.lifecycle]
+        if task.lifecycle == "active":
+            public_status = {
+                "pending": "syncing",
+                "synced": "active",
+                "drifted": "scheduler_error",
+                "error": "scheduler_error",
+                "not_present": "scheduler_error",
+            }[task.scheduler_sync_status]
+        else:
+            public_status = {
+                "paused": "paused",
+                "ended": "ended",
+                "archived": "archived",
+            }[task.lifecycle]
         return MonitorTaskPayload(
             task_id=task.task_id,
             name=task.name,
@@ -392,6 +405,8 @@ class MonitorTaskService:
                 generation=task.generation,
                 desired_state=task.scheduler_desired_state,
                 sync_status=task.scheduler_sync_status,
+                last_synced_at=task.scheduler_last_synced_at,
+                last_error=task.scheduler_error,
             ),
             latest_run=latest_run,
             last_runner_heartbeat_at=task.last_runner_heartbeat_at,

@@ -9,14 +9,14 @@ from pathlib import Path
 import secrets
 import sqlite3
 from typing import Any, Iterator, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.schemas.monitor import MonitorPublicErrorPayload, MonitorRunSummaryPayload
 from app.services.monitor_schedule import BoundarySpec, BoundaryType, SHANGHAI, require_utc
 
 
 DEFAULT_DATABASE_PATH = Path("var/m3-monitor/monitor.sqlite3")
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class MonitorLeaseLost(RuntimeError):
@@ -68,6 +68,9 @@ class TaskRecord:
     generation: int
     scheduler_desired_state: str
     scheduler_sync_status: str
+    windows_task_name: str
+    scheduler_last_synced_at: datetime | None
+    scheduler_error: MonitorPublicErrorPayload | None
     last_runner_heartbeat_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -204,6 +207,12 @@ MIGRATION_3 = (
     "ON monitor_run_publications(task_id, state)",
 )
 
+MIGRATION_4 = (
+    "ALTER TABLE monitor_tasks ADD COLUMN windows_task_name TEXT",
+    "ALTER TABLE monitor_tasks ADD COLUMN scheduler_last_synced_at TEXT",
+    "ALTER TABLE monitor_tasks ADD COLUMN scheduler_error_json TEXT",
+)
+
 
 class MonitorStore:
     def __init__(self, database_path: str | Path = DEFAULT_DATABASE_PATH):
@@ -266,6 +275,29 @@ class MonitorStore:
                     "INSERT INTO monitor_schema_migrations(version, applied_at) VALUES (?, ?)",
                     (3, _timestamp(datetime.now(timezone.utc))),
                 )
+            if 4 not in versions:
+                for row in connection.execute("SELECT task_id FROM monitor_tasks"):
+                    try:
+                        canonical_task_id = str(UUID(row[0]))
+                    except (TypeError, ValueError) as error:
+                        raise RuntimeError(
+                            "monitor database contains an invalid task identity"
+                        ) from error
+                    if canonical_task_id != row[0]:
+                        raise RuntimeError(
+                            "monitor database contains a non-canonical task identity"
+                        )
+                for statement in MIGRATION_4:
+                    connection.execute(statement)
+                connection.execute(
+                    "UPDATE monitor_tasks SET windows_task_name = "
+                    "'ExcelMerge-M3-Monitor-' || lower(task_id) "
+                    "WHERE windows_task_name IS NULL"
+                )
+                connection.execute(
+                    "INSERT INTO monitor_schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (4, _timestamp(datetime.now(timezone.utc))),
+                )
             connection.commit()
         except Exception:
             connection.rollback()
@@ -287,6 +319,15 @@ class MonitorStore:
             daily_trigger_time=row["daily_trigger_time"], generation=row["generation"],
             scheduler_desired_state=row["scheduler_desired_state"],
             scheduler_sync_status=row["scheduler_sync_status"],
+            windows_task_name=row["windows_task_name"],
+            scheduler_last_synced_at=_datetime(row["scheduler_last_synced_at"]),
+            scheduler_error=(
+                MonitorPublicErrorPayload.model_validate(
+                    json.loads(row["scheduler_error_json"])
+                )
+                if row["scheduler_error_json"]
+                else None
+            ),
             last_runner_heartbeat_at=_datetime(row["last_runner_heartbeat_at"]),
             created_at=_datetime(row["created_at"]), updated_at=_datetime(row["updated_at"]),
             paused_at=_datetime(row["paused_at"]), ended_at=_datetime(row["ended_at"]),
@@ -337,6 +378,8 @@ class MonitorStore:
 
     def create_task(self, values: dict[str, Any], start: BoundarySpec) -> TaskRecord:
         now = values["created_at"]
+        if str(UUID(values["task_id"])) != values["task_id"]:
+            raise ValueError("monitor task_id must be a canonical UUID")
         with self._transaction(write=True) as connection:
             connection.execute(
                 """INSERT INTO monitor_tasks (
@@ -344,8 +387,8 @@ class MonitorStore:
                     repository_relative_path,bound_revision,copy_boundary_revision,effective_at,
                     schedule_effective_at,end_at,
                     daily_trigger_time,timezone,generation,scheduler_desired_state,
-                    scheduler_sync_status,created_at,updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    scheduler_sync_status,windows_task_name,created_at,updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     values["task_id"], values["name"], "active", values["endpoint_id"],
                     values["branch_label"], values["repository_uuid"], values["canonical_url"],
@@ -354,6 +397,7 @@ class MonitorStore:
                     _timestamp(values["effective_at"]),
                     _timestamp(values["end_at"]) if values.get("end_at") else None,
                     values["daily_trigger_time"], "Asia/Shanghai", 1, "enabled", "pending",
+                    f"ExcelMerge-M3-Monitor-{values['task_id'].lower()}",
                     _timestamp(now), _timestamp(now),
                 ),
             )
@@ -450,19 +494,34 @@ class MonitorStore:
         *,
         expected_generation: int | None = None,
         expected_lifecycle: str | None = None,
+        expected_scheduler_sync_status: str | None = None,
     ) -> TaskRecord:
         allowed = {
             "lifecycle", "end_at", "daily_trigger_time", "schedule_effective_at", "generation",
             "scheduler_desired_state", "scheduler_sync_status", "paused_at", "ended_at",
             "ended_reason",
-            "archived_at", "last_runner_heartbeat_at",
+            "archived_at", "last_runner_heartbeat_at", "scheduler_last_synced_at",
+            "scheduler_error",
         }
         if not updates or not set(updates) <= allowed:
             raise ValueError("invalid monitor task update")
-        serialized = {
-            key: (_timestamp(value) if isinstance(value, datetime) else value)
-            for key, value in updates.items()
-        }
+        serialized = {}
+        for key, value in updates.items():
+            if isinstance(value, datetime):
+                serialized[key] = _timestamp(value)
+            elif key == "scheduler_error":
+                key = "scheduler_error_json"
+                serialized[key] = (
+                    json.dumps(
+                        value.model_dump(mode="json"),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    if value is not None
+                    else None
+                )
+            else:
+                serialized[key] = value
         assignments = ",".join(f"{key}=?" for key in serialized)
         with self._transaction(write=True) as connection:
             self._assert_task_state(
@@ -470,6 +529,7 @@ class MonitorStore:
                 task_id,
                 expected_generation=expected_generation,
                 expected_lifecycle=expected_lifecycle,
+                expected_scheduler_sync_status=expected_scheduler_sync_status,
             )
             cursor = connection.execute(
                 f"UPDATE monitor_tasks SET {assignments},updated_at=? WHERE task_id=?",
@@ -489,20 +549,35 @@ class MonitorStore:
         now: datetime,
         expected_generation: int | None = None,
         expected_lifecycle: str | None = None,
+        expected_scheduler_sync_status: str | None = None,
     ) -> TaskRecord:
         """Atomically append lifecycle boundaries and persist the new task expectation."""
         allowed = {
             "lifecycle", "end_at", "daily_trigger_time", "schedule_effective_at", "generation",
             "scheduler_desired_state", "scheduler_sync_status", "paused_at", "ended_at",
             "ended_reason",
-            "archived_at", "last_runner_heartbeat_at",
+            "archived_at", "last_runner_heartbeat_at", "scheduler_last_synced_at",
+            "scheduler_error",
         }
         if not updates or not set(updates) <= allowed:
             raise ValueError("invalid monitor task transition")
-        serialized = {
-            key: (_timestamp(value) if isinstance(value, datetime) else value)
-            for key, value in updates.items()
-        }
+        serialized = {}
+        for key, value in updates.items():
+            if isinstance(value, datetime):
+                serialized[key] = _timestamp(value)
+            elif key == "scheduler_error":
+                key = "scheduler_error_json"
+                serialized[key] = (
+                    json.dumps(
+                        value.model_dump(mode="json"),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    if value is not None
+                    else None
+                )
+            else:
+                serialized[key] = value
         assignments = ",".join(f"{key}=?" for key in serialized)
         with self._transaction(write=True) as connection:
             self._assert_task_state(
@@ -510,6 +585,7 @@ class MonitorStore:
                 task_id,
                 expected_generation=expected_generation,
                 expected_lifecycle=expected_lifecycle,
+                expected_scheduler_sync_status=expected_scheduler_sync_status,
             )
             for spec in sorted(boundaries, key=lambda item: item.boundary_at):
                 self._insert_boundary(connection, task_id, spec, now)
@@ -531,9 +607,12 @@ class MonitorStore:
         *,
         expected_generation: int | None,
         expected_lifecycle: str | None,
+        expected_scheduler_sync_status: str | None = None,
     ) -> None:
         row = connection.execute(
-            "SELECT generation,lifecycle FROM monitor_tasks WHERE task_id=?", (task_id,)
+            "SELECT generation,lifecycle,scheduler_sync_status "
+            "FROM monitor_tasks WHERE task_id=?",
+            (task_id,),
         ).fetchone()
         if row is None:
             raise KeyError(task_id)
@@ -541,6 +620,9 @@ class MonitorStore:
             expected_generation is not None and row["generation"] != expected_generation
         ) or (
             expected_lifecycle is not None and row["lifecycle"] != expected_lifecycle
+        ) or (
+            expected_scheduler_sync_status is not None
+            and row["scheduler_sync_status"] != expected_scheduler_sync_status
         ):
             raise MonitorStateConflict("monitor task state changed during transition")
 

@@ -72,7 +72,7 @@ def test_database_is_isolated_versioned_wal_and_foreign_keys(tmp_path):
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert [row[0] for row in connection.execute(
             "SELECT version FROM monitor_schema_migrations ORDER BY version"
-        ).fetchall()] == [1, 2, 3]
+        ).fetchall()] == [1, 2, 3, 4]
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(monitor_tasks)")
         }
@@ -106,13 +106,65 @@ def test_version_one_database_migrates_without_recreating_tables(tmp_path):
     with store._connect() as upgraded:
         assert [row[0] for row in upgraded.execute(
             "SELECT version FROM monitor_schema_migrations ORDER BY version"
-        )] == [1, 2, 3]
+        )] == [1, 2, 3, 4]
         assert "ended_reason" in {
             row[1] for row in upgraded.execute("PRAGMA table_info(monitor_tasks)")
         }
         assert upgraded.execute(
             "SELECT COUNT(*) FROM monitor_run_publications"
         ).fetchone()[0] == 0
+
+
+def test_migration_fails_closed_for_legacy_noncanonical_task_uuid(tmp_path):
+    path = tmp_path / "unsafe-upgrade" / "monitor.sqlite3"
+    path.parent.mkdir(parents=True)
+    connection = sqlite3.connect(path)
+    connection.execute(
+        "CREATE TABLE monitor_schema_migrations "
+        "(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+    )
+    for statement in MIGRATION_1:
+        connection.execute(statement)
+    connection.execute(
+        """INSERT INTO monitor_tasks (
+            task_id,name,lifecycle,endpoint_id,branch_label,repository_uuid,
+            canonical_url,repository_relative_path,bound_revision,
+            copy_boundary_revision,effective_at,schedule_effective_at,end_at,
+            daily_trigger_time,timezone,generation,scheduler_desired_state,
+            scheduler_sync_status,created_at,updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            "{10000000-0000-4000-8000-000000000001}",
+            "legacy",
+            "active",
+            "endpoint",
+            "Branch",
+            "20000000-0000-4000-8000-000000000001",
+            "https://svn.example/repo/branches/test",
+            "branches/test",
+            10,
+            1,
+            "2026-08-10T00:00:00.000000Z",
+            "2026-08-10T00:00:00.000000Z",
+            None,
+            "18:00:00",
+            "Asia/Shanghai",
+            1,
+            "enabled",
+            "pending",
+            "2026-08-10T00:00:00.000000Z",
+            "2026-08-10T00:00:00.000000Z",
+        ),
+    )
+    connection.execute(
+        "INSERT INTO monitor_schema_migrations(version, applied_at) VALUES (1, ?)",
+        ("2026-08-10T00:00:00.000000Z",),
+    )
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(RuntimeError, match="non-canonical task identity"):
+        MonitorStore(path)
 
 
 def test_expired_lease_cannot_renew_finish_or_prepare_and_new_worker_takes_over(

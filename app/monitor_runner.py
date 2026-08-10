@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path, PurePosixPath
+import sys
 import threading
 from typing import Callable, Literal, Protocol
 from uuid import UUID
@@ -38,6 +39,11 @@ from app.services.monitor_store import (
 )
 from app.services.monitor_schedule import require_utc
 from app.services.monitor_task_service import MonitorTaskService
+from app.services.windows_scheduler import (
+    MonitorSchedulerService,
+    SchedulerGateway,
+    WindowsSchedulerGateway,
+)
 from app.services.workbook_diff_service import DatasetLayout
 from core.models import EndpointSpec
 from core.svn_history import BranchIdentity
@@ -203,6 +209,17 @@ class RunnerResult:
         if self.failed == 0:
             return "ok"
         return "temporary_failure" if self.retryable_failures else "permanent_failure"
+
+
+@dataclass(frozen=True)
+class MaintenanceResult:
+    task_count: int
+    cleaned_artifact_count: int
+    failed_task_count: int
+
+    @property
+    def exit_category(self) -> Literal["ok", "temporary_failure"]:
+        return "temporary_failure" if self.failed_task_count else "ok"
 
 
 def _public_error(error: Exception) -> MonitorPublicErrorPayload:
@@ -393,6 +410,7 @@ class MonitorRunnerService:
     def run_task(self, task_id: str, generation: int) -> RunnerResult:
         UUID(task_id)
         now = self._now()
+        legacy_final_end: datetime | None = None
         self._maintain_reports(now)
         task = self.store.get_task(task_id)
         if task is None:
@@ -408,20 +426,39 @@ class MonitorRunnerService:
             if task is None:
                 return RunnerResult(0, 0, 0, 0)
         elif generation != task.generation:
-            if task.lifecycle != "ended" or task.ended_reason != "configured":
+            if task.lifecycle not in {"paused", "ended"}:
                 return RunnerResult(0, 0, 0, 0)
-            matching_final = any(
-                run.generation == generation
-                and (run.boundary_type.value == "end" or run.end_at == task.end_at)
-                for run in self.store.list_due_runs(task_id, now)
+            terminal_cutoff = (
+                task.paused_at if task.lifecycle == "paused" else task.end_at
             )
+            matching_final = [
+                run
+                for run in self.store.list_due_runs(task_id, now)
+                if run.generation == generation
+                and (
+                    run.boundary_type.value in {"pause", "end"}
+                    or (
+                        terminal_cutoff is not None
+                        and run.end_at == terminal_cutoff
+                    )
+                )
+            ]
             if not matching_final:
                 return RunnerResult(0, 0, 0, 0)
+            legacy_final_end = max(run.end_at for run in matching_final)
         elif task.lifecycle not in {"active", "paused", "ended"}:
             return RunnerResult(0, 0, 0, 0)
 
         runs = [
             run for run in self.store.list_due_runs(task_id, now)
+            if (
+                generation == task.generation
+                or run.generation == generation
+                or (
+                    legacy_final_end is not None
+                    and run.end_at <= legacy_final_end
+                )
+            )
             if run.status in {"queued", "running"}
             or (
                 run.status == "failed"
@@ -615,30 +652,95 @@ def build_runner(
     )
 
 
+def run_maintenance(
+    *,
+    database_path: str | Path = DEFAULT_DATABASE_PATH,
+    now: datetime | None = None,
+) -> MaintenanceResult:
+    """Run retention cleanup without loading SVN or application configuration."""
+    store = MonitorStore(database_path)
+    publisher = FileSystemMonitorReportPublisher(
+        Path(database_path).parent / "reports"
+    )
+    current = require_utc(now or datetime.now(timezone.utc))
+    cleaned = failed = 0
+    tasks = store.list_tasks()
+    for task in tasks:
+        try:
+            cleaned += len(publisher.cleanup_expired(task.task_id, now=current))
+        except Exception:
+            failed += 1
+    return MaintenanceResult(len(tasks), cleaned, failed)
+
+
+def reconcile_inactive_scheduler(
+    *,
+    task_id: str,
+    database_path: str | Path,
+    working_directory: str | Path,
+    gateway: SchedulerGateway | None = None,
+) -> str:
+    store = MonitorStore(database_path)
+    task = store.get_task(str(UUID(task_id)))
+    if task is None or task.lifecycle == "active":
+        return "not_required"
+    scheduler = MonitorSchedulerService(
+        store,
+        gateway or WindowsSchedulerGateway(),
+        database_path=database_path,
+        working_directory=working_directory,
+        python_executable=sys.executable,
+    )
+    return scheduler.sync_task(
+        task.task_id,
+        expected_generation=task.generation,
+        trigger_final=False,
+    ).status
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run due M3 version monitoring reports")
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--task-id")
     target.add_argument("--run-id")
+    target.add_argument("--maintenance", action="store_true")
     parser.add_argument("--generation", type=int)
     parser.add_argument("--automatic-retry", action="store_true")
+    parser.add_argument("--scheduler-managed", action="store_true")
     parser.add_argument("--database", default=os.environ.get("EXCEL_MERGE_MONITOR_DB", str(DEFAULT_DATABASE_PATH)))
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH))
     args = parser.parse_args(argv)
-    runner = build_runner(database_path=args.database, config_path=args.config)
+    if args.maintenance:
+        result = run_maintenance(database_path=args.database)
+    else:
+        runner = build_runner(database_path=args.database, config_path=args.config)
     if args.task_id:
         if args.generation is None or args.generation <= 0:
             parser.error("--task-id requires a positive --generation")
         result = runner.run_task(args.task_id, args.generation)
-    else:
+    elif args.run_id:
         result = runner.run_run(
             args.run_id,
             trigger="automatic_retry" if args.automatic_retry else "manual_retry",
         )
+    scheduler_status = "not_required"
+    if args.scheduler_managed and args.task_id:
+        scheduler_status = reconcile_inactive_scheduler(
+            task_id=args.task_id,
+            database_path=args.database,
+            working_directory=Path.cwd(),
+        )
     print(json.dumps(result.__dict__, ensure_ascii=False, separators=(",", ":")))
-    return {"ok": 0, "noop": 0, "temporary_failure": 75, "permanent_failure": 1}[
-        result.exit_category
-    ]
+    if scheduler_status in {"error", "stale"}:
+        return 75
+    if args.scheduler_managed and result.exit_category == "permanent_failure":
+        return 0
+    return {
+        "ok": 0,
+        "noop": 0,
+        "temporary_failure": 75,
+        "permanent_failure": 1,
+    }[result.exit_category]
 
 
 if __name__ == "__main__":

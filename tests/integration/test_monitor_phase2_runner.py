@@ -713,6 +713,57 @@ def test_pause_and_user_end_final_runs_recover_once_under_current_generation(tmp
     assert len(store.list_boundaries(str(task.task_id))) == boundary_count
 
 
+def test_ended_pause_action_completes_older_missed_runs_before_final_cutoff(tmp_path):
+    clock = Clock(instant(9))
+    store = MonitorStore(tmp_path / "ended-pause-chain.sqlite3")
+    tasks = MonitorTaskService(store, clock=clock)
+    task = create_task(tasks)
+    clock.value = instant(10, 5)
+    paused = tasks.pause(str(task.task_id))
+    due = store.list_due_runs(str(task.task_id), clock.value)
+    assert [run.generation for run in due] == [1, paused.scheduler.generation]
+
+    clock.value = instant(10, 10)
+    ended = tasks.end(str(task.task_id))
+    assert ended.scheduler.generation == paused.scheduler.generation + 1
+    runner = MonitorRunnerService(
+        store,
+        tasks,
+        p1_factory(tasks, CanonicalJsonReferencePublisher()),
+        clock=clock,
+    )
+    result = runner.run_task(str(task.task_id), paused.scheduler.generation)
+    assert result.processed == 2
+    assert result.succeeded == 2
+    assert {run.status for run in store.list_runs(str(task.task_id))} == {
+        "succeeded"
+    }
+
+
+def test_pause_exactly_on_daily_cutoff_recovers_scheduled_final_old_generation(tmp_path):
+    clock = Clock(instant(9))
+    store = MonitorStore(tmp_path / "pause-exact-cutoff.sqlite3")
+    tasks = MonitorTaskService(store, clock=clock)
+    task = create_task(tasks)
+    old_generation = task.scheduler.generation
+    clock.value = instant(10)
+    paused = tasks.pause(str(task.task_id))
+    due = store.list_due_runs(str(task.task_id), clock.value)
+    assert len(due) == 1
+    assert due[0].boundary_type.value == "scheduled"
+    assert due[0].generation == old_generation
+    assert paused.scheduler.generation == old_generation + 1
+
+    runner = MonitorRunnerService(
+        store,
+        tasks,
+        p1_factory(tasks, CanonicalJsonReferencePublisher()),
+        clock=clock,
+    )
+    assert runner.run_task(str(task.task_id), old_generation).exit_category == "ok"
+    assert store.list_runs(str(task.task_id))[0].status == "succeeded"
+
+
 def test_configured_end_old_action_recovers_after_transition_crash(tmp_path):
     clock = Clock(instant(9))
     store = MonitorStore(tmp_path / "configured-crash.sqlite3")
