@@ -11,7 +11,7 @@
 | Planning | 已完成 | `codex/m3-version-monitoring-report` | 本文件所在提交 | PRD 与实施计划已冻结 |
 | Phase 0 | 已完成 | `codex/m3-p0-contracts`、`codex/m3-phase0-contract-audit` | `443c396` | 四份严格契约、确定性 SVN Mock、55 项聚焦测试 |
 | Phase 1 | 已完成 | `codex/m3-p1-diff-engine` | `9a52656` | 固定分支历史、最终净值、字段事件归因通过 |
-| Phase 2 | 未开始 | `codex/m3-p2-runner-store` | - | - |
+| Phase 2 | 已完成 | `codex/m3-p2-runner-store` | `f6afcb0` | SQLite、边界链、租约重试、独立 Runner 通过 |
 | Phase 3 | 未开始 | `codex/m3-p3-report-lifecycle` | - | - |
 | Phase 4 | 未开始 | `codex/m3-p4-windows-scheduler` | - | - |
 | Phase 5 | 未开始 | `codex/m3-p5-monitor-ui` | - | - |
@@ -59,3 +59,11 @@
 - 完成内容：面向固定 SVN 分支的只读 History Protocol 与 CLI 附加实现、严格目标分支路径和 UTC 左开右闭过滤、固定 Revision 快照最终净值计算，以及按 Revision 升序回放的字段事件归因
 - 产品补充规则：`field_added`、`field_removed`、`field_definition_modified` 使用 `row_key=null`，且不计入 `changed_row_count`
 - 已知限制：验收未真实访问 SVN；因缺少 `config/settings.json`，依赖该本机配置的测试未运行，且未创建占位配置
+
+### Phase 2
+
+- 阶段分支：`codex/m3-p2-runner-store`
+- 验收提交：`f6afcb0bb74805a5e7c3e71fdfe95dfd77b5557e`
+- 验收结果：Phase 2 34 passed；P0/P1 77 passed；直接相关 M2 29 passed
+- 核心交付：migration v2、逻辑边界幂等、pause/end final 恢复、自动重试最多 3 次、无 Web Runner
+- 已知限制：因缺少 `config/settings.json`，依赖该本机配置的测试未运行，且未创建占位配置
