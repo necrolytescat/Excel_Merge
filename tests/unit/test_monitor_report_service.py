@@ -197,6 +197,9 @@ def test_html_has_workbook_sheet_grid_filters_and_attribution_drawer():
     assert "搜索主键、字段和值" not in html
     assert 'id="summary-metrics"' in html
     assert '[["工作簿",report.summary.changed_workbook_count],["修改人",report.summary.author_count],["错误",report.summary.error_count]]' in html
+    assert 'var finalWorkbookAuthor=function(book)' in html
+    assert 'text("span",finalWorkbookAuthor(book),"workbook-author")' in html
+    assert 'change.attribution.status==="unresolved"' in html
     for region in (
         "workbook-list",
         "sheet-tabs",
@@ -219,7 +222,7 @@ def test_html_has_workbook_sheet_grid_filters_and_attribution_drawer():
     assert 'id="table-wrap" class="table-wrap" tabindex="0"' in html
     assert "height:clamp(15rem,calc(100vh - 18rem),31rem)" in html
     assert "th{position:sticky;top:0;z-index:3" in html
-    assert 'data-report-template="m3-workbench-v2.2"' in html
+    assert 'data-report-template="m3-workbench-v2.3"' in html
     assert '.join("\n")' not in html
 
     empty = render_monitor_report_html(empty_report()).decode("utf-8")
@@ -230,7 +233,7 @@ def test_html_has_workbook_sheet_grid_filters_and_attribution_drawer():
 def test_legacy_blank_report_is_repaired_without_changing_valid_report():
     current = render_monitor_report_html(report_from())
     legacy = current.replace(
-        b'data-report-template="m3-workbench-v2.2"',
+        b'data-report-template="m3-workbench-v2.3"',
         b'data-report-template="legacy"',
     ).replace(
         b"</body>",
@@ -242,8 +245,8 @@ def test_legacy_blank_report_is_repaired_without_changing_valid_report():
     assert render_legacy_compatible_report_html(current) is current
 
     old_valid = current.replace(
+        b'data-report-template="m3-workbench-v2.3"',
         b'data-report-template="m3-workbench-v2.2"',
-        b'data-report-template="m3-workbench-v2.1"',
     )
     assert render_legacy_compatible_report_html(old_valid) == current
 
