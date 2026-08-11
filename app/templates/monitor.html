@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Config Atlas · 版本监控</title>
   <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.4">
-  <link rel="stylesheet" href="{{ url_for('static', path='monitor.css') }}?v=1.0.0">
+  <link rel="stylesheet" href="{{ url_for('static', path='monitor.css') }}?v=1.1.0">
   <script defer src="{{ url_for('static', path='monitor_request.js') }}?v=1.0.0"></script>
-  <script defer src="{{ url_for('static', path='monitor.js') }}?v=1.0.1"></script>
+  <script defer src="{{ url_for('static', path='monitor.js') }}?v=1.1.0"></script>
 </head>
 <body>
 <div class="app-shell">
@@ -36,7 +36,11 @@
         <p class="monitor-alert is-hidden" id="monitor-create-alert" role="alert"></p>
         <form id="monitor-create-form" class="monitor-form">
           <label><span>任务名称</span><input id="monitor-name" name="name" required maxlength="128" autocomplete="off" placeholder="例如：每日战斗配置回归"></label>
-          <label><span>固定分支</span><select id="monitor-endpoint" name="endpoint_id" required><option value="">正在读取端点</option></select></label>
+          <div class="monitor-endpoint-field"><label for="monitor-endpoint-query">固定分支</label><div class="monitor-combobox">
+            <input id="monitor-endpoint-query" type="text" role="combobox" aria-autocomplete="list" aria-controls="monitor-endpoint-options" aria-expanded="false" autocomplete="off" required placeholder="正在读取分支" disabled>
+            <input id="monitor-endpoint" name="endpoint_id" type="hidden" value="">
+            <div class="monitor-combobox-options is-hidden" id="monitor-endpoint-options" role="listbox" aria-label="固定分支候选"></div>
+          </div></div>
           <label><span>生效时间</span><input id="monitor-effective-at" name="effective_at" type="datetime-local" step="1" required></label>
           <label><span>结束时间（可选）</span><input id="monitor-end-at" name="end_at" type="datetime-local" step="1"></label>
           <label><span>每日触发时间</span><input id="monitor-trigger" name="daily_trigger_time" type="time" step="1" value="18:00:00" required></label>

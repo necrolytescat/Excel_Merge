@@ -83,6 +83,12 @@
   font-size: 12px;
   font-weight: 800;
 }
+.monitor-endpoint-field {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+.monitor-endpoint-field > label { color: #344054; font-size: 12px; font-weight: 800; }
 .monitor-form input,
 .monitor-form select,
 .monitor-filter-form input,
@@ -107,6 +113,55 @@
   border-color: #2f5bea;
   box-shadow: 0 0 0 3px #eef2ff;
 }
+.monitor-combobox input[aria-invalid="true"] {
+  border-color: #d92d20;
+  box-shadow: 0 0 0 3px #fff1f0;
+}
+.monitor-combobox { position: relative; min-width: 0; }
+.monitor-combobox-options {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid #cfd5df;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 5px;
+  box-shadow: 0 14px 32px rgba(16, 24, 40, .16);
+}
+.monitor-combobox-option {
+  display: grid;
+  width: 100%;
+  min-height: 40px;
+  align-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #172033;
+  padding: 7px 9px;
+  font: inherit;
+  text-align: left;
+}
+.monitor-combobox-option:hover,
+.monitor-combobox-option.is-active {
+  background: #eef4ff;
+  color: #175cd3;
+}
+.monitor-combobox-option[aria-selected="true"] {
+  background: #e8edff;
+  color: #2448bd;
+}
+.monitor-combobox-option strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.monitor-combobox-empty { display: block; color: #667085; padding: 11px 9px; font-size: 12px; }
 .monitor-form-actions {
   display: flex;
   grid-column: 1 / -1;

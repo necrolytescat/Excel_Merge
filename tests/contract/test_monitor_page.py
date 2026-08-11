@@ -32,11 +32,14 @@ def test_monitor_pages_and_static_assets_are_served():
     assert request_script.status_code == 200
     assert overview_script.status_code == 200
     assert task_script.status_code == 200
-    assert "monitor.css?v=1.0.0" in overview.text
-    assert "monitor.js?v=1.0.1" in overview.text
+    assert "monitor.css?v=1.1.0" in overview.text
+    assert "monitor.js?v=1.1.0" in overview.text
     assert "monitor_request.js?v=1.0.0" in overview.text
     assert "monitor_tasks.js?v=1.0.0" in tasks.text
     assert 'id="monitor-create-form"' in overview.text
+    assert 'role="combobox"' in overview.text
+    assert 'role="listbox"' in overview.text
+    assert '<select id="monitor-endpoint"' not in overview.text
     assert 'id="monitor-create-alert"' in overview.text
     assert 'id="monitor-recent-alert"' in overview.text
     assert 'id="monitor-alert"' not in overview.text
@@ -95,6 +98,12 @@ def test_monitor_scripts_keep_url_etag_and_safe_dom_contracts():
     assert "crypto.randomUUID" not in task_script
     assert 'text: "查看报告"' in overview_script
     assert "text: STATUS_LABELS[task.latest_report.status]" not in overview_script
+    assert "filterEndpointOptions" in overview_script
+    assert 'event.key === "ArrowDown"' in overview_script
+    assert '"ArrowUp"' in overview_script
+    assert 'event.key === "Enter"' in overview_script
+    assert 'event.key === "Escape"' in overview_script
+    assert 'role: "option"' in overview_script
     assert 'params.set("q"' in task_script
     assert 'params.set("status"' in task_script
     assert 'params.set("task"' in task_script

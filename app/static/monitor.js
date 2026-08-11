@@ -20,7 +20,16 @@
     error: "同步失败",
     not_present: "未创建",
   };
-  const state = { etag: "", loading: false, pollTimer: 0, lastSuccessAt: null };
+  const state = {
+    etag: "",
+    loading: false,
+    pollTimer: 0,
+    lastSuccessAt: null,
+    endpointOptions: [],
+    endpointMatches: [],
+    selectedEndpointId: "",
+    activeEndpointIndex: -1,
+  };
   const commandLedger = new globalThis.MonitorRequestLedger();
 
   function node(tag, options = {}, children = []) {
@@ -101,8 +110,120 @@
     alert.classList.toggle("is-success", Boolean(message && success));
   }
 
+  function endpointSearchText(value) {
+    return String(value || "").trim().toLocaleLowerCase("zh-CN");
+  }
+
+  function compactEndpointText(value) {
+    return endpointSearchText(value).replace(/[\s._-]+/g, "");
+  }
+
+  function filterEndpointOptions(query) {
+    const normalized = endpointSearchText(query);
+    if (!normalized) return state.endpointOptions.slice();
+    const tokens = normalized.split(/\s+/).filter(Boolean);
+    return state.endpointOptions
+      .filter((item) => {
+        const haystack = endpointSearchText(item.label + " " + item.endpoint_id);
+        const compact = compactEndpointText(haystack);
+        return tokens.every((token) => {
+          const compactToken = compactEndpointText(token);
+          return haystack.includes(token) || (
+            Boolean(compactToken) && compact.includes(compactToken)
+          );
+        });
+      })
+      .sort((left, right) => {
+        const leftLabel = endpointSearchText(left.label);
+        const rightLabel = endpointSearchText(right.label);
+        const score = (label, item) => {
+          if (label.startsWith(normalized)) return 0;
+          if (label.includes(normalized)) return 1;
+          if (endpointSearchText(item.endpoint_id).includes(normalized)) return 2;
+          return 3;
+        };
+        return score(leftLabel, left) - score(rightLabel, right)
+          || leftLabel.localeCompare(rightLabel, "zh-CN");
+      });
+  }
+
+  function closeEndpointOptions() {
+    $("monitor-endpoint-options").classList.add("is-hidden");
+    $("monitor-endpoint-query").setAttribute("aria-expanded", "false");
+    $("monitor-endpoint-query").removeAttribute("aria-activedescendant");
+    state.activeEndpointIndex = -1;
+  }
+
+  function updateActiveEndpoint(index) {
+    const options = $("monitor-endpoint-options").querySelectorAll(".monitor-combobox-option");
+    state.activeEndpointIndex = index >= 0 && index < options.length ? index : -1;
+    options.forEach((option, optionIndex) => {
+      option.classList.toggle("is-active", optionIndex === state.activeEndpointIndex);
+    });
+    if (state.activeEndpointIndex < 0) {
+      $("monitor-endpoint-query").removeAttribute("aria-activedescendant");
+      return;
+    }
+    const active = options[state.activeEndpointIndex];
+    $("monitor-endpoint-query").setAttribute("aria-activedescendant", active.id);
+    active.scrollIntoView({ block: "nearest" });
+  }
+
+  function renderEndpointOptions(query = $("monitor-endpoint-query").value) {
+    const options = $("monitor-endpoint-options");
+    state.endpointMatches = filterEndpointOptions(query);
+    clear(options);
+    if (!state.endpointMatches.length) {
+      options.append(node("span", {
+        className: "monitor-combobox-empty",
+        text: state.endpointOptions.length ? "没有匹配的固定分支" : "暂无可用固定分支",
+      }));
+      state.activeEndpointIndex = -1;
+      return;
+    }
+    state.endpointMatches.forEach((item, index) => {
+      options.append(node("button", {
+        type: "button",
+        id: "monitor-endpoint-option-" + index,
+        className: "monitor-combobox-option",
+        role: "option",
+        tabindex: "-1",
+        "aria-selected": String(item.endpoint_id === state.selectedEndpointId),
+        dataset: { optionIndex: String(index) },
+      }, [
+        node("strong", { text: item.label }),
+      ]));
+    });
+    const selectedIndex = state.endpointMatches.findIndex(
+      (item) => item.endpoint_id === state.selectedEndpointId,
+    );
+    updateActiveEndpoint(selectedIndex >= 0 ? selectedIndex : 0);
+  }
+
+  function openEndpointOptions() {
+    const query = $("monitor-endpoint-query");
+    if (query.disabled) return;
+    $("monitor-endpoint-options").classList.remove("is-hidden");
+    query.setAttribute("aria-expanded", "true");
+  }
+
+  function selectEndpoint(item) {
+    if (!item) return;
+    state.selectedEndpointId = item.endpoint_id;
+    $("monitor-endpoint").value = item.endpoint_id;
+    $("monitor-endpoint-query").value = item.label;
+    $("monitor-endpoint-query").setAttribute("aria-invalid", "false");
+    closeEndpointOptions();
+  }
+
+  function clearEndpointSelection() {
+    state.selectedEndpointId = "";
+    $("monitor-endpoint").value = "";
+  }
+
   async function loadEndpoints() {
-    const select = $("monitor-endpoint");
+    const query = $("monitor-endpoint-query");
+    query.setAttribute("aria-busy", "true");
     try {
       const response = await requestJson("/api/monitor/endpoint-options", {
         headers: { Accept: "application/json" },
@@ -110,17 +231,23 @@
       if (response.body.schema_version !== "m3.monitor-endpoint-options.v1") {
         throw new Error("固定分支列表契约无效");
       }
-      clear(select);
-      select.append(node("option", { value: "", text: response.body.items.length ? "请选择固定分支" : "暂无可用固定分支" }));
-      response.body.items.forEach((item) => {
-        select.append(node("option", { value: item.endpoint_id, text: item.label }));
-      });
-      select.disabled = response.body.items.length === 0;
+      state.endpointOptions = response.body.items.slice();
+      clearEndpointSelection();
+      query.value = "";
+      query.placeholder = state.endpointOptions.length ? "输入分支名称进行匹配" : "暂无可用固定分支";
+      query.disabled = state.endpointOptions.length === 0;
+      renderEndpointOptions("");
+      closeEndpointOptions();
     } catch (error) {
-      clear(select);
-      select.append(node("option", { value: "", text: "固定分支读取失败" }));
-      select.disabled = true;
+      state.endpointOptions = [];
+      clearEndpointSelection();
+      query.value = "";
+      query.placeholder = "固定分支读取失败";
+      query.disabled = true;
+      closeEndpointOptions();
       setAlert("monitor-create-alert", errorMessage(error));
+    } finally {
+      query.setAttribute("aria-busy", "false");
     }
   }
 
@@ -245,6 +372,15 @@
 
   async function createTask(event) {
     event.preventDefault();
+    const endpointId = $("monitor-endpoint").value;
+    if (!endpointId || endpointId !== state.selectedEndpointId) {
+      $("monitor-endpoint-query").setAttribute("aria-invalid", "true");
+      setAlert("monitor-create-alert", "请从匹配结果中选择固定分支");
+      $("monitor-endpoint-query").focus();
+      renderEndpointOptions();
+      openEndpointOptions();
+      return;
+    }
     const effectiveAt = shanghaiInputToUtc($("monitor-effective-at").value);
     const endValue = $("monitor-end-at").value;
     const endAt = endValue ? shanghaiInputToUtc(endValue) : null;
@@ -267,7 +403,7 @@
         schemaVersion: "m3.monitor-task-create.request.v1",
         payload: {
           name: $("monitor-name").value.trim(),
-          endpoint_id: $("monitor-endpoint").value,
+          endpoint_id: endpointId,
           effective_at: effectiveAt,
           end_at: endAt,
           daily_trigger_time: $("monitor-trigger").value.length === 5
@@ -279,6 +415,9 @@
       $("monitor-create-form").reset();
       $("monitor-trigger").value = "18:00:00";
       setDefaultEffectiveAt();
+      clearEndpointSelection();
+      $("monitor-endpoint-query").setAttribute("aria-invalid", "false");
+      closeEndpointOptions();
       status.textContent = "";
       setAlert("monitor-create-alert", "任务已创建，调度状态：" + (STATUS_LABELS[response.body.status] || response.body.status), true);
       state.etag = "";
@@ -291,6 +430,58 @@
     }
   }
 
+  $("monitor-endpoint-query").addEventListener("focus", () => {
+    renderEndpointOptions();
+    openEndpointOptions();
+  });
+  $("monitor-endpoint-query").addEventListener("blur", closeEndpointOptions);
+  $("monitor-endpoint-query").addEventListener("input", () => {
+    clearEndpointSelection();
+    $("monitor-endpoint-query").setAttribute("aria-invalid", "false");
+    renderEndpointOptions();
+    openEndpointOptions();
+  });
+  $("monitor-endpoint-query").addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeEndpointOptions();
+      return;
+    }
+    if (event.key === "Enter") {
+      if (
+        !$("monitor-endpoint-options").classList.contains("is-hidden")
+        && state.activeEndpointIndex >= 0
+      ) {
+        event.preventDefault();
+        selectEndpoint(state.endpointMatches[state.activeEndpointIndex]);
+      }
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    if ($("monitor-endpoint-options").classList.contains("is-hidden")) {
+      renderEndpointOptions();
+      openEndpointOptions();
+    }
+    if (!state.endpointMatches.length) return;
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    const fallback = direction > 0 ? -1 : state.endpointMatches.length;
+    const current = state.activeEndpointIndex >= 0 ? state.activeEndpointIndex : fallback;
+    updateActiveEndpoint(
+      (current + direction + state.endpointMatches.length) % state.endpointMatches.length,
+    );
+  });
+  $("monitor-endpoint-options").addEventListener("mousedown", (event) => {
+    if (event.target.closest(".monitor-combobox-option")) event.preventDefault();
+  });
+  $("monitor-endpoint-options").addEventListener("click", (event) => {
+    const option = event.target.closest(".monitor-combobox-option");
+    if (!option) return;
+    selectEndpoint(state.endpointMatches[Number(option.dataset.optionIndex)]);
+    $("monitor-endpoint-query").focus();
+  });
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".monitor-combobox")) closeEndpointOptions();
+  });
   $("monitor-create-form").addEventListener("submit", (event) => void createTask(event));
   $("monitor-refresh").addEventListener("click", () => {
     state.etag = "";

@@ -279,6 +279,9 @@ Run 状态：`queued / running / succeeded / partial / failed`。只有 succeede
 已登记 `endpoint_registry` 合并并短时缓存；目录读取失败时保留已登记端点兜底。
 该发现过程不写入 SVN，也不改写本机 endpoint 配置。
 
+页面使用可输入组合框按分支标签和 endpoint ID 模糊匹配。用户必须从候选中选中
+一个分支，不能把任意文本作为固定分支提交；方向键、回车和 Esc 行为与标准组合框一致。
+
 创建任务时冻结：endpoint ID、仓库 UUID、规范 URL、仓库相对路径、bound Revision 和 copy boundary。固定分支之后不可修改，更换分支必须创建新任务。
 
 每次运行重新验证：
