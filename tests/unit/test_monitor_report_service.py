@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 from uuid import UUID, uuid4, uuid5
 
 import pytest
@@ -215,6 +216,8 @@ def test_html_has_workbook_sheet_grid_filters_and_attribution_drawer():
     assert 'type==="field_removed"?"column-removed"' in html
     assert "row-deleted td,td.column-removed" in html
     assert 'change.field_name&&change.change_type!=="field_added"' in html
+    assert "displayNames=new Map()" in html
+    assert "ensureColumn(key,displayNames.get(key)||key)" in html
     assert 'field_added:"新增字段"' not in html
     assert 'change.row_key==null' in html
     assert 'report.summary.workbook_count-bookList.length' in html
@@ -222,7 +225,7 @@ def test_html_has_workbook_sheet_grid_filters_and_attribution_drawer():
     assert 'id="table-wrap" class="table-wrap" tabindex="0"' in html
     assert "height:clamp(15rem,calc(100vh - 18rem),31rem)" in html
     assert "th{position:sticky;top:0;z-index:3" in html
-    assert 'data-report-template="m3-workbench-v2.3"' in html
+    assert 'data-report-template="m3-workbench-v2.4"' in html
     assert '.join("\n")' not in html
 
     empty = render_monitor_report_html(empty_report()).decode("utf-8")
@@ -230,10 +233,43 @@ def test_html_has_workbook_sheet_grid_filters_and_attribution_drawer():
     assert '"status": "succeeded"' in empty
 
 
+def test_added_field_metadata_labels_added_row_columns_without_structure_column():
+    html = render_monitor_report_html(report_from()).decode("utf-8")
+    start = html.index("    var buildSheetModel=function(sheet)")
+    end = html.index("\n    var currentSheet", start)
+    function_source = html[start:end].strip()
+    script = f"""
+var sideValue=function(side){{return side&&side.display_value!=null?String(side.display_value):"-"}};
+var isStructure=function(change){{return change.change_type==="field_removed"||change.change_type==="field_definition_modified"}};
+{function_source}
+var model=buildSheetModel({{changes:[
+  {{change_type:"field_added",field_name:"BannerResource",display_name:"banner资源路径",row_key:null}},
+  {{change_type:"row_added",field_name:null,display_name:null,row_key:"1001",primary_key_field:"Id",target:{{row_values:{{Id:"1001",BannerResource:"banner/a"}}}}}}
+]}});
+process.stdout.write(JSON.stringify(model.columns));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        cwd=Path(__file__).parents[2],
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=True,
+    )
+
+    assert json.loads(completed.stdout) == [
+        {
+            "key": "BannerResource",
+            "label": "banner资源路径",
+            "structure": None,
+        }
+    ]
+
+
 def test_legacy_blank_report_is_repaired_without_changing_valid_report():
     current = render_monitor_report_html(report_from())
     legacy = current.replace(
-        b'data-report-template="m3-workbench-v2.3"',
+        b'data-report-template="m3-workbench-v2.4"',
         b'data-report-template="legacy"',
     ).replace(
         b"</body>",
@@ -245,7 +281,7 @@ def test_legacy_blank_report_is_repaired_without_changing_valid_report():
     assert render_legacy_compatible_report_html(current) is current
 
     old_valid = current.replace(
-        b'data-report-template="m3-workbench-v2.3"',
+        b'data-report-template="m3-workbench-v2.4"',
         b'data-report-template="m3-workbench-v2.2"',
     )
     assert render_legacy_compatible_report_html(old_valid) == current

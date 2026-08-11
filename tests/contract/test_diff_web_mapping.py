@@ -345,6 +345,18 @@ process.stdout.write(JSON.stringify(cases.map(([definition, side]) => fieldDispl
     ]
 
 
+def test_header_renders_csv_display_name_before_stable_field_name():
+    source = (PROJECT_ROOT / "app/static/compare_results.js").read_text(encoding="utf-8")
+    create_start = source.index("  function createHeaderCell(definition, side")
+    create_end = source.index("\n\n  function renderDiffHeader", create_start)
+    create_source = source[create_start:create_end]
+
+    assert create_source.index('display.className = "diff-grid-header-display-name"') < (
+        create_source.index('name.className = "diff-grid-header-field-name"')
+    )
+    assert "cell.append(display, name)" in create_source
+
+
 def test_frontend_scripts_are_valid_javascript():
     for relative_path in (
         "app/static/m2_diff_mapper.js",
