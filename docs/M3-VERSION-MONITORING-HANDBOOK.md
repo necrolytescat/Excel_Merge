@@ -1,7 +1,7 @@
 # M3 版本监控维护、验收与排障手册
 
 > 当前状态：M3 已交付并合入 `main`
-> 更新日期：2026-08-10
+> 更新日期：2026-08-11
 > 适用范围：版本监控页面、API、SQLite、独立 Runner、Windows 计划任务、SVN 历史、最终净值归因、离线报告和 30 天治理
 
 ## 1. 文档用途
@@ -168,6 +168,7 @@ POST retry -> 持久化 retry outbox -> 返回 202
 |---|---|
 | `app/monitor_runner.py` | 无 FastAPI 依赖的 Runner、租约、错误分类、重试和维护 CLI |
 | `app/services/monitor_report_service.py` | 唯一报告契约、稳定排序、统计、离线 HTML 和 SHA |
+| `app/services/monitor_report_template.py` | 离线报告阅读工作台的 HTML、CSS 和安全 DOM 交互模板 |
 | `app/services/monitor_report_artifacts.py` | 不可变 history、任务锁、原子 latest、归属校验和 30 天清理 |
 
 ## 5. 配置、运行与物理数据
@@ -423,6 +424,22 @@ generation 防止旧同步覆盖新配置。旧系统任务触发 Runner 后，R
 - 清理只删除可验证的成对受管文件；
 - 不递归删除未知文件，不跟随符号链接，不触碰 M2、缓存或其他任务。
 
+### 11.1 报告阅读工作台
+
+离线 HTML 按“工作簿 -> Sheet -> 主键 ID -> 字段”组织最终净变化，目标是让 QA 先定位受影响范围，再按原表列式结构逐行回归：
+
+- 左侧导航列出契约中可以识别的有变化或公开错误工作簿；顶部页签列出当前工作簿中有变化或错误的 Sheet；
+- `m3.monitor-report.v1` 只有 `workbook_count` 总数，不包含无变化工作簿名称。页面只能显示未列出工作簿的数量，不能猜测或伪造名称；若未来必须逐个显示，需先补充业务事实并变更契约；
+- 主键 ID 一行、字段一列；字段修改在对应单元格内显示前值和后值，不为每个字段额外展开一行；
+- 网格字段来自本报告变化项和行增删的 `row_values`，只代表当前报告可恢复的字段集合，不保证是完整原表字段清单或原始列顺序；
+- 新增行和新增字段使用绿色；删除行和删除字段整行或整列使用红色；字段定义变化使用黄色；
+- 字段新增、删除和定义变化是 Sheet 级事件，只在字段表头表达，仍保持 `row_key=null`，不得伪造主键或按业务行展开；
+- 点击变化单元格或结构变化表头后，右侧归因栏只显示最终修改人、Revision 和修改时间，继续使用契约中的字段级最终归因；
+- 变化网格必须支持鼠标按住拖拽上下左右滚动、触控原生双向滚动和键盘聚焦滚动；滚动或拖拽不能误触归因选择；
+- 搜索和最终修改人筛选只改变展示，不改变报告 JSON、摘要统计或最终净值语义。
+
+读取旧历史 HTML 时，服务可以根据其中内嵌的原始报告 JSON 在内存中渲染当前工作台，但不得改写历史 HTML/JSON、SHA、publication 或 `latest.html`。新模板仍只消费 `m3.monitor-report.v1`，不增加 SVN 读取、额外 Diff 或第二套业务契约。
+
 ## 12. Web、API 与前端规则
 
 页面：
@@ -517,6 +534,7 @@ PowerShell 不一定展开 `app/services/*.py` 给 Python；实际执行时应�
 | SQLite/migration/租约 | 新库、旧库升级、CAS、并发 claim、崩溃恢复 |
 | Scheduler/XML | Fake、XML parser、SID、漂移、真实隔离任务 |
 | 报告/保留 | 契约往返、注入、SHA、原子发布、latest、过期隔离 |
+| 报告工作台 | 工作簿/Sheet 切换、主键行字段列、结构变化、归因栏、双向拖拽、桌面/移动 |
 | API/前端 | 严格请求、幂等、ETag、分页、断网 request ID、桌面/移动 |
 
 不得只跑新增 happy path。共享 parser、Provider 或 semantic diff 发生变化时，必须补版本对比 M2 回归。
@@ -569,6 +587,10 @@ PowerShell 不一定展开 `app/services/*.py` 给 Python；实际执行时应�
 - Run：queued/running/succeeded/partial/failed、attempt 和人工重试；
 - latest 旧报告不能被新 failed Run 覆盖；
 - 报告筛选、搜索、特殊字符和离线打开；
+- 报告工作簿和 Sheet 切换、主键一行字段一列、前后值显示与空状态；
+- 新增行/字段为绿色，删除行和删除字段整行/整列为红色，字段定义变化为黄色；
+- 点击变化单元格或结构表头后，归因栏的最终修改人、Revision、修改时间与报告 JSON 一致；
+- 变化网格可用鼠标拖拽、触控和键盘进行上下左右滚动，拖拽不误触单元格；
 - 360px 移动视口和桌面视口无重叠、溢出或不可操作控件；
 - 键盘焦点、对话框关闭和错误提示可用。
 

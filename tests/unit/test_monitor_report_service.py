@@ -183,23 +183,35 @@ def test_html_blocks_script_and_markup_injection_and_handles_large_values():
     assert "aria-live=\"polite\"" in text
     assert ":focus-visible" in text
     assert "prefers-reduced-motion" in text
-    assert "@media(max-width:767px)" in text
+    assert "@media(max-width:560px)" in text
     embedded = raw.split(
         b'<script type="application/json" id="report-data">', 1
     )[1].split(b"</script>", 1)[0]
     assert MonitorReportPayload.model_validate_json(embedded) == report
 
 
-def test_html_has_all_filters_empty_state_partial_state_and_structural_dash():
+def test_html_has_workbook_sheet_grid_filters_and_attribution_drawer():
     html = render_monitor_report_html(report_from()).decode("utf-8")
-    for control in ("query", "change-type", "author", "workbook", "sheet"):
+    for control in ("query", "author"):
         assert f'id="{control}"' in html
+    for region in (
+        "workbook-list",
+        "sheet-tabs",
+        "table-wrap",
+        "attribution-drawer",
+        "attr-author",
+        "attr-revision",
+        "attr-time",
+    ):
+        assert f'id="{region}"' in html
     assert "本报告为部分成功" in html
-    assert 'item.row_key==null?"-":item.row_key' in html
+    assert 'row.state==="row-added"?"新增行":"删除行"' in html
+    assert 'type==="field_removed"?"column-removed"' in html
+    assert "row-deleted td,td.column-removed" in html
+    assert 'change.row_key==null' in html
+    assert 'report.summary.workbook_count-bookList.length' in html
     assert "没有符合当前筛选条件的变化" in html
-    assert '.join("\\n")' in html
-    assert '+"\\n类型: "' in html
-    assert '+"\\n范围: "' in html
+    assert 'id="table-wrap" class="table-wrap" tabindex="0"' in html
     assert '.join("\n")' not in html
 
     empty = render_monitor_report_html(empty_report()).decode("utf-8")
@@ -209,11 +221,17 @@ def test_html_has_all_filters_empty_state_partial_state_and_structural_dash():
 
 def test_legacy_blank_report_is_repaired_without_changing_valid_report():
     current = render_monitor_report_html(report_from())
-    legacy = current.replace(b'.join("\\n")', b'.join("\n")')
+    legacy = current.replace(b'id="workbook-list"', b'id="legacy-list"').replace(
+        b"</body>",
+        b'<script>["legacy"].join("\n")</script></body>',
+    )
 
     assert legacy != current
     assert render_legacy_compatible_report_html(legacy) == current
     assert render_legacy_compatible_report_html(current) is current
+
+    old_valid = current.replace(b'id="workbook-list"', b'id="legacy-list"')
+    assert render_legacy_compatible_report_html(old_valid) == current
 
 
 def test_html_placeholder_text_in_task_name_does_not_replace_the_title():

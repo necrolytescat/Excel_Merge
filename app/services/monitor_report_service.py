@@ -25,6 +25,7 @@ from app.schemas.monitor import (
     MonitorTimeIntervalPayload,
     serialize_monitor_json,
 )
+from app.services.monitor_report_template import HTML_TEMPLATE_V2 as _HTML_TEMPLATE_V2
 
 
 REPORT_RETENTION = timedelta(days=30)
@@ -285,7 +286,7 @@ def render_monitor_report_html(report: MonitorReportPayload) -> bytes:
     """Render a single-file, dependency-free, accessible report workbench."""
     embedded = _embedded_json(serialize_monitor_json(report))
     title = html.escape(f"{report.task_name} - 版本监控报告", quote=True)
-    before_data, after_data = _HTML_TEMPLATE.split("__REPORT_DATA__", 1)
+    before_data, after_data = _HTML_TEMPLATE_V2.split("__REPORT_DATA__", 1)
     document = (
         before_data.replace("__TITLE__", title, 1)
         + embedded
@@ -295,8 +296,8 @@ def render_monitor_report_html(report: MonitorReportPayload) -> bytes:
 
 
 def render_legacy_compatible_report_html(raw_html: bytes) -> bytes:
-    """Repair the one released template whose JS contained literal newlines."""
-    if b'.join("\n")' not in raw_html:
+    """Upgrade older report shells in memory without rewriting history files."""
+    if b'id="workbook-list"' in raw_html and b'id="table-wrap"' in raw_html:
         return raw_html
     return render_monitor_report_html(_decode_embedded_report(raw_html))
 

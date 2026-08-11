@@ -16,6 +16,7 @@
 | Phase 4 | 已完成 | `codex/m3-p4-windows-scheduler` | `8c27a63` | Windows 计划任务、登录补跑、维护唤醒与公开失败链通过 |
 | Phase 5 | 已完成 | `codex/m3-p5-monitor-ui` | `60e3fa8` | 严格 API、导航、新建页、任务列表与受控报告入口通过 |
 | Phase 6 | 已完成 | `codex/m3-p6-real-acceptance` | `d466319`、`0f3a38d`、本文件所在提交 | 真实修改净值、Web 停服独立调度、锁屏触发、注销补跑和报告显示均已验收，M3 全阶段完成 |
+| 报告体验优化 | 已完成 | `codex/m3-report-experience` | 本文件所在提交 | 按工作簿、Sheet、主键和字段组织的 Excel 式离线报告工作台通过 |
 
 ## 后续优化工作流
 
@@ -131,3 +132,15 @@ M3 功能验收完成后，后续优化拆成两个相互隔离的工作树，�
 - 自动化结果：Scheduler 52 passed；Manifest/M3 集成定向 21 passed；M2 相关 39 passed；M3 聚焦 256 passed；py_compile 与 git diff --check 通过
 - 完成结论：真实 SVN 字段净值、作者与 Revision 归因，以及 Web/FastAPI 关闭后的独立调度均通过，Phase 6 与 M3 版本监控正式验收完成
 - 已知限制：应用内浏览器自动化截图仍受 Windows `CreateProcessWithLogonW failed: 1385` 阻断；该工具限制不再阻断 M3 功能验收，真实视觉与交互由用户完成验收
+
+### 报告体验优化
+
+- 阶段分支：`codex/m3-report-experience`
+- 验收提交：本文件所在提交
+- 用户验收：2026-08-11 已确认脱敏样例的 Excel 式呈现、双向拖拽、新增/删除行列样例与删除项红色规则，并同意合入正式报告页
+- 核心交付：左侧工作簿导航、顶部变化/错误 Sheet 页签、主键一行字段一列的变化网格、单元格前后值、最终修改人筛选，以及只显示最终修改人、Revision、修改时间的右侧归因栏
+- 结构视觉：新增行和字段为绿色；删除行和删除字段整行/整列为红色；字段定义变化为黄色；Sheet 级结构事件保持 `row_key=null`，不伪造主键
+- 交互验收：Edge 桌面和 390px 移动布局通过；工作簿/Sheet 切换、归因侧栏、鼠标上下左右拖拽、触控/键盘滚动及错误工作簿状态均已验证
+- 自动化结果：M3 报告服务及直接相关回归 129 passed；Python 与 JavaScript 语法检查、`git diff --check` 通过
+- 兼容与边界：旧报告仅在受控读取时基于内嵌 JSON 内存升级，不改写历史 HTML/JSON、SHA 或 publication；未增加 SVN 读取、额外 Diff 或契约字段，最终净值和字段归因语义不变
+- 已知限制：`m3.monitor-report.v1` 只提供已比较工作簿总数，不提供无变化工作簿名称；左侧列出有变化或公开错误的工作簿，并显示其余已比较工作簿数量
