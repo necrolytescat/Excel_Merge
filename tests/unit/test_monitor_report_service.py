@@ -208,10 +208,15 @@ def test_html_has_workbook_sheet_grid_filters_and_attribution_drawer():
     assert 'row.state==="row-added"?"新增行":"删除行"' in html
     assert 'type==="field_removed"?"column-removed"' in html
     assert "row-deleted td,td.column-removed" in html
+    assert 'change.field_name&&change.change_type!=="field_added"' in html
+    assert 'field_added:"新增字段"' not in html
     assert 'change.row_key==null' in html
     assert 'report.summary.workbook_count-bookList.length' in html
     assert "没有符合当前筛选条件的变化" in html
     assert 'id="table-wrap" class="table-wrap" tabindex="0"' in html
+    assert "height:clamp(15rem,calc(100vh - 18rem),31rem)" in html
+    assert "th{position:sticky;top:0;z-index:3" in html
+    assert 'data-report-template="m3-workbench-v2.1"' in html
     assert '.join("\n")' not in html
 
     empty = render_monitor_report_html(empty_report()).decode("utf-8")
@@ -221,7 +226,10 @@ def test_html_has_workbook_sheet_grid_filters_and_attribution_drawer():
 
 def test_legacy_blank_report_is_repaired_without_changing_valid_report():
     current = render_monitor_report_html(report_from())
-    legacy = current.replace(b'id="workbook-list"', b'id="legacy-list"').replace(
+    legacy = current.replace(
+        b'data-report-template="m3-workbench-v2.1"',
+        b'data-report-template="legacy"',
+    ).replace(
         b"</body>",
         b'<script>["legacy"].join("\n")</script></body>',
     )
@@ -230,7 +238,10 @@ def test_legacy_blank_report_is_repaired_without_changing_valid_report():
     assert render_legacy_compatible_report_html(legacy) == current
     assert render_legacy_compatible_report_html(current) is current
 
-    old_valid = current.replace(b'id="workbook-list"', b'id="legacy-list"')
+    old_valid = current.replace(
+        b'data-report-template="m3-workbench-v2.1"',
+        b'data-report-template="m3-workbench-v2"',
+    )
     assert render_legacy_compatible_report_html(old_valid) == current
 
 

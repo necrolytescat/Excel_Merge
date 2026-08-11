@@ -297,7 +297,7 @@ def render_monitor_report_html(report: MonitorReportPayload) -> bytes:
 
 def render_legacy_compatible_report_html(raw_html: bytes) -> bytes:
     """Upgrade older report shells in memory without rewriting history files."""
-    if b'id="workbook-list"' in raw_html and b'id="table-wrap"' in raw_html:
+    if b'data-report-template="m3-workbench-v2.1"' in raw_html:
         return raw_html
     return render_monitor_report_html(_decode_embedded_report(raw_html))
 
