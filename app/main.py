@@ -24,6 +24,7 @@ from core.svn_provider import SVNProviderError, provider_from_config
 from app.api import batch, diff, health, monitor, operations, replay, svn
 from app.monitor_runner import build_runner
 from app.services.branch_history_service import BranchHistoryService
+from app.services.monitor_endpoint_catalog import MonitorEndpointCatalog
 from app.services.monitor_report_artifacts import FileSystemMonitorReportPublisher
 from app.services.monitor_store import MonitorStore
 from app.services.monitor_task_service import MonitorTaskService
@@ -118,6 +119,12 @@ def create_app(
     app.state.endpoint_registry = SnapshotService.normalize_registry(svn_config.get("endpoint_registry") or DEFAULT_ENDPOINT_REGISTRY)
     app.state.svn_service = SVNService(provider, allowed_schemes=allowed_schemes, preview_limit=preview_limit)
     app.state.snapshot_service = SnapshotService(provider, allowed_schemes=allowed_schemes, max_workers=max_workers, preview_limit=preview_limit)
+    app.state.monitor_endpoint_catalog = MonitorEndpointCatalog(
+        app.state.svn_service,
+        server_url=lambda: str(getattr(app.state, "default_url", "")),
+        endpoint_catalog=lambda: getattr(app.state, "endpoint_catalog", {}),
+        endpoint_registry=lambda: getattr(app.state, "endpoint_registry", []),
+    )
     app.state.offline_fixture_service = (
         OfflineFixtureService() if bool(web_config.get("dev_mode", False)) else None
     )
@@ -252,9 +259,7 @@ def create_app(
                 ),
                 scheduler=monitor_scheduler,
                 history=BranchHistoryService(provider),
-                endpoint_registry=lambda: getattr(
-                    app.state, "endpoint_registry", []
-                ),
+                endpoint_registry=app.state.monitor_endpoint_catalog.records,
                 dataset_layout=dataset_layout if isinstance(dataset_layout, dict) else None,
                 runner=build_runner(
                     database_path=monitor_database,

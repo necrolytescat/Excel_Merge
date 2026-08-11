@@ -178,7 +178,8 @@ POST retry -> 持久化 retry outbox -> 返回 202
 真实运行读取 `config/settings.json`，至少需要：
 
 - `svn.provider=cli` 且本机 SVN CLI 可用；
-- 已启用的 `svn.endpoint_registry`；
+- `svn.server_url` 与可匹配主干/FIX 的 `svn.endpoint_catalog`；
+- `svn.endpoint_registry` 作为已登记端点兼容来源，不再限制版本监控可选分支范围；
 - 可装配的 `dataset_layout.workbook_source`、`csv_export` 和 `manifest`；
 - 可选 `monitor.database_path`。
 
@@ -272,6 +273,11 @@ CLI 退出码：0 表示成功、无事可做或计划任务管理下的确定�
 Run 状态：`queued / running / succeeded / partial / failed`。只有 succeeded/partial 拥有 Revision、summary 和报告；failed 不得覆盖旧 latest。
 
 ## 7. SVN 固定分支规则
+
+“新建与概览”的固定分支选项使用 `svn.server_url` 只读枚举仓库根目录与
+`branches/`，再按 `svn.endpoint_catalog` 的主干名和 FIX 模式筛选。结果与
+已登记 `endpoint_registry` 合并并短时缓存；目录读取失败时保留已登记端点兜底。
+该发现过程不写入 SVN，也不改写本机 endpoint 配置。
 
 创建任务时冻结：endpoint ID、仓库 UUID、规范 URL、仓库相对路径、bound Revision 和 copy boundary。固定分支之后不可修改，更换分支必须创建新任务。
 

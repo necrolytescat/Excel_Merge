@@ -149,3 +149,4 @@ M3 功能验收完成后，后续优化拆成两个相互隔离的工作树，�
 - 兼容与边界：新报告复用 Diff 已加载快照生成字段目录，不增加 SVN 调用；旧报告仅在缺目录且含行增删时按固定 Revision 只读加载变化 Sheet 并在内存缓存，不改写历史 HTML/JSON、SHA、publication 或 `latest.html`，最终净值、统计和字段归因语义不变
 - 中文表头返修自动化：Diff、归因、报告、契约和 API 聚焦回归 143 passed；Python 语法、离线 JavaScript 语法与 `git diff --check` 通过
 - 已知限制：`m3.monitor-report.v1` 只提供已比较工作簿总数，不提供无变化工作簿名称；左侧列出有变化或公开错误的工作簿，并显示其余已比较工作簿数量
+- 固定分支下拉返修：不再只显示 `endpoint_registry` 中当前登记的两个端点；改为只读发现 `svn.server_url` 下符合 `endpoint_catalog` 的全部主干/FIX，并与登记端点合并，任务创建后仍冻结分支身份与 Revision
