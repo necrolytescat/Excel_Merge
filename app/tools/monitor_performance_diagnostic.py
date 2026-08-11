@@ -5,6 +5,7 @@ import argparse
 from collections import Counter
 from copy import deepcopy
 import ctypes
+from ctypes import wintypes
 from datetime import datetime
 import json
 from pathlib import Path, PurePosixPath
@@ -88,8 +89,8 @@ def _peak_working_set_bytes() -> int | None:
 
     class ProcessMemoryCounters(ctypes.Structure):
         _fields_ = [
-            ("cb", ctypes.c_ulong),
-            ("PageFaultCount", ctypes.c_ulong),
+            ("cb", wintypes.DWORD),
+            ("PageFaultCount", wintypes.DWORD),
             ("PeakWorkingSetSize", ctypes.c_size_t),
             ("WorkingSetSize", ctypes.c_size_t),
             ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
@@ -100,11 +101,20 @@ def _peak_working_set_bytes() -> int | None:
             ("PeakPagefileUsage", ctypes.c_size_t),
         ]
 
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    psapi.GetProcessMemoryInfo.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ProcessMemoryCounters),
+        wintypes.DWORD,
+    ]
+    psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+
     counters = ProcessMemoryCounters()
     counters.cb = ctypes.sizeof(counters)
-    process = ctypes.windll.kernel32.GetCurrentProcess()
-    ok = ctypes.windll.psapi.GetProcessMemoryInfo(
-        process, ctypes.byref(counters), counters.cb
+    ok = psapi.GetProcessMemoryInfo(
+        kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb
     )
     return int(counters.PeakWorkingSetSize) if ok else None
 

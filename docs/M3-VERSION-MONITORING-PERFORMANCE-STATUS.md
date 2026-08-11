@@ -3,7 +3,7 @@
 > 分支：`codex/m3-report-performance`
 > 基点：`afebaf3ef56a897125ab734d9a27307365685d70`
 > 更新日期：2026-08-11
-> 当前状态：Mock 影子门禁通过，尚未执行真实 SVN 测量，正式 Runner 仍使用旧引擎
+> 当前状态：当前缓存真实影子门禁通过，正式 Runner 仍使用旧引擎
 
 ## 已完成
 
@@ -23,23 +23,55 @@
    - 不访问 Windows Scheduler；
    - 输出不包含 SVN URL、物理业务路径、缓存路径、文件内容或异常堆栈；
    - Revision、copy boundary 和结果计数不符时失败关闭。
+7. 修复 Windows 64 位进程句柄签名，后续测量可采集峰值工作集。
 
 ## 自动化证据
 
-- 新增增量与诊断测试：18 passed。
+- 新增增量与诊断测试：21 passed。
 - M2/M3 聚焦回归：207 passed。
-- 排除 5 个本机私有 `config/settings.json` 依赖文件后的完整回归：398 passed。
-- Python 语法检查通过。
+- 排除 5 个本机私有 `config/settings.json` 依赖文件后的完整回归：401 passed。
+- Python 语法检查和 `git diff --check` 通过。
 
 覆盖场景：CSV-only 多提交、最终回退、manifest Sheet 新增/删除、重新配对、
 `tbxName` 改名、CSV 删除后恢复、工作簿删除重建、共享 CSV 多 owner、大小写
 匹配冲突、局部 CSV 解析失败、unknown author、unresolved、无提交终点兜底、
 缺失 changed paths、目录级变化和无关路径。
 
+## 真实影子基线
+
+2026-08-11 使用隔离硬链接缓存执行一次已确认的当前缓存影子测量。SVN 操作严格
+只读，单命令超时 30 秒、并发 1；未写 MonitorStore、报告、publication、latest
+或 Windows Scheduler。测量前后共享缓存均为 11,013 个文件、1,222,579,653 bytes，
+清单签名均为
+`8ebb86f21eb175147cf29f06d0f21fab258788ce9eede80df2f2f185278f9301`。
+
+语义门禁：
+
+- 区间和分支身份：`r26475 -> r26514`，copy boundary `r26215`；
+- SVN 历史：3 个提交、16 条 changed paths；
+- 结果：197 个工作簿、197 个可靠工作簿、116 条最终净变化；
+- 错误：0 errors、0 unknown author、0 unresolved；
+- 旧/新语义指纹均为
+  `6a5af718a2592524dac2212d64efc245ff38397740b62cfb363e0b55ff482749`；
+- 候选范围：4 个工作簿、4 个 Sheet；0 次全量兜底。
+
+性能结果：
+
+- 诊断总 wall time 180.79 秒，CPU 21.48 秒；
+- 旧引擎 147.13 秒，增量影子引擎 28.24 秒，约 5.21 倍加速；
+- `svn info/list/cat` 分别为 2/8/6,785 次；log 计数为 date 4、range 1、
+  copy-boundary 1；`svn cat` 共读取 510,759,442 bytes；
+- 隔离缓存 delta：disk hit 3,869、memory hit 2,916、miss 0、write 0；
+- 增量路径完成 201 次 manifest 解析和 778 次 CSV 解析；峰值工作集本轮未取得。
+
+结论：真实语义一致性和当前缓存性能门禁通过。当前主要收益来自 changed paths 将
+逐提交事件回放限制到 4 个工作簿/Sheet；起点状态仍需完整加载。仅凭这一轮不能判断
+冷缓存 SVN CLI、并发读取或 Excel Parser 的优先级，也不足以切换正式路径。
+
 ## 尚未完成
 
-- 未访问真实 SVN，未测量 `r26475 -> r26514`。
-- 未建立真实冷/暖缓存耗时、CPU、峰值工作集、命令数和读取字节对照。
+- 未建立独立空冷缓存与暖缓存重复测量；本轮历史结果缺少峰值工作集，采集器已修复，
+  待下一轮测量验证。
 - 未把增量引擎接入正式 Runner；旧引擎仍是唯一正式路径。
 - 未根据真实计时决定是否优化 SVN CLI 探测、并发读取或 Excel Parser。
 
