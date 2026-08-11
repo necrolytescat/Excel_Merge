@@ -10,6 +10,7 @@ from app.schemas.monitor import (
     MonitorErrorCode,
     MonitorErrorStage,
     MonitorPublicErrorPayload,
+    MonitorReportSheetFieldsPayload,
 )
 from app.services.monitor_diff_service import MonitorDiffService, MonitorNetDiff
 from core.svn_history import BranchCommit
@@ -21,6 +22,7 @@ class MonitorAttributionResult:
     reliable_workbook_count: int
     changes: tuple[MonitorChangePayload, ...]
     errors: tuple[MonitorPublicErrorPayload, ...]
+    field_catalog: tuple[MonitorReportSheetFieldsPayload, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -193,4 +195,5 @@ class MonitorAttributionService:
             reliable_workbook_count=net.reliable_workbook_count,
             changes=tuple(attributed),
             errors=tuple(errors),
+            field_catalog=net.field_catalog,
         )

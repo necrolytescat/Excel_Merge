@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 import posixpath
-from typing import Protocol
+from typing import Mapping, Protocol
 
 from app.schemas.monitor import (
     MonitorAttributionPayload,
@@ -15,6 +15,8 @@ from app.schemas.monitor import (
     MonitorErrorStage,
     MonitorFieldDefinitionValuePayload,
     MonitorPublicErrorPayload,
+    MonitorReportFieldPayload,
+    MonitorReportSheetFieldsPayload,
 )
 from app.services.branch_history_service import BranchHistoryService
 from app.services.workbook_diff_service import DatasetLayout
@@ -47,6 +49,7 @@ class MonitorNetDiff:
     reliable_workbook_count: int
     changes: tuple[MonitorChangePayload, ...]
     errors: tuple[MonitorPublicErrorPayload, ...]
+    field_catalog: tuple[MonitorReportSheetFieldsPayload, ...] = ()
 
 
 class MonitorSnapshotReader(Protocol):
@@ -156,6 +159,18 @@ class SvnMonitorSnapshotReader:
         )
 
     def load_snapshot(self, revision: int) -> MonitorSnapshot:
+        return self._load_snapshot(revision, selections=None)
+
+    def load_selected_snapshot(
+        self,
+        revision: int,
+        selections: Mapping[str, set[str]],
+    ) -> MonitorSnapshot:
+        return self._load_snapshot(revision, selections=selections)
+
+    def _load_snapshot(
+        self, revision: int, *, selections: Mapping[str, set[str]] | None
+    ) -> MonitorSnapshot:
         try:
             entries = self.history.list_paths_at_revision(self.identity, revision)
         except SVNProviderError as error:
@@ -190,6 +205,10 @@ class SvnMonitorSnapshotReader:
         errors: list[MonitorPublicErrorPayload] = []
         for workbook_path in workbook_paths:
             workbook = workbook_path[len(self.table_directory) :].lstrip("/")
+            selected_sheets = None if selections is None else selections.get(workbook)
+            if selections is not None and selected_sheets is None:
+                continue
+
             try:
                 workbook_raw = self._read(workbook_path, revision)
             except SVNProviderError as error:
@@ -217,6 +236,8 @@ class SvnMonitorSnapshotReader:
 
             sheets: dict[str, ParsedTableCsv] = {}
             for manifest_entry in manifest.entries:
+                if selected_sheets is not None and manifest_entry.sheet_name not in selected_sheets:
+                    continue
                 csv_name = self.layout.filename_template.format(
                     tbxName=manifest_entry.tbx_name
                 )
@@ -290,6 +311,80 @@ class MonitorDiffService:
                 scope=field.scope,
             )
         )
+
+    @staticmethod
+    def _sheet_field_catalog(
+        workbook: str,
+        sheet_name: str,
+        source: ParsedTableCsv | None,
+        target: ParsedTableCsv | None,
+    ) -> MonitorReportSheetFieldsPayload | None:
+        source_fields = {field.name: field for field in source.fields} if source else {}
+        target_fields = {field.name: field for field in target.fields} if target else {}
+        ordered_names = list(target_fields)
+        ordered_names.extend(name for name in source_fields if name not in target_fields)
+        if not ordered_names:
+            return None
+        fields = []
+        for name in ordered_names:
+            source_field = source_fields.get(name)
+            target_field = target_fields.get(name)
+            display_name = (
+                (target_field.display_name if target_field is not None else "")
+                or (source_field.display_name if source_field is not None else "")
+                or None
+            )
+            fields.append(
+                MonitorReportFieldPayload(
+                    field_name=name,
+                    display_name=display_name,
+                )
+            )
+        return MonitorReportSheetFieldsPayload(
+            workbook=workbook,
+            sheet_name=sheet_name,
+            fields=fields,
+        )
+
+    @classmethod
+    def field_catalog_from_snapshots(
+        cls,
+        source: MonitorSnapshot,
+        target: MonitorSnapshot,
+        sheet_keys: set[tuple[str, str]],
+    ) -> tuple[MonitorReportSheetFieldsPayload, ...]:
+        catalogs = []
+        for workbook, sheet_name in sorted(
+            sheet_keys, key=lambda item: (item[0].casefold(), item[1].casefold())
+        ):
+            source_book = source.workbooks.get(workbook)
+            target_book = target.workbooks.get(workbook)
+            source_table = source_book.sheets.get(sheet_name) if source_book else None
+            target_table = target_book.sheets.get(sheet_name) if target_book else None
+            catalog = cls._sheet_field_catalog(
+                workbook, sheet_name, source_table, target_table
+            )
+            if catalog is not None:
+                catalogs.append(catalog)
+        return tuple(catalogs)
+
+    def field_catalog_for_revisions(
+        self,
+        start_revision: int,
+        end_revision: int,
+        sheet_keys: set[tuple[str, str]],
+    ) -> tuple[MonitorReportSheetFieldsPayload, ...]:
+        selections: dict[str, set[str]] = {}
+        for workbook, sheet_name in sheet_keys:
+            selections.setdefault(workbook, set()).add(sheet_name)
+        selected_loader = getattr(self.snapshot_reader, "load_selected_snapshot", None)
+        if callable(selected_loader):
+            source = selected_loader(start_revision, selections)
+            target = selected_loader(end_revision, selections)
+        else:
+            source = self.snapshot_reader.load_snapshot(start_revision)
+            target = self.snapshot_reader.load_snapshot(end_revision)
+        return self.field_catalog_from_snapshots(source, target, sheet_keys)
 
     @staticmethod
     def _failed_workbooks(snapshot: MonitorSnapshot) -> set[str]:
@@ -475,9 +570,16 @@ class MonitorDiffService:
                 change.field_name or "",
             )
         )
+        changed_sheet_keys = {
+            (change.workbook, change.sheet_name) for change in changes
+        }
+        field_catalog = cls.field_catalog_from_snapshots(
+            source, target, changed_sheet_keys
+        )
         return MonitorNetDiff(
             workbook_count=len(workbook_names),
             reliable_workbook_count=len(reliable_workbooks),
             changes=tuple(changes),
             errors=errors,
+            field_catalog=field_catalog,
         )

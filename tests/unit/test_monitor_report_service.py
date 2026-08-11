@@ -65,6 +65,7 @@ def empty_report() -> MonitorReportPayload:
     data = load_data()
     data["status"] = "succeeded"
     data["changes"] = []
+    data["field_catalog"] = []
     data["errors"] = []
     data["summary"].update(
         {
@@ -169,6 +170,8 @@ def test_html_blocks_script_and_markup_injection_and_handles_large_values():
     data["task_name"] = attack
     for change in data["changes"]:
         change["workbook"] = "<b>Combat</b>.xlsm"
+    for catalog in data["field_catalog"]:
+        catalog["workbook"] = "<b>Combat</b>.xlsm"
     data["changes"][0]["target"]["display_value"] = attack + ("值" * 4000)
     data["changes"][0]["target"]["normalized_value"] = attack + ("值" * 4000)
     data["changes"][0]["attribution"]["commit_message"] = attack
@@ -217,6 +220,7 @@ def test_html_has_workbook_sheet_grid_filters_and_attribution_drawer():
     assert "row-deleted td,td.column-removed" in html
     assert 'change.field_name&&change.change_type!=="field_added"' in html
     assert "displayNames=new Map()" in html
+    assert "model.primaryKey.label" in html
     assert "ensureColumn(key,displayNames.get(key)||key)" in html
     assert 'field_added:"新增字段"' not in html
     assert 'change.row_key==null' in html
@@ -225,7 +229,7 @@ def test_html_has_workbook_sheet_grid_filters_and_attribution_drawer():
     assert 'id="table-wrap" class="table-wrap" tabindex="0"' in html
     assert "height:clamp(15rem,calc(100vh - 18rem),31rem)" in html
     assert "th{position:sticky;top:0;z-index:3" in html
-    assert 'data-report-template="m3-workbench-v2.4"' in html
+    assert 'data-report-template="m3-workbench-v2.5"' in html
     assert '.join("\n")' not in html
 
     empty = render_monitor_report_html(empty_report()).decode("utf-8")
@@ -233,7 +237,7 @@ def test_html_has_workbook_sheet_grid_filters_and_attribution_drawer():
     assert '"status": "succeeded"' in empty
 
 
-def test_added_field_metadata_labels_added_row_columns_without_structure_column():
+def test_field_catalog_labels_added_row_columns_without_structure_change():
     html = render_monitor_report_html(report_from()).decode("utf-8")
     start = html.index("    var buildSheetModel=function(sheet)")
     end = html.index("\n    var currentSheet", start)
@@ -242,8 +246,10 @@ def test_added_field_metadata_labels_added_row_columns_without_structure_column(
 var sideValue=function(side){{return side&&side.display_value!=null?String(side.display_value):"-"}};
 var isStructure=function(change){{return change.change_type==="field_removed"||change.change_type==="field_definition_modified"}};
 {function_source}
-var model=buildSheetModel({{changes:[
-  {{change_type:"field_added",field_name:"BannerResource",display_name:"banner资源路径",row_key:null}},
+var model=buildSheetModel({{fields:[
+  {{field_name:"Id",display_name:"编号"}},
+  {{field_name:"BannerResource",display_name:"banner资源路径"}}
+],changes:[
   {{change_type:"row_added",field_name:null,display_name:null,row_key:"1001",primary_key_field:"Id",target:{{row_values:{{Id:"1001",BannerResource:"banner/a"}}}}}}
 ]}});
 process.stdout.write(JSON.stringify(model.columns));
@@ -269,7 +275,7 @@ process.stdout.write(JSON.stringify(model.columns));
 def test_legacy_blank_report_is_repaired_without_changing_valid_report():
     current = render_monitor_report_html(report_from())
     legacy = current.replace(
-        b'data-report-template="m3-workbench-v2.4"',
+        b'data-report-template="m3-workbench-v2.5"',
         b'data-report-template="legacy"',
     ).replace(
         b"</body>",
@@ -281,10 +287,39 @@ def test_legacy_blank_report_is_repaired_without_changing_valid_report():
     assert render_legacy_compatible_report_html(current) is current
 
     old_valid = current.replace(
+        b'data-report-template="m3-workbench-v2.5"',
         b'data-report-template="m3-workbench-v2.4"',
-        b'data-report-template="m3-workbench-v2.2"',
     )
     assert render_legacy_compatible_report_html(old_valid) == current
+
+
+def test_legacy_row_report_loads_field_catalog_in_memory():
+    complete = report_from()
+    legacy_data = complete.model_dump(mode="json")
+    legacy_data["field_catalog"] = []
+    legacy_report = report_from(legacy_data)
+    legacy_html = render_monitor_report_html(legacy_report).replace(
+        b'data-report-template="m3-workbench-v2.5"',
+        b'data-report-template="m3-workbench-v2.4"',
+    )
+    calls = []
+
+    upgraded = render_legacy_compatible_report_html(
+        legacy_html,
+        field_catalog_loader=lambda report: (
+            calls.append(report.report_id) or complete.field_catalog
+        ),
+    )
+    embedded = upgraded.split(
+        b'<script type="application/json" id="report-data">', 1
+    )[1].split(b"</script>", 1)[0]
+    upgraded_report = MonitorReportPayload.model_validate_json(embedded)
+
+    assert calls == [legacy_report.report_id]
+    assert upgraded_report.field_catalog == complete.field_catalog
+    assert upgraded_report.changes == legacy_report.changes
+    assert upgraded_report.summary == legacy_report.summary
+    assert legacy_report.field_catalog == []
 
 
 def test_html_placeholder_text_in_task_name_does_not_replace_the_title():

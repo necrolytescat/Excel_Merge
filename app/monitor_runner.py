@@ -144,6 +144,7 @@ class P1MonitorRunEngine:
             start_revision=start_revision,
             end_revision=end_revision,
             workbook_count=attributed.workbook_count,
+            field_catalog=attributed.field_catalog,
             changes=attributed.changes,
             errors=attributed.errors,
             generated_at=generated_at,

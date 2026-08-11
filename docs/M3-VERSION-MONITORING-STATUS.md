@@ -145,5 +145,7 @@ M3 功能验收完成后，后续优化拆成两个相互隔离的工作树，�
 - 导航返修：左侧每个工作簿增加第三行最终归因作者；从现有变化中按最大 Revision、同 Revision 最晚时间确定，无法可靠归因时显示“未知”，不增加 SVN 读取
 - 交互验收：Edge 桌面和 390px 移动布局通过；工作簿/Sheet 切换、归因侧栏、鼠标上下左右拖拽、触控/键盘滚动及错误工作簿状态均已验证
 - 自动化结果：M3 报告服务及直接相关回归 129 passed；Python 与 JavaScript 语法检查、`git diff --check` 通过
-- 兼容与边界：旧报告仅在受控读取时基于内嵌 JSON 内存升级，不改写历史 HTML/JSON、SHA 或 publication；未增加 SVN 读取、额外 Diff 或契约字段，最终净值和字段归因语义不变
+- 中文表头返修：`m3.monitor-report.v1` 增加可选 `field_catalog`，按 TableCsv 列顺序保存第 1 条逻辑记录的中文展示名与第 2 条逻辑记录的稳定字段名；纯行增删 Sheet 不再依赖结构变化项恢复中文名
+- 兼容与边界：新报告复用 Diff 已加载快照生成字段目录，不增加 SVN 调用；旧报告仅在缺目录且含行增删时按固定 Revision 只读加载变化 Sheet 并在内存缓存，不改写历史 HTML/JSON、SHA、publication 或 `latest.html`，最终净值、统计和字段归因语义不变
+- 中文表头返修自动化：Diff、归因、报告、契约和 API 聚焦回归 143 passed；Python 语法、离线 JavaScript 语法与 `git diff --check` 通过
 - 已知限制：`m3.monitor-report.v1` 只提供已比较工作簿总数，不提供无变化工作簿名称；左侧列出有变化或公开错误的工作簿，并显示其余已比较工作簿数量

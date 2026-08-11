@@ -731,6 +731,7 @@ def test_empty_succeeded_monitor_report_is_valid():
         }
     )
     report["changes"] = []
+    report["field_catalog"] = []
     report["errors"] = []
 
     MonitorReportPayload.model_validate(report)

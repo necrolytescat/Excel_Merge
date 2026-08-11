@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import html
 import re
-from typing import Callable, Protocol
+from typing import Callable, Protocol, Sequence
 from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo
 
@@ -18,6 +18,7 @@ from app.schemas.monitor import (
     MonitorCoveragePayload,
     MonitorPublicErrorPayload,
     MonitorReportPayload,
+    MonitorReportSheetFieldsPayload,
     MonitorReportSummaryPayload,
     MonitorRevisionRangePayload,
     MonitorRunSummaryPayload,
@@ -109,6 +110,7 @@ class MonitorReportPublisher(Protocol):
         start_revision: int,
         end_revision: int,
         workbook_count: int,
+        field_catalog: tuple[MonitorReportSheetFieldsPayload, ...] = (),
         changes: tuple[MonitorChangePayload, ...],
         errors: tuple[MonitorPublicErrorPayload, ...],
         generated_at: datetime,
@@ -191,6 +193,7 @@ def build_monitor_report(
     start_revision: int,
     end_revision: int,
     workbook_count: int,
+    field_catalog: tuple[MonitorReportSheetFieldsPayload, ...] = (),
     changes: tuple[MonitorChangePayload, ...],
     errors: tuple[MonitorPublicErrorPayload, ...],
     generated_at: datetime,
@@ -199,6 +202,17 @@ def build_monitor_report(
         sorted((_stable_change(change) for change in changes), key=_change_key)
     )
     stable_errors = tuple(sorted(errors, key=_error_key))
+    stable_field_catalog = tuple(
+        sorted(
+            field_catalog,
+            key=lambda catalog: (
+                catalog.workbook.casefold(),
+                catalog.workbook,
+                catalog.sheet_name.casefold(),
+                catalog.sheet_name,
+            ),
+        )
+    )
     counts = {kind.value: 0 for kind in MonitorChangeType}
     for change in stable_changes:
         counts[change.change_type.value] += 1
@@ -250,7 +264,7 @@ def build_monitor_report(
             changed_field_count=len(changed_fields),
             author_count=len(known_authors),
             change_count=len(stable_changes),
-        error_count=len(stable_errors),
+            error_count=len(stable_errors),
             by_change_type=MonitorChangeTypeCountsPayload(**counts),
         ),
         coverage=MonitorCoveragePayload(
@@ -267,6 +281,7 @@ def build_monitor_report(
             failed_workbook_count=len(failed_workbooks),
         ),
         changes=list(stable_changes),
+        field_catalog=list(stable_field_catalog),
         errors=list(stable_errors),
     )
 
@@ -295,11 +310,32 @@ def render_monitor_report_html(report: MonitorReportPayload) -> bytes:
     return document.encode("utf-8")
 
 
-def render_legacy_compatible_report_html(raw_html: bytes) -> bytes:
+def render_legacy_compatible_report_html(
+    raw_html: bytes,
+    *,
+    field_catalog_loader: Callable[
+        [MonitorReportPayload], Sequence[MonitorReportSheetFieldsPayload]
+    ]
+    | None = None,
+) -> bytes:
     """Upgrade older report shells in memory without rewriting history files."""
-    if b'data-report-template="m3-workbench-v2.4"' in raw_html:
+    if b'data-report-template="m3-workbench-v2.5"' in raw_html:
         return raw_html
-    return render_monitor_report_html(_decode_embedded_report(raw_html))
+    report = _decode_embedded_report(raw_html)
+    has_row_changes = any(
+        change.change_type
+        in {MonitorChangeType.ROW_ADDED, MonitorChangeType.ROW_DELETED}
+        for change in report.changes
+    )
+    if (
+        not report.field_catalog
+        and has_row_changes
+        and field_catalog_loader is not None
+    ):
+        field_catalog = list(field_catalog_loader(report))
+        if field_catalog:
+            report = report.model_copy(update={"field_catalog": field_catalog})
+    return render_monitor_report_html(report)
 
 
 def _decode_embedded_report(raw_html: bytes) -> MonitorReportPayload:

@@ -60,6 +60,22 @@
     "unattributed_change_count": 0,
     "failed_workbook_count": 1
   },
+  "field_catalog": [
+    {
+      "workbook": "CombatConfig.xlsm",
+      "sheet_name": "Role",
+      "fields": [
+        {
+          "field_name": "Id",
+          "display_name": "编号"
+        },
+        {
+          "field_name": "Hp",
+          "display_name": "生命值"
+        }
+      ]
+    }
+  ],
   "changes": [
     {
       "change_type": "field_modified",

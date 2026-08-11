@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -23,6 +24,8 @@ from app.schemas.monitor import (
     MonitorTaskListPayload,
     MonitorTaskPatchRequestPayload,
     MonitorTaskPayload,
+    MonitorReportPayload,
+    MonitorReportSheetFieldsPayload,
 )
 from app.services.branch_history_service import BranchHistoryService
 from app.services.monitor_api_contract import (
@@ -106,6 +109,10 @@ class MonitorWebService:
         self._dispatcher_wakeup = Event()
         self._dispatcher_lock = Lock()
         self._dispatcher_thread: Thread | None = None
+        self._field_catalog_cache: OrderedDict[
+            str, tuple[MonitorReportSheetFieldsPayload, ...]
+        ] = OrderedDict()
+        self._field_catalog_cache_lock = Lock()
         self._closed = False
 
     def close(self) -> None:
@@ -736,6 +743,50 @@ class MonitorWebService:
             raise MonitorWebError("MONITOR_REPORT_NOT_FOUND", "监控报告不存在", 404)
         return run, publication
 
+    def _legacy_field_catalog(
+        self, report: MonitorReportPayload
+    ) -> tuple[MonitorReportSheetFieldsPayload, ...]:
+        cache_key = str(report.report_id)
+        with self._field_catalog_cache_lock:
+            cached = self._field_catalog_cache.get(cache_key)
+            if cached is not None:
+                self._field_catalog_cache.move_to_end(cache_key)
+                return cached
+
+        sheet_keys = {
+            (change.workbook, change.sheet_name)
+            for change in report.changes
+            if change.change_type.value in {"row_added", "row_deleted"}
+        }
+        task = self.store.get_task(str(report.task_id))
+        engine_factory = getattr(self.runner, "engine_factory", None)
+        if not sheet_keys or task is None or not callable(engine_factory):
+            return ()
+
+        try:
+            engine = engine_factory(task)
+            diff_service = getattr(engine, "diff_service", None)
+            loader = getattr(diff_service, "field_catalog_for_revisions", None)
+            if not callable(loader):
+                return ()
+            catalog = tuple(
+                loader(
+                    report.revisions.start_revision,
+                    report.revisions.end_revision,
+                    sheet_keys,
+                )
+            )
+        except Exception:
+            return ()
+
+        if catalog:
+            with self._field_catalog_cache_lock:
+                self._field_catalog_cache[cache_key] = catalog
+                self._field_catalog_cache.move_to_end(cache_key)
+                while len(self._field_catalog_cache) > 32:
+                    self._field_catalog_cache.popitem(last=False)
+        return catalog
+
     def _load_report(self, run_id: str, *, allow_expired: bool) -> tuple[bytes, str]:
         run, publication = self._report_records(run_id)
         if not allow_expired and self.publisher.is_expired(
@@ -755,7 +806,10 @@ class MonitorWebService:
             raise MonitorWebError(
                 "MONITOR_REPORT_NOT_FOUND", "监控报告不可用", 404
             ) from error
-        content = render_legacy_compatible_report_html(resolved.offline_html)
+        content = render_legacy_compatible_report_html(
+            resolved.offline_html,
+            field_catalog_loader=self._legacy_field_catalog,
+        )
         return content, hashlib.sha256(content).hexdigest()
 
     def load_run_report(self, run_id: UUID) -> tuple[bytes, str]:
@@ -776,7 +830,10 @@ class MonitorWebService:
                 reference=publication.report_ref,
                 expected_html_sha256=publication.html_sha256,
             )
-            content = render_legacy_compatible_report_html(content)
+            content = render_legacy_compatible_report_html(
+                content,
+                field_catalog_loader=self._legacy_field_catalog,
+            )
             return content, hashlib.sha256(content).hexdigest()
         except MonitorReportReferenceError as error:
             raise MonitorWebError(

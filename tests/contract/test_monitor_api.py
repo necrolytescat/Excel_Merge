@@ -112,6 +112,30 @@ class Runner:
         self.calls.append((run_id, trigger))
 
 
+class CatalogRunner(Runner):
+    def __init__(self, catalog):
+        super().__init__()
+        self.catalog = tuple(catalog)
+        self.catalog_calls = []
+
+    def engine_factory(self, task):
+        runner = self
+
+        class DiffService:
+            def field_catalog_for_revisions(
+                self, start_revision, end_revision, sheet_keys
+            ):
+                runner.catalog_calls.append(
+                    (start_revision, end_revision, frozenset(sheet_keys))
+                )
+                return runner.catalog
+
+        class Engine:
+            diff_service = DiffService()
+
+        return Engine()
+
+
 def build_service(
     tmp_path: Path,
     *,
@@ -204,7 +228,11 @@ def command_payload(request_id=None):
 
 
 def publish_report(
-    service: MonitorWebService, task_id: str, *, legacy_blank_html: bool = False
+    service: MonitorWebService,
+    task_id: str,
+    *,
+    legacy_blank_html: bool = False,
+    without_field_catalog: bool = False,
 ):
     task = service.get_task(task_id)
     run = service.store.list_runs(task_id)[-1]
@@ -236,11 +264,17 @@ def publish_report(
         "boundary_kind": run.boundary_type.value,
     }
     data["generated_at"] = (NOW + timedelta(minutes=1)).isoformat()
+    if without_field_catalog:
+        data["field_catalog"] = []
     report = MonitorReportPayload.model_validate(data)
     canonical = serialize_monitor_json(report)
     html = render_monitor_report_html(report)
     if legacy_blank_html:
         html = html.replace(b'.join("\\n")', b'.join("\n")')
+        html = html.replace(
+            b'data-report-template="m3-workbench-v2.5"',
+            b'data-report-template="m3-workbench-v2.4"',
+        )
     draft = ReportDraft(
         payload=report,
         canonical_json=canonical,
@@ -1260,6 +1294,69 @@ def test_legacy_blank_report_is_repaired_without_rewriting_artifacts(tmp_path):
             expected_html_sha256=publication.html_sha256,
         )
         assert stored.offline_html == draft.offline_html
+
+
+def test_legacy_row_report_hydrates_field_catalog_once_without_rewriting(tmp_path):
+    example = json.loads(
+        (
+            Path(__file__).parents[2]
+            / "docs"
+            / "contracts"
+            / "m3.monitor-report.v1.example.json"
+        ).read_text(encoding="utf-8")
+    )
+    catalog = MonitorReportPayload.model_validate(example).field_catalog
+    runner = CatalogRunner(catalog)
+    service = build_service(tmp_path, runner=runner)
+    app = create_app(
+        config={"svn": {"provider": "mock"}},
+        provider=MockSVNProvider(),
+        monitor_web_service=service,
+    )
+    with TestClient(app) as client:
+        task = client.post("/api/monitor/tasks", json=create_payload()).json()
+        client.post(
+            f"/api/monitor/tasks/{task['task_id']}/pause",
+            json=command_payload(),
+        )
+        run, draft = publish_report(
+            service,
+            task["task_id"],
+            legacy_blank_html=True,
+            without_field_catalog=True,
+        )
+        expected_payload = draft.payload.model_copy(
+            update={"field_catalog": list(catalog)}
+        )
+        expected = render_monitor_report_html(expected_payload)
+
+        for url in (
+            f"/api/monitor/runs/{run.run_id}/report",
+            f"/api/monitor/tasks/{task['task_id']}/latest-report",
+            f"/api/monitor/runs/{run.run_id}/report",
+        ):
+            response = client.get(url)
+            assert response.status_code == 200
+            assert response.content == expected
+
+        assert runner.catalog_calls == [
+            (
+                draft.payload.revisions.start_revision,
+                draft.payload.revisions.end_revision,
+                frozenset({("CombatConfig.xlsm", "Role")}),
+            )
+        ]
+        publication = service.store.get_publication(run.run_id)
+        stored = service.publisher.resolve(
+            task_id=task["task_id"],
+            run_id=run.run_id,
+            logical_cutoff_at=run.end_at,
+            reference=publication.report_ref,
+            expected_json_sha256=publication.json_sha256,
+            expected_html_sha256=publication.html_sha256,
+        )
+        assert stored.offline_html == draft.offline_html
+        assert stored.payload.field_catalog == []
 
 
 def test_latest_report_survives_history_retention_cleanup(tmp_path):

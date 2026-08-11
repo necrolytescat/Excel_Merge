@@ -841,6 +841,24 @@ class MonitorRevisionRangePayload(StrictMonitorPayload):
         return self
 
 
+class MonitorReportFieldPayload(StrictMonitorPayload):
+    field_name: str = Field(..., min_length=1, max_length=256, strict=True)
+    display_name: str | None = Field(default=None, max_length=256, strict=True)
+
+
+class MonitorReportSheetFieldsPayload(StrictMonitorPayload):
+    workbook: str = Field(..., min_length=1, max_length=256, strict=True)
+    sheet_name: str = Field(..., min_length=1, max_length=256, strict=True)
+    fields: list[MonitorReportFieldPayload]
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "MonitorReportSheetFieldsPayload":
+        names = [field.field_name for field in self.fields]
+        if not names or len(names) != len(set(names)):
+            raise ValueError("field catalog requires unique non-empty field names")
+        return self
+
+
 class MonitorReportPayload(StrictMonitorPayload):
     schema_version: Literal[MONITOR_REPORT_SCHEMA_VERSION] = MONITOR_REPORT_SCHEMA_VERSION
     report_id: UUID
@@ -854,6 +872,7 @@ class MonitorReportPayload(StrictMonitorPayload):
     generated_at: UtcDateTime
     summary: MonitorReportSummaryPayload
     coverage: MonitorCoveragePayload
+    field_catalog: list[MonitorReportSheetFieldsPayload] = Field(default_factory=list)
     changes: list[MonitorChangePayload] = Field(default_factory=list)
     errors: list[MonitorPublicErrorPayload] = Field(default_factory=list)
 
@@ -875,6 +894,23 @@ class MonitorReportPayload(StrictMonitorPayload):
         changed_sheets = {
             (change.workbook, change.sheet_name) for change in self.changes
         }
+        catalog_sheets = [
+            (catalog.workbook, catalog.sheet_name) for catalog in self.field_catalog
+        ]
+        if len(catalog_sheets) != len(set(catalog_sheets)):
+            raise ValueError("field catalog sheet identities must be unique")
+        if not set(catalog_sheets).issubset(changed_sheets):
+            raise ValueError("field catalog can only describe changed sheets")
+        row_change_sheets = {
+            (change.workbook, change.sheet_name)
+            for change in self.changes
+            if change.change_type in {
+                MonitorChangeType.ROW_ADDED,
+                MonitorChangeType.ROW_DELETED,
+            }
+        }
+        if self.field_catalog and not row_change_sheets.issubset(catalog_sheets):
+            raise ValueError("field catalog must cover every changed row sheet")
         changed_rows = {
             (change.workbook, change.sheet_name, change.row_key)
             for change in self.changes

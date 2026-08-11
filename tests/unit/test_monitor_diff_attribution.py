@@ -103,6 +103,47 @@ def _commit(revision, author, hour):
     )
 
 
+def test_field_catalog_prefers_target_display_names_and_falls_back_to_source():
+    source_definitions = {
+        "Id": {"display_name": "旧编号", "declared_type": "uint32", "scope": "All"},
+        "Legacy": {"display_name": "旧字段", "declared_type": "string", "scope": "Client"},
+    }
+    target_definitions = {
+        "Id": {"display_name": "新编号", "declared_type": "uint32", "scope": "All"},
+        "Current": {"display_name": "新字段", "declared_type": "string", "scope": "Client"},
+    }
+    snapshots = {
+        100: _snapshot(
+            100,
+            {"1": {"Id": "1", "Legacy": "old"}},
+            definitions=source_definitions,
+        ),
+        101: _snapshot(
+            101,
+            {"2": {"Id": "2", "Current": "new"}},
+            definitions=target_definitions,
+        ),
+    }
+    service = MonitorDiffService(Reader(snapshots))
+    net = service.compare_revisions(100, 101)
+
+    catalog = net.field_catalog[0]
+    assert (catalog.workbook, catalog.sheet_name) == ("CombatConfig.xlsm", "Role")
+    assert [
+        (field.field_name, field.display_name) for field in catalog.fields
+    ] == [
+        ("Id", "新编号"),
+        ("Current", "新字段"),
+        ("Legacy", "旧字段"),
+    ]
+
+    attributed = MonitorAttributionService(service).attribute(
+        net,
+        start_revision=100,
+        commits=[_commit(101, "author", 1)],
+    )
+    assert attributed.field_catalog == net.field_catalog
+
 def test_last_commit_that_forms_final_value_gets_attribution():
     snapshots = {
         100: _snapshot(100, {"100": {"Id": "100", "Hp": "100"}}),

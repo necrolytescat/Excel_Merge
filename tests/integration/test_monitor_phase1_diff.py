@@ -200,7 +200,8 @@ def test_svn_snapshot_reader_reuses_m2_pairing_and_isolates_parse_failures():
         table_directory="Source/Table",
     )
 
-    result = MonitorDiffService(reader).compare_revisions(100, 110)
+    service = MonitorDiffService(reader)
+    result = service.compare_revisions(100, 110)
 
     assert result.workbook_count == 2
     assert [(change.change_type.value, change.row_key, change.field_name) for change in result.changes] == [
@@ -209,6 +210,27 @@ def test_svn_snapshot_reader_reuses_m2_pairing_and_isolates_parse_failures():
     ]
     assert result.changes[1].primary_key_field == "Id"
     assert result.changes[1].target.row_values == {"Id": "2", "Hp": "80"}
+    assert [
+        (field.field_name, field.display_name)
+        for field in result.field_catalog[0].fields
+    ] == [("Id", "ID"), ("Hp", "生命值")]
+
+    history.reads.clear()
+    selected_catalog = service.field_catalog_for_revisions(
+        100,
+        110,
+        {("Combat.xlsm", "Role")},
+    )
+    assert selected_catalog == result.field_catalog
+    assert not any("Broken.xlsm" in path for path, _ in history.reads)
+    assert {
+        (path, revision) for path, revision in history.reads
+    } == {
+        ("Source/Table/Combat.xlsm", 100),
+        ("Source/TableCsv/Role.csv", 100),
+        ("Source/Table/Combat.xlsm", 110),
+        ("Source/TableCsv/Role.csv", 110),
+    }
     assert [(error.workbook, error.stage.value) for error in result.errors] == [
         ("Broken.xlsm", "manifest_parse"),
     ]
