@@ -22,6 +22,7 @@ from app.services.branch_history_service import BranchHistoryService
 from app.services.config_service import ConfigStore
 from app.services.monitor_attribution_service import MonitorAttributionService
 from app.services.monitor_diff_service import MonitorDiffService, SvnMonitorSnapshotReader
+from app.services.monitor_incremental_service import MonitorIncrementalReplayService
 from app.services.monitor_report_service import (
     MonitorReportPublisher,
     MonitorReportPublishError,
@@ -111,6 +112,7 @@ class P1MonitorRunEngine:
         attribution_service: MonitorAttributionService,
         publisher: MonitorReportPublisher,
         task_service: MonitorTaskService,
+        engine_mode: Literal["incremental", "legacy"],
     ):
         self.history = history
         self.endpoint = endpoint
@@ -119,16 +121,24 @@ class P1MonitorRunEngine:
         self.attribution_service = attribution_service
         self.publisher = publisher
         self.task_service = task_service
+        self.engine_mode = engine_mode
 
     def execute(self, run: RunRecord, task: TaskRecord, generated_at: datetime) -> EngineResult:
         self.history.verify_branch_identity(self.endpoint, self.identity)
         start_revision = self.history.resolve_revision_at(self.identity, run.start_at)
         end_revision = self.history.resolve_revision_at(self.identity, run.end_at)
-        net = self.diff_service.compare_revisions(start_revision, end_revision)
         commits = self.history.list_branch_commits(self.identity, run.start_at, run.end_at)
-        attributed = self.attribution_service.attribute(
-            net, start_revision=start_revision, commits=commits
-        )
+        if self.engine_mode == "incremental":
+            attributed = MonitorIncrementalReplayService(self.diff_service).replay(
+                start_revision=start_revision,
+                end_revision=end_revision,
+                commits=commits,
+            ).result
+        else:
+            net = self.diff_service.compare_revisions(start_revision, end_revision)
+            attributed = self.attribution_service.attribute(
+                net, start_revision=start_revision, commits=commits
+            )
         if attributed.errors and attributed.reliable_workbook_count == 0:
             raise MonitorRunComputationFailed(attributed.errors)
         task_public = self.task_service.to_public_task(task)
@@ -213,6 +223,7 @@ class P1MonitorRunEngineFactory:
             attribution_service=MonitorAttributionService(diff),
             publisher=self.publisher,
             task_service=self.task_service,
+            engine_mode="incremental",
         )
 
 

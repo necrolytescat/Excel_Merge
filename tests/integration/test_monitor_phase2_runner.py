@@ -169,6 +169,7 @@ def p1_factory_for_reader(tasks, publisher, reader):
         attribution_service=MonitorAttributionService(diff),
         publisher=publisher,
         task_service=tasks,
+        engine_mode="legacy",
     )
 
 
@@ -190,6 +191,7 @@ def test_runner_executes_real_p1_diff_and_attribution_without_web(tmp_path):
             attribution_service=MonitorAttributionService(diff),
             publisher=publisher,
             task_service=tasks,
+            engine_mode="legacy",
         )
 
     runner = MonitorRunnerService(store, tasks, factory, clock=clock)
@@ -645,6 +647,7 @@ def test_late_runner_start_keeps_the_original_logical_cutoff(tmp_path):
         attribution_service=MonitorAttributionService(diff),
         publisher=publisher,
         task_service=tasks,
+        engine_mode="legacy",
     )
     clock.value = instant(11, 30)
     result = MonitorRunnerService(store, tasks, factory, clock=clock).run_task(
@@ -676,6 +679,7 @@ def test_runner_executes_configured_final_run_before_task_stops(tmp_path):
         history=history, endpoint=None, identity=IDENTITY, diff_service=diff,
         attribution_service=MonitorAttributionService(diff), publisher=publisher,
         task_service=tasks,
+        engine_mode="legacy",
     )
     clock.value = instant(10)
     result = MonitorRunnerService(store, tasks, factory, clock=clock).run_task(
