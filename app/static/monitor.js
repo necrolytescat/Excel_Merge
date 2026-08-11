@@ -168,7 +168,7 @@
           href: "/api/monitor/tasks/" + encodeURIComponent(task.task_id) + "/latest-report",
           target: "_blank",
           rel: "noopener",
-          text: STATUS_LABELS[task.latest_report.status],
+          text: "查看报告",
         }));
         reportCell.append(node("small", { text: summary.change_count + " 项变化 · " + summary.error_count + " 项错误" }));
       } else if (task.latest_run) {
