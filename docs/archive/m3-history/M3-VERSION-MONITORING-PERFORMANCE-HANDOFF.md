@@ -1,8 +1,8 @@
 # M3 版本监控性能改造交接
 
-> 状态：方案已确认，等待报告页面改造合入 `main` 后实施
+> 归档状态：历史交接方案；报告页面与性能改造均已完成
 > 更新日期：2026-08-11
-> 前置诊断：`docs/M3-VERSION-MONITORING-PERFORMANCE-DIAGNOSIS.md`
+> 前置诊断：`docs/archive/m3-history/M3-VERSION-MONITORING-PERFORMANCE-DIAGNOSIS.md`
 > 一致性基线：`r26475 -> r26514`，197 个工作簿，116 条最终净变化，0 个错误
 
 ## 1. 用途和启动条件

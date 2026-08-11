@@ -1,6 +1,6 @@
 # M3 版本监控维护、验收与排障手册
 
-> 当前状态：M3 已交付并合入 `main`
+> 当前状态：M3 已交付并验收完成；报告体验与增量性能优化均已合入 `main`
 > 更新日期：2026-08-11
 > 适用范围：版本监控页面、API、SQLite、独立 Runner、Windows 计划任务、SVN 历史、最终净值归因、离线报告和 30 天治理
 
@@ -20,7 +20,7 @@
 3. `M3-VERSION-MONITORING-PRD.md` 的产品语义；
 4. ADR-006、ADR-007 和版本对比模块的 Table/TableCsv 规则；
 5. 本手册；
-6. `M3-VERSION-MONITORING-IMPLEMENTATION.md` 和阶段状态记录。
+6. `archive/m3-history/` 中的实施计划、阶段状态和性能过程记录。
 
 修改前至少读取与需求直接相关的本手册章节和对应契约。涉及最终净值、TableCsv 解析或配对时，再读取 `VERSION-COMPARISON-HANDBOOK.md`；涉及共享 SVN 缓存或运维日志时，再读取 `HISTORY-TASKS-HANDBOOK.md`。
 
@@ -78,10 +78,11 @@ Windows Task Scheduler
 python -m app.monitor_runner
       |
       +--> BranchHistoryService --> CLISVNProvider --> svn info/log/list/cat
-      +--> SvnMonitorSnapshotReader
-      |      workbook main manifest + TableCsv
-      +--> MonitorDiffService
-      +--> MonitorAttributionService
+      +--> MonitorIncrementalService
+      |      起点完整状态 + changed paths 候选缩小 + 逐提交局部回放
+      |      不可靠路径自动回退完整语义计算
+      +--> MonitorDiffService / MonitorAttributionService
+      |      稳定语义基础和显式 legacy 诊断路径
       `--> FileSystemMonitorReportPublisher
              history JSON/HTML + latest.html
 
@@ -105,7 +106,8 @@ Web 管理路径：
 ```text
 Windows 触发 -> 独立 Runner 读取 SQLite
   -> 物化到期边界/Run -> 租约抢占
-  -> 固定 Revision 快照 -> 最终净值 -> 提交回放归因
+  -> 起点状态 -> changed paths 局部回放 -> 最终净值与归因
+  -> 不可靠输入按规则全量兜底
   -> 准备 publication -> 不可变 history -> latest -> 原子完成
 ```
 
@@ -158,6 +160,8 @@ POST retry -> 持久化 retry outbox -> 返回 202
 | `app/services/branch_history_service.py` | 冻结身份复核、日期 Revision、分支提交和固定 Revision 读取 |
 | `app/services/monitor_diff_service.py` | 两端快照读取、清单配对、最终净值和局部错误隔离 |
 | `app/services/monitor_attribution_service.py` | Revision 升序事件账本和最终状态归因 |
+| `app/services/monitor_incremental_service.py` | 正式增量引擎；起点状态、changed paths 分类、候选工作簿/Sheet、逐提交局部回放和全量兜底 |
+| `app/services/monitor_performance.py` | 阶段计时、计数、峰值工作集和稳定语义指纹；观测数据不进入报告契约 |
 | `core/workbook_manifest_parser.py` | Excel `main` 清单；openpyxl 失败时安全 OOXML fallback |
 | `core/table_csv_parser.py` | TableCsv 字段、主键、scope 和类型解析 |
 | `core/semantic_diff.py` | 版本对比与 M3 共用的业务语义 Diff |
@@ -170,6 +174,8 @@ POST retry -> 持久化 retry outbox -> 返回 202
 | `app/services/monitor_report_service.py` | 唯一报告契约、稳定排序、统计、离线 HTML 和 SHA |
 | `app/services/monitor_report_template.py` | 离线报告阅读工作台的 HTML、CSS 和安全 DOM 交互模板 |
 | `app/services/monitor_report_artifacts.py` | 不可变 history、任务锁、原子 latest、归属校验和 30 天清理 |
+| `app/tools/m3_performance_probe.py` | 不写 MonitorStore、报告和 Scheduler 的真实 SVN 只读性能门禁 |
+| `app/tools/monitor_performance_diagnostic.py` | 性能诊断编排和脱敏输出 |
 
 ## 5. 配置、运行与物理数据
 
@@ -356,6 +362,21 @@ History 实现必须保持：
 - `attributed`：作者、Revision 和时间完整；
 - `unknown_author`：SVN author 缺失，显示“未知”，但保留 Revision/时间；
 - `unresolved`：无法可靠连接，作者显示“未知”，Revision/时间为空，报告必须 partial。
+
+### 8.4 正式增量回放
+
+正式 Runner 不再为每个提交重复读取整条分支。当前流程是：
+
+1. 冻结起止 Revision，并读取一次完整起点状态；
+2. 使用 SVN changed paths 判断区间内受影响的 Excel `main`、TableCsv、工作簿和 Sheet；
+3. 只对候选范围按 Revision 升序更新 manifest 配对和业务状态；
+4. 从回放后的最终状态生成净变化与最终归因；
+5. 当 changed paths 缺失、目录级变化、动作未知或 owner 关系不可靠时，自动回退完整语义计算。
+
+CSV 变化会更新它的全部 manifest owner；Excel `main` 变化会重新计算对应工作簿、
+Sheet 和配对关系。删除后恢复、共享 CSV、多 owner、大小写冲突和解析失败都不能通过
+“路径看起来无关”而跳过。旧 Diff/Attribution 引擎保留为显式 `legacy` 诊断和测试
+路径，不是正式 Runner 的默认模式。
 
 ## 9. SQLite、幂等、租约与恢复
 
@@ -709,7 +730,7 @@ schtasks.exe /Query /TN ExcelMerge-M3-Maintenance /XML
 
 先看进程、CPU、SVN 子进程和 `lease_expires_at`：
 
-- 租约持续续期且 CPU/SVN 有活动：仍在执行，真实 197 工作簿可能耗时数十分钟；
+- 租约持续续期且 CPU/SVN 有活动：仍在执行；暖缓存真实基线约 33 秒，空冷缓存可能因大量 `svn cat` 延长到数分钟；
 - 进程消失且租约已过期：下一次正式 claim 可恢复；
 - 租约未续期但进程仍在：检查数据库锁、keepalive 线程和系统资源；
 - 超过 Windows 6 小时上限：调查数据规模或死锁，不能简单放宽上限掩盖问题。
@@ -852,13 +873,25 @@ Run/报告公开错误：
 
 ### 18.7 性能优化
 
-先保留确定性结果，再优化：
+正式 Runner 当前使用增量回放，旧引擎只保留为显式诊断和语义对照。后续优化必须先
+证明结果一致，再讨论耗时：
 
 - 固定 Revision 缓存键必须含仓库身份、规范路径和 Revision；
 - 列表保持 SQL 分页和批量摘要；
-- 不以跳过 manifest、归因回放或覆盖校验换速度；
+- changed paths 只能缩小候选，不能取消 manifest、配对、归因和不可靠输入兜底；
 - 不把报告调度改为分钟轮询；
 - 优化前后用真实工作簿数量记录耗时、内存、SVN 调用和结果哈希。
+
+冻结的真实只读性能基线：
+
+- 输入为 `r26475 -> r26514`、197 个工作簿、116 条最终净变化；
+- 旧/新语义指纹一致，候选为 4 个工作簿、4 个 Sheet，0 次全量兜底；
+- 旧引擎 147.13 秒，增量引擎 28.24 秒，约 5.21 倍加速；
+- 隔离暖缓存 32.59 秒；
+- 隔离空冷缓存 396.47 秒，其中 `svn cat` 363.59 秒，是当前首跑主要瓶颈。
+
+如果继续优化空冷时间，优先研究有限并发读取或减少重复 SVN CLI 探测；如果优化暖
+缓存，优先研究 manifest 解析。任何优化都必须重跑稳定语义指纹和完整报告回归。
 
 ## 19. 安全与审查清单
 
@@ -881,28 +914,25 @@ Run/报告公开错误：
 
 ## 20. 当前验收基线与已知限制
 
-M3 完成时的真实证据记录在 `M3-VERSION-MONITORING-STATUS.md`：
+M3 产品、报告体验和性能优化均已完成：
 
 - 固定分支真实只读报告成功；
 - Web 关闭期间 Windows 独立 Runner 成功触发；
 - `r26475 -> r26514` 比较 197 个工作簿，得到 116 条最终净变化、0 错误；
 - Revision、作者、字段前后值和 manifest 新增 Sheet 已抽样复核；
-- Runner 退出后一次性 Windows 任务正常清理；
-- Web 重启后 latest 报告 HTTP 200。
+- 锁屏触发、注销后登录补跑、Web 重启读取 latest 均已由用户验收；
+- 离线报告的工作簿/Sheet 导航、Excel 式网格、双层表头、颜色规则、归因侧栏、
+  双向滚动以及桌面/390px 移动布局均已验收；
+- 正式 Runner 已切换增量引擎，真实只读影子结果与旧引擎语义一致并约快 5.21 倍；
+- 增量切换后未再单独执行一次正式 MonitorStore/Windows 计划任务，当前以真实影子
+  门禁、Runner 完整回归和用户接受作为非阻断验证结论。
 
-当前非阻断限制：
-
-- 锁屏和注销后登录补跑有自动化与任务结构覆盖，但完成验收时未实际注销用户会话；
-- in-app 浏览器自动截图曾受 Windows `CreateProcessWithLogonW failed: 1385` 阻断；
-- 真实大分支完整比较可能耗时二十分钟以上，诊断时应结合租约和进程活动判断。
-
-后续优化不能删除这些限制记录，除非有新的真实证据替代。
+详细阶段证据保存在 `docs/archive/m3-history/`，仅用于审计和回归追因。
 
 ## 21. 相关文档
 
 - `docs/M3-VERSION-MONITORING-PRD.md`
-- `docs/M3-VERSION-MONITORING-IMPLEMENTATION.md`
-- `docs/M3-VERSION-MONITORING-STATUS.md`
+- `docs/archive/m3-history/README.md`
 - `docs/contracts/m3.monitor-api.v1.md`
 - `docs/contracts/m3.monitor-task.v1.md`
 - `docs/contracts/m3.monitor-task-list.v1.md`

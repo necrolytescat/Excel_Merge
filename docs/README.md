@@ -1,6 +1,6 @@
 # 项目文档导航
 
-> 更新日期：2026-08-10
+> 更新日期：2026-08-11
 
 ## 当前维护入口
 
@@ -21,10 +21,11 @@
 维护左侧导航“版本监控”模块时，先读取：
 
 1. `M3-VERSION-MONITORING-HANDBOOK.md`：长期架构、代码导航、冻结规则、验收步骤和故障定位；
-2. `M3-VERSION-MONITORING-PRD.md`：产品语义、时间边界、报告和运行保证；
-3. `M3-VERSION-MONITORING-IMPLEMENTATION.md`：历史架构、分阶段实施和验收门禁；
-4. `VERSION-COMPARISON-HANDBOOK.md`：复用的 Table/TableCsv 配对与业务 Diff 边界；
-5. `HISTORY-TASKS-HANDBOOK.md`：独立持久化、日志和 SVN 缓存生命周期边界。
+2. 产品语义变化时读 `M3-VERSION-MONITORING-PRD.md`；
+3. 数据结构变化时读 `contracts/m3.*`；
+4. 修改 Table/TableCsv 配对或业务 Diff 时读 `VERSION-COMPARISON-HANDBOOK.md`；
+5. 修改共享缓存或运维日志时读 `HISTORY-TASKS-HANDBOOK.md`；
+6. 仅追溯历史决策或性能基线时读 `archive/m3-history/README.md`。
 
 ## 当前有效文档
 
@@ -32,8 +33,8 @@
 |---|---|
 | `VERSION-COMPARISON-HANDBOOK.md` | 版本对比模块长期工作手册和接手入口 |
 | `M3-VERSION-MONITORING-HANDBOOK.md` | 版本监控长期维护、验收和排障入口 |
-| `M3-VERSION-MONITORING-PRD.md` | 版本监控已确认需求和验收基线 |
-| `M3-VERSION-MONITORING-IMPLEMENTATION.md` | 版本监控分阶段实施计划 |
+| `M3-VERSION-MONITORING-PRD.md` | 版本监控已交付产品语义和验收基线 |
+| `archive/m3-history/README.md` | M3 分阶段实施、真实验收和性能过程材料索引 |
 | `ROADMAP.md` | 当前产品能力与后续方向 |
 | `ENGINEERING-BASELINE.md` | 只读、方向、Revision、契约和测试基线 |
 | `SVN-ENDPOINT-MODEL.md` | 端点注册和物理路径模型 |
@@ -46,14 +47,16 @@
 
 ## 历史归档
 
-`archive/m2-history/` 保存 M2 阶段的计划、评审、试跑、兼容性、前端交接、收尾前路线图和证据。默认不读取；仅在以下情况按归档索引定向查阅：
+`archive/m2-history/` 保存 M2 阶段过程材料，`archive/m3-history/` 保存 M3 的实施、
+阶段验收和性能探索过程。两者默认不读取；仅在以下情况按各自索引定向查阅：
 
 - 追溯某项规则的形成过程；
 - 调查历史回归或数据兼容性；
 - 迁移/升级现有契约；
-- 审计最终任务与夹具来源。
+- 审计最终任务、夹具、真实验收或性能基线。
 
-M0/M1 的其他历史资料继续保留在现有路径。早期 PRD、调研报告和 `docs/verify/` 实验不能覆盖当前契约。
+M0/M1 的其他历史资料继续保留在现有路径。历史实施计划、阶段状态、早期调研和
+`docs/verify/` 实验不能覆盖当前代码、有效契约、PRD 和长期手册。
 
 ## 数据与生成物
 

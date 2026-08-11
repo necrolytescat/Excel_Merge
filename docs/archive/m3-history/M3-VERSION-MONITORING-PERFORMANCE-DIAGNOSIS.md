@@ -1,6 +1,6 @@
 # M3 版本监控性能诊断（第一份交付）
 
-> 状态：静态诊断完成，尚未执行真实 SVN 性能测量
+> 归档状态：优化前静态诊断；真实结论见 `docs/archive/m3-history/M3-VERSION-MONITORING-PERFORMANCE-STATUS.md`
 > 更新日期：2026-08-11
 > 基线：`r26475 -> r26514`，197 个工作簿，116 条最终净变化，0 个错误
 

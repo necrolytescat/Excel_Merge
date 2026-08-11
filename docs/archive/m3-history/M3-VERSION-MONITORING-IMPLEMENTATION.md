@@ -1,6 +1,6 @@
 # M3 版本监控实施计划
 
-> 状态：草案，依据 `M3-VERSION-MONITORING-PRD.md`
+> 归档状态：历史实施计划；Phase 0-6 已全部完成，当前基线见 `docs/M3-VERSION-MONITORING-PRD.md`
 > 更新日期：2026-08-10
 > 执行约束：本文件只定义实施顺序和验收门禁；正式编码应在独立 worktree 中进行。
 
