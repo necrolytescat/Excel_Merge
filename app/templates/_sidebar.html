@@ -1,0 +1,20 @@
+<aside class="sidebar" aria-label="主导航">
+  <div class="brand">
+    <div class="brand-mark" aria-hidden="true">CA</div>
+    <div><strong>Config Atlas</strong><span>EXCEL REVIEW · READ ONLY</span></div>
+  </div>
+  <nav class="sidebar-nav">
+    <p class="nav-label">系统配置</p>
+    <a class="nav-item{% if active_page == 'settings' %} active{% endif %}" href="/"{% if active_page == 'settings' %} aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">⌂</span><span>基础连接</span></a>
+    <p class="nav-label">对比工具</p>
+    <a class="nav-item{% if active_page == 'compare' %} active{% endif %}" href="/compare"{% if active_page == 'compare' %} aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">⇄</span><span>{{ '版本对比' if active_page == 'settings' else '版本比对' }}</span><span class="nav-current">M2</span></a>
+    <a class="nav-item{% if active_page == 'diff_plans' %} active{% endif %}" href="/diff-plans"{% if active_page == 'diff_plans' %} aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">☷</span><span>表格计划对比</span><span class="nav-current">M4</span></a>
+    <a class="nav-item{% if active_page == 'monitor' %} active{% endif %}" href="/monitor"{% if active_page == 'monitor' %} aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">◉</span><span>版本监控</span><span class="nav-current">M3</span></a>
+    <p class="nav-label">结果</p>
+    <a class="nav-item{% if active_page == 'history' %} active{% endif %}" href="/compare/history"{% if active_page == 'history' %} aria-current="page"{% endif %}><span class="nav-icon" aria-hidden="true">▤</span><span>历史任务</span></a>
+  </nav>
+  <div class="sidebar-footer">
+    <span class="sidebar-readonly"><span class="status-dot status-ok"></span> SVN 只读</span>
+    <span class="sidebar-version">{% if active_page == 'diff_plans' %}M4 · 表格计划对比{% elif active_page == 'monitor' %}M3 · 每日监控{% else %}Web 工作台{% endif %}</span>
+  </div>
+</aside>

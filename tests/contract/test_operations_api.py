@@ -187,3 +187,16 @@ def test_cache_clear_rejects_result_and_replay_roots(tmp_path):
             excluded_roots=excluded,
         )
         assert service.status().can_clear is False
+
+
+def test_app_cache_boundary_excludes_m4_database_and_results(tmp_path):
+    m4_database = tmp_path / "var" / "m4-diff-plan" / "diff-plan.sqlite3"
+    cache_dir = m4_database.parent / "results"
+    app = create_app(
+        config={
+            "diff_plan": {"database_path": str(m4_database)},
+            "svn": {"provider": "cli", "cache_dir": str(cache_dir)},
+        },
+        provider=MockSVNProvider(),
+    )
+    assert app.state.svn_cache_service.status().can_clear is False

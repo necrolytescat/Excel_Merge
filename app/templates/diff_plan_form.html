@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Config Atlas · {{ '编辑' if plan_id else '新建' }}表格计划</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.4">
+  <link rel="stylesheet" href="{{ url_for('static', path='diff_plans.css') }}?v=1.0.0">
+  <script src="{{ url_for('static', path='diff_plan_form.js') }}?v=1.0.0" defer></script>
+</head>
+<body class="diff-plan-page" data-page="form" data-plan-id="{{ plan_id or '' }}">
+<div class="app-shell">
+  {% include '_sidebar.html' %}
+  <div class="app-content diff-plan-content">
+    <header class="topbar diff-plan-topbar">
+      <div><p class="eyebrow">DIFFPLAN / {{ 'EDIT' if plan_id else 'NEW' }}</p><h1>{{ '编辑计划' if plan_id else '新建表格计划' }}</h1><p class="subtitle">基准分支提供 TABLE 表格清单，每次运行默认使用最新已提交版本</p></div>
+      <a class="diff-plan-back-link" href="{{ '/diff-plans/' + plan_id if plan_id else '/diff-plans' }}">返回</a>
+    </header>
+    <main class="diff-plan-main diff-plan-form-main">
+      <nav class="diff-plan-steps" aria-label="计划配置步骤">
+        <span class="is-active"><b>1</b>基准与表格</span><span><b>2</b>目标分支</span><span><b>3</b>保存计划</span>
+      </nav>
+      <p class="diff-plan-alert hidden" id="form-alert" role="alert"></p>
+      <form id="diff-plan-form" novalidate>
+        <section class="diff-plan-section" aria-labelledby="plan-basic-title">
+          <div class="diff-plan-section-heading"><div><p class="eyebrow">PLAN IDENTITY</p><h2 id="plan-basic-title">计划与基准</h2></div><span>SVN 只读</span></div>
+          <div class="diff-plan-basic-grid">
+            <label><span>计划名称</span><input id="plan-name" type="text" maxlength="128" required autocomplete="off" placeholder="例如：战斗数值核心表"></label>
+            <label><span>基准分支</span><select id="source-endpoint" required disabled><option value="">正在读取分支</option></select></label>
+          </div>
+        </section>
+
+        <section class="diff-plan-builder" aria-label="计划范围">
+          <div class="diff-plan-workbook-pane">
+            <div class="diff-plan-pane-heading">
+              <div><p class="eyebrow">SOURCE TABLE</p><h2>选择 TABLE 表格</h2><p id="catalog-context">选择基准分支后加载 HEAD 清单</p></div>
+              <strong id="workbook-selection-count">0 / 10</strong>
+            </div>
+            <label class="diff-plan-workbook-search"><span>筛选表格</span><input id="workbook-query" type="search" autocomplete="off" placeholder="输入文件名或相对路径" disabled></label>
+            <div class="diff-plan-workbook-list" id="workbook-list"><div class="diff-plan-pane-empty">等待选择基准分支</div></div>
+          </div>
+
+          <div class="diff-plan-target-pane">
+            <div class="diff-plan-pane-heading"><div><p class="eyebrow">TARGET BRANCHES</p><h2>选择目标分支</h2><p>基准分支将分别与每个目标分支比对</p></div><strong id="target-selection-count">0 / 4</strong></div>
+            <div class="diff-plan-target-list" id="target-list"><div class="diff-plan-pane-empty">正在读取可用分支</div></div>
+          </div>
+        </section>
+
+        <details class="diff-plan-revision-settings">
+          <summary>本次运行 Revision 设置</summary>
+          <div class="diff-plan-revision-grid" id="revision-grid"><p>各分支默认使用最新 HEAD。展开后可输入正整数历史 Revision；仅影响“保存并开始”。</p></div>
+        </details>
+
+        <footer class="diff-plan-form-actions">
+          <div><strong id="form-status">尚未保存</strong><span>计划只保存分支与表格范围，不固化 Revision</span></div>
+          <div><button class="secondary" id="save-plan" type="button">仅保存</button><button class="primary" id="save-and-run" type="submit">保存并开始</button></div>
+        </footer>
+      </form>
+    </main>
+  </div>
+</div>
+
+<dialog class="diff-plan-dialog" id="source-change-dialog" aria-labelledby="source-change-title">
+  <form method="dialog">
+    <h2 id="source-change-title">更换基准分支</h2>
+    <p>更换后会清空当前勾选的表格和本次 Revision 设置，目标分支中的新基准也会移除。</p>
+    <div><button class="secondary" value="cancel">取消</button><button class="diff-plan-danger" value="confirm">确认更换</button></div>
+  </form>
+</dialog>
+</body>
+</html>

@@ -47,7 +47,7 @@ def test_monitor_pages_and_static_assets_are_served():
     assert 'id="monitor-detail-dialog"' in tasks.text
 
 
-def test_monitor_navigation_keeps_version_comparison_before_monitoring():
+def test_shared_navigation_keeps_version_plan_and_monitor_order():
     for template_name in (
         "index.html",
         "compare.html",
@@ -59,10 +59,18 @@ def test_monitor_navigation_keeps_version_comparison_before_monitoring():
         text = (ROOT / "app" / "templates" / template_name).read_text(
             encoding="utf-8"
         )
-        assert 'href="/compare"' in text
-        assert 'href="/monitor"' in text
-        assert text.index('href="/compare"') < text.index('href="/monitor"')
-        assert "版本监控" in text
+        assert "{% include '_sidebar.html' %}" in text
+
+    sidebar = (ROOT / "app" / "templates" / "_sidebar.html").read_text(
+        encoding="utf-8"
+    )
+    assert 'href="/compare"' in sidebar
+    assert 'href="/diff-plans"' in sidebar
+    assert 'href="/monitor"' in sidebar
+    assert sidebar.index('href="/compare"') < sidebar.index('href="/diff-plans"')
+    assert sidebar.index('href="/diff-plans"') < sidebar.index('href="/monitor"')
+    assert "表格计划对比" in sidebar
+    assert "版本监控" in sidebar
 
 
 def test_monitor_scripts_keep_url_etag_and_safe_dom_contracts():

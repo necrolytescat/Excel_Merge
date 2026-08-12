@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -40,6 +41,7 @@ from app.services.workbook_dataset_service import (
     WorkbookDatasetResolver,
 )
 from app.services.workbook_diff_service import WorkbookDiffService
+from app.services.workbook_execution_gate import WorkbookExecutionGate
 
 
 logger = logging.getLogger(__name__)
@@ -211,9 +213,11 @@ class DefaultBatchWorkbookRunner:
         self,
         dataset_resolver: WorkbookDatasetResolver,
         diff_service: WorkbookDiffService,
+        execution_gate: WorkbookExecutionGate | None = None,
     ):
         self.dataset_resolver = dataset_resolver
         self.diff_service = diff_service
+        self.execution_gate = execution_gate
 
     def run(
         self,
@@ -229,13 +233,15 @@ class DefaultBatchWorkbookRunner:
             workbook_path=workbook_path,
         )
         workbook_name = PurePosixPath(workbook_path).name
-        with self.dataset_resolver.resolve(payload) as dataset:
-            result = self.diff_service.compare_local(
-                dataset.source_directory,
-                dataset.target_directory,
-                workbook_name,
-            )
-            return serialize_diff_json(result)
+        gate = self.execution_gate.acquire() if self.execution_gate else nullcontext()
+        with gate:
+            with self.dataset_resolver.resolve(payload) as dataset:
+                result = self.diff_service.compare_local(
+                    dataset.source_directory,
+                    dataset.target_directory,
+                    workbook_name,
+                )
+                return serialize_diff_json(result)
 
 
 @dataclass

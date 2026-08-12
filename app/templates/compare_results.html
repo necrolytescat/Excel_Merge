@@ -4,44 +4,27 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" href="data:,">
-  <title>Config Atlas · {{ '离线数据矫正' if replay_mode else ('示例差异结果' if demo_mode else '差异结果') }}</title>
+  <title>Config Atlas · {{ '表格计划对比结果' if m4_run_id else ('离线数据矫正' if replay_mode else ('示例差异结果' if demo_mode else '差异结果')) }}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.3">
   <link rel="stylesheet" href="{{ url_for('static', path='compare_results_readability.css') }}?v=2.1.5">
   <link rel="stylesheet" href="{{ url_for('static', path='compare_results_batch.css') }}?v=1.1.2">
+  <link rel="stylesheet" href="{{ url_for('static', path='diff_plans.css') }}?v=1.1.0">
   {% if replay_mode %}<link rel="stylesheet" href="{{ url_for('static', path='offline_replay.css') }}?v=1.0.0">{% endif %}
   <script src="{{ url_for('static', path='m2_diff_mapper.js') }}?v=1.1.0" defer></script>
   <script src="{{ url_for('static', path='compare_results.js') }}?v=2.3.0" defer></script>
-  <script src="{{ url_for('static', path='compare_results_batch.js') }}?v=1.4.0" defer></script>
+  <script src="{{ url_for('static', path=('diff_plan_run.js' if m4_run_id else 'compare_results_batch.js')) }}?v=1.4.0" defer></script>
   {% if replay_mode %}<script src="{{ url_for('static', path='offline_replay.js') }}?v=1.1.0" defer></script>{% endif %}
 </head>
-<body class="results-readable-page" data-demo-mode="{{ 'true' if demo_mode else 'false' }}" data-replay-mode="{{ 'true' if replay_mode else 'false' }}">
+<body class="{{ 'results-readable-page diff-plan-run-page' if m4_run_id else 'results-readable-page' }}" data-demo-mode="{{ 'true' if demo_mode else 'false' }}" data-replay-mode="{{ 'true' if replay_mode else 'false' }}" data-m4-run-id="{{ m4_run_id or '' }}">
   <div class="app-shell">
-    <aside class="sidebar" aria-label="主导航">
-      <div class="brand">
-        <div class="brand-mark" aria-hidden="true">CA</div>
-        <div><strong>Config Atlas</strong><span>EXCEL REVIEW · READ ONLY</span></div>
-      </div>
-      <nav class="sidebar-nav">
-        <p class="nav-label">系统配置</p>
-        <a class="nav-item" href="/"><span class="nav-icon" aria-hidden="true">⌂</span><span>基础连接</span></a>
-        <p class="nav-label">对比工具</p>
-        <a class="nav-item active" href="/compare" aria-current="page"><span class="nav-icon" aria-hidden="true">⇄</span><span>版本比对</span><span class="nav-current">M2</span></a>
-        <a class="nav-item" href="/monitor"><span class="nav-icon" aria-hidden="true">◉</span><span>版本监控</span><span class="nav-current">M3</span></a>
-        <p class="nav-label">结果</p>
-        <a class="nav-item" href="/compare/history"><span class="nav-icon" aria-hidden="true">▤</span><span>历史任务</span></a>
-      </nav>
-      <div class="sidebar-footer">
-        <span class="sidebar-readonly"><span class="status-dot status-ok"></span> 只读模式</span>
-        <span class="sidebar-version">M2 · Web 工作台</span>
-      </div>
-    </aside>
+    {% include '_sidebar.html' %}
 
     <div class="app-content compare-content">
       <header class="topbar compare-topbar result-topbar">
         <div>
-          <p class="eyebrow">{{ 'OFFLINE DATA CORRECTION' if replay_mode else ('DEVELOPMENT RESULT FIXTURE' if demo_mode else 'VERSION REVIEW / DIFF RESULTS') }}</p>
-          <h1>{{ '离线数据矫正' if replay_mode else ('示例差异结果' if demo_mode else '差异结果') }}</h1>
-          <p class="subtitle">{{ '加载固定原始数据，切换黄金结果与当前代码重算结果。' if replay_mode else '批量任务生成全部工作簿结果；按工作簿、Sheet、业务主键和字段逐层查看。' }}</p>
+          <p class="eyebrow">{{ 'DIFFPLAN / MULTI-BRANCH RESULTS' if m4_run_id else ('OFFLINE DATA CORRECTION' if replay_mode else ('DEVELOPMENT RESULT FIXTURE' if demo_mode else 'VERSION REVIEW / DIFF RESULTS')) }}</p>
+          <h1>{{ '表格计划对比结果' if m4_run_id else ('离线数据矫正' if replay_mode else ('示例差异结果' if demo_mode else '差异结果')) }}</h1>
+          <p class="subtitle">{{ '先从矩阵定位异常分支，再进入单分支复用版本对比明细。' if m4_run_id else ('加载固定原始数据，切换黄金结果与当前代码重算结果。' if replay_mode else '批量任务生成全部工作簿结果；按工作簿、Sheet、业务主键和字段逐层查看。') }}</p>
         </div>
         <div class="result-top-context" role="status" aria-live="polite" aria-label="差异任务上下文">
           <div><span>左侧分支</span><strong id="result-source-label">—</strong></div>
@@ -52,8 +35,8 @@
 
       <div class="result-page-body" id="result-page-body">
         <nav class="task-page-nav" aria-label="Diff 任务页面">
-          <a class="task-page-tab" id="input-page-link" href="{{ '/compare/replay' if replay_mode else ('/compare/demo' if demo_mode else '/compare') }}"><span>1</span><strong>{{ '夹具输入' if replay_mode else '版本与快照' }}</strong></a>
-          <a class="task-page-tab is-active" href="{{ '/compare/replay' if replay_mode else ('/compare/demo/results' if demo_mode else '/compare/results') }}" aria-current="page"><span>2</span><strong>{{ '离线结果' if replay_mode else '差异结果' }}</strong></a>
+          <a class="task-page-tab" id="input-page-link" href="{{ '/diff-plans' if m4_run_id else ('/compare/replay' if replay_mode else ('/compare/demo' if demo_mode else '/compare')) }}"><span>1</span><strong>{{ '计划详情' if m4_run_id else ('夹具输入' if replay_mode else '版本与快照') }}</strong></a>
+          <a class="task-page-tab is-active" href="{{ '/diff-plan-runs/' + m4_run_id if m4_run_id else ('/compare/replay' if replay_mode else ('/compare/demo/results' if demo_mode else '/compare/results')) }}" aria-current="page"><span>2</span><strong>{{ '多分支结果' if m4_run_id else ('离线结果' if replay_mode else '差异结果') }}</strong></a>
         </nav>
 
         <aside class="workbook-pane workbook-sidebar hidden" id="workbook-sidebar" aria-label="工作簿导航">
@@ -69,6 +52,11 @@
 
         <div class="result-page-main">
           <main class="layout compare-layout result-layout">
+        <section class="m4-run-tabs {{ 'hidden' if not m4_run_id else '' }}" id="m4-run-tabs" aria-label="目标分支结果视图"></section>
+        <section class="m4-matrix-panel {{ 'hidden' if not m4_run_id else '' }}" id="m4-matrix-panel" aria-labelledby="m4-matrix-heading">
+          <div class="m4-matrix-heading"><div><p class="eyebrow">ALL BRANCHES</p><h2 id="m4-matrix-heading">全部分支概览</h2><p id="m4-matrix-caption">正在读取冻结运行</p></div></div>
+          <div class="m4-matrix-scroll"><table class="m4-result-matrix"><thead id="m4-matrix-head"></thead><tbody id="m4-matrix-body"></tbody></table></div>
+        </section>
         {% if replay_mode %}
         <section class="offline-fixture-panel" id="offline-fixture-panel" aria-labelledby="offline-fixture-heading">
           <div class="offline-fixture-heading">
@@ -213,7 +201,7 @@
         </section>
           </main>
 
-          <footer>M2-07 · 批量只读差异结果，不执行 Excel 写回或 SVN 写操作</footer>
+          <footer>{{ 'M4 · 多分支计划只读结果，明细复用 m2.diff.v1' if m4_run_id else 'M2-07 · 批量只读差异结果，不执行 Excel 写回或 SVN 写操作' }}</footer>
         </div>
       </div>
     </div>

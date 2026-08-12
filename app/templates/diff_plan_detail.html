@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Config Atlas · 计划详情</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.4">
+  <link rel="stylesheet" href="{{ url_for('static', path='diff_plans.css') }}?v=1.0.0">
+  <script src="{{ url_for('static', path='diff_plan_detail.js') }}?v=1.0.0" defer></script>
+</head>
+<body class="diff-plan-page" data-page="detail" data-plan-id="{{ plan_id }}">
+<div class="app-shell">
+  {% include '_sidebar.html' %}
+  <div class="app-content diff-plan-content">
+    <header class="topbar diff-plan-topbar">
+      <div><p class="eyebrow">DIFFPLAN / DETAIL</p><h1 id="detail-plan-name">正在读取计划</h1><p class="subtitle" id="detail-plan-caption">长期复用的 TABLE 表格对比范围</p></div>
+      <div class="diff-plan-header-actions"><a class="diff-plan-back-link" href="/diff-plans">返回列表</a><a class="diff-plan-primary-link" id="edit-plan-link" href="/diff-plans/{{ plan_id }}/edit">编辑计划</a></div>
+    </header>
+    <main class="diff-plan-main">
+      <p class="diff-plan-alert hidden" id="detail-alert" role="alert"></p>
+      <section class="diff-plan-detail-summary" id="detail-summary" aria-label="计划摘要"><div class="diff-plan-loading"><span class="diff-plan-spinner"></span>正在读取计划</div></section>
+      <section class="diff-plan-section" aria-labelledby="detail-scope-title">
+        <div class="diff-plan-section-heading"><div><p class="eyebrow">SAVED SCOPE</p><h2 id="detail-scope-title">已保存范围</h2></div><button class="diff-plan-text-action" id="archive-plan" type="button" disabled>归档计划</button></div>
+        <div class="diff-plan-detail-grid"><div><h3>目标分支</h3><ul id="detail-targets"></ul></div><div><h3>TABLE 表格</h3><ul id="detail-workbooks"></ul></div></div>
+      </section>
+      <section class="diff-plan-section" aria-labelledby="detail-runs-title">
+        <div class="diff-plan-section-heading"><div><p class="eyebrow">RUN HISTORY</p><h2 id="detail-runs-title">运行历史</h2></div><button class="primary" id="run-plan" type="button" disabled>开始新运行</button></div>
+        <div class="diff-plan-run-history" id="detail-run-history"><div class="diff-plan-loading"><span class="diff-plan-spinner"></span>正在读取运行历史</div></div>
+      </section>
+    </main>
+  </div>
+</div>
+</body>
+</html>

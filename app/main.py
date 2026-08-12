@@ -21,7 +21,7 @@ from fastapi.templating import Jinja2Templates
 
 from core.svn_provider import SVNProviderError, provider_from_config
 
-from app.api import batch, diff, health, monitor, operations, replay, svn
+from app.api import batch, diff, diff_plan, health, monitor, operations, replay, svn
 from app.monitor_runner import build_runner
 from app.services.branch_history_service import BranchHistoryService
 from app.services.monitor_endpoint_catalog import MonitorEndpointCatalog
@@ -50,6 +50,11 @@ from app.services.batch_diff_service import (
     SnapshotBatchCandidateResolver,
 )
 from app.services.batch_store import BatchDiffError, BatchStore
+from app.services.diff_plan_service import DiffPlanService, DiffPlanWorkbookCatalogService
+from app.services.diff_plan_store import DiffPlanError, DiffPlanStore
+from app.services.diff_plan_run_store import DiffPlanRunStore
+from app.services.diff_plan_run_service import DiffPlanRunService
+from app.services.workbook_execution_gate import WorkbookExecutionGate
 from app.services.offline_fixture import OfflineFixtureError, OfflineFixtureService
 from app.services.operations_service import (
     OperationalLogService,
@@ -90,6 +95,8 @@ def create_app(
     batch_diff_service: BatchDiffService | None = None,
     workbook_diff_service: WorkbookDiffService | None = None,
     monitor_web_service: MonitorWebService | None = None,
+    diff_plan_service: DiffPlanService | None = None,
+    diff_plan_run_service: DiffPlanRunService | None = None,
 ) -> FastAPI:
     config = config if config is not None else load_config()
     configured_provider = os.environ.get("EXCEL_MERGE_SVN_PROVIDER", "").strip()
@@ -119,6 +126,23 @@ def create_app(
     app.state.endpoint_registry = SnapshotService.normalize_registry(svn_config.get("endpoint_registry") or DEFAULT_ENDPOINT_REGISTRY)
     app.state.svn_service = SVNService(provider, allowed_schemes=allowed_schemes, preview_limit=preview_limit)
     app.state.snapshot_service = SnapshotService(provider, allowed_schemes=allowed_schemes, max_workers=max_workers, preview_limit=preview_limit)
+    diff_plan_config = config.get("diff_plan", {}) if isinstance(config, dict) else {}
+    configured_diff_plan_db = os.environ.get("EXCEL_MERGE_DIFF_PLAN_DB") or str(
+        diff_plan_config.get("database_path", "var/m4-diff-plan/diff-plan.sqlite3")
+    )
+    diff_plan_database = Path(configured_diff_plan_db)
+    if not diff_plan_database.is_absolute():
+        diff_plan_database = PROJECT_ROOT / diff_plan_database
+    diff_plan_store = diff_plan_service.store if diff_plan_service is not None else DiffPlanStore(diff_plan_database)
+    app.state.diff_plan_service = diff_plan_service or DiffPlanService(
+        diff_plan_store,
+        DiffPlanWorkbookCatalogService(
+            provider,
+            app.state.snapshot_service,
+            lambda: getattr(app.state, "endpoint_registry", []),
+        ),
+        lambda: getattr(app.state, "endpoint_registry", []),
+    )
     app.state.monitor_endpoint_catalog = MonitorEndpointCatalog(
         app.state.svn_service,
         server_url=lambda: str(getattr(app.state, "default_url", "")),
@@ -162,7 +186,11 @@ def create_app(
         client=svn_client,
         enabled=provider_name == "cli" and cache_directory is not None,
         allow_clear=bool(operations_config.get("allow_cache_clear", True)),
-        excluded_roots=(PROJECT_ROOT / "var" / "m2-fixtures", PROJECT_ROOT / "var" / "m2-batch"),
+        excluded_roots=(
+            PROJECT_ROOT / "var" / "m2-fixtures",
+            PROJECT_ROOT / "var" / "m2-batch",
+            diff_plan_database.parent,
+        ),
     )
     dataset_layout = config.get("dataset_layout") if isinstance(config, dict) else None
     app.state.workbook_diff_service = workbook_diff_service or (
@@ -181,6 +209,10 @@ def create_app(
         )
     else:
         app.state.workbook_dataset_resolver = UnavailableWorkbookDatasetResolver()
+
+    workbook_execution_gate = WorkbookExecutionGate(
+        int(diff_plan_config.get("workbook_concurrency", 2))
+    )
 
     if batch_diff_service is not None:
         app.state.batch_diff_service = batch_diff_service
@@ -210,6 +242,7 @@ def create_app(
         workbook_runner = DefaultBatchWorkbookRunner(
             app.state.workbook_dataset_resolver,
             app.state.workbook_diff_service,
+            workbook_execution_gate,
         )
         app.state.batch_diff_service = BatchDiffService(
             BatchStore(
@@ -223,6 +256,34 @@ def create_app(
         )
     else:
         app.state.batch_diff_service = None
+
+    app.state.diff_plan_run_service = diff_plan_run_service
+    if app.state.diff_plan_run_service is None and (
+        isinstance(dataset_layout, dict)
+        and app.state.workbook_diff_service is not None
+        and not isinstance(app.state.workbook_dataset_resolver, UnavailableWorkbookDatasetResolver)
+    ):
+        results_directory = diff_plan_database.parent / "results"
+        m4_runner = DefaultBatchWorkbookRunner(
+            app.state.workbook_dataset_resolver,
+            app.state.workbook_diff_service,
+            workbook_execution_gate,
+        )
+        m4_run_store = DiffPlanRunStore(
+            diff_plan_database,
+            results_directory,
+            retention_days=int(diff_plan_config.get("detail_retention_days", 30)),
+        )
+        app.state.diff_plan_run_service = DiffPlanRunService(
+            plan_store=diff_plan_store,
+            run_store=m4_run_store,
+            snapshot_service=app.state.snapshot_service,
+            provider=provider,
+            endpoint_registry=lambda: getattr(app.state, "endpoint_registry", []),
+            workbook_runner=m4_runner,
+            cleanup_interval_seconds=float(diff_plan_config.get("cleanup_interval_seconds", 3600)),
+        )
+        app.state.diff_plan_service.recent_run = m4_run_store.latest_run
 
     app.state.monitor_web_service = monitor_web_service
     if app.state.monitor_web_service is None and os.name == "nt" and hasattr(
@@ -275,6 +336,16 @@ def create_app(
         if service is not None:
             service.close()
 
+    def close_diff_plan_run_service() -> None:
+        service = getattr(app.state, "diff_plan_run_service", None)
+        if service is not None:
+            service.close()
+
+    def start_diff_plan_run_service() -> None:
+        service = getattr(app.state, "diff_plan_run_service", None)
+        if service is not None and hasattr(service, "start"):
+            service.start()
+
     def start_operations_logging() -> None:
         if app.state.operations_logging_enabled:
             app.state.operational_log_service.start()
@@ -295,7 +366,9 @@ def create_app(
 
     app.add_event_handler("startup", start_operations_logging)
     app.add_event_handler("startup", start_monitor_web_service)
+    app.add_event_handler("startup", start_diff_plan_run_service)
     app.add_event_handler("shutdown", close_batch_service)
+    app.add_event_handler("shutdown", close_diff_plan_run_service)
     app.add_event_handler("shutdown", close_operations_logging)
     app.add_event_handler("shutdown", close_monitor_web_service)
 
@@ -383,6 +456,64 @@ def create_app(
                 "request": request,
                 "provider": provider_name,
                 "active_page": "history",
+            },
+        )
+
+    @app.get("/diff-plans", include_in_schema=False)
+    def diff_plan_index(request: Request):
+        return templates.TemplateResponse(
+            "diff_plans.html",
+            {"request": request, "provider": provider_name, "active_page": "diff_plans"},
+        )
+
+    @app.get("/diff-plans/new", include_in_schema=False)
+    def diff_plan_new(request: Request):
+        return templates.TemplateResponse(
+            "diff_plan_form.html",
+            {
+                "request": request,
+                "provider": provider_name,
+                "active_page": "diff_plans",
+                "plan_id": None,
+            },
+        )
+
+    @app.get("/diff-plans/{plan_id}", include_in_schema=False)
+    def diff_plan_detail(plan_id: UUID, request: Request):
+        return templates.TemplateResponse(
+            "diff_plan_detail.html",
+            {
+                "request": request,
+                "provider": provider_name,
+                "active_page": "diff_plans",
+                "plan_id": str(plan_id),
+            },
+        )
+
+    @app.get("/diff-plans/{plan_id}/edit", include_in_schema=False)
+    def diff_plan_edit(plan_id: UUID, request: Request):
+        return templates.TemplateResponse(
+            "diff_plan_form.html",
+            {
+                "request": request,
+                "provider": provider_name,
+                "active_page": "diff_plans",
+                "plan_id": str(plan_id),
+            },
+        )
+
+    @app.get("/diff-plan-runs/{run_id}", include_in_schema=False)
+    def diff_plan_run_result(run_id: UUID, request: Request):
+        return templates.TemplateResponse(
+            "compare_results.html",
+            {
+                "request": request,
+                "provider": provider_name,
+                "active_page": "diff_plans",
+                "run_id": str(run_id),
+                "m4_run_id": str(run_id),
+                "demo_mode": False,
+                "replay_mode": False,
             },
         )
 
@@ -481,6 +612,13 @@ def create_app(
             content={"error": {"code": exc.code, "message": exc.message}},
         )
 
+    @app.exception_handler(DiffPlanError)
+    async def diff_plan_error_handler(_: Request, exc: DiffPlanError):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"code": exc.code, "message": exc.message}},
+        )
+
 
     @app.exception_handler(OfflineFixtureError)
     async def offline_fixture_error_handler(_: Request, exc: OfflineFixtureError):
@@ -502,6 +640,16 @@ def create_app(
         )
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError):
+        if request.url.path.startswith("/api/diff-plans"):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "code": "DIFF_PLAN_INVALID_REQUEST",
+                        "message": "表格计划对比请求无效",
+                    }
+                },
+            )
         if request.url.path.startswith("/api/operations/"):
             return JSONResponse(
                 status_code=400,
@@ -559,6 +707,7 @@ def create_app(
     app.include_router(health.router, prefix="/api")
     app.include_router(svn.router, prefix="/api")
     app.include_router(diff.router, prefix="/api")
+    app.include_router(diff_plan.router, prefix="/api")
     app.include_router(batch.router, prefix="/api")
     app.include_router(operations.router, prefix="/api")
     app.include_router(monitor.router, prefix="/api")

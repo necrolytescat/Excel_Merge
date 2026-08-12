@@ -1233,6 +1233,7 @@
       path = result.candidate.path;
     }
     state.selectedPath = path;
+    globalThis.M4DiffPlanRuntime?.onWorkbookSelected?.(path);
     destroySheetView();
     state.selectedSheet = null;
     renderWorkbookNavigation();
@@ -1450,6 +1451,10 @@
   }
 
   function loadContext() {
+    if (document.body.dataset.m4RunId) {
+      showMissingContext();
+      return;
+    }
     if (document.body.dataset.replayMode === "true") {
       showMissingContext();
       return;

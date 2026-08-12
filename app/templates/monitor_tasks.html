@@ -11,16 +11,7 @@
 </head>
 <body>
 <div class="app-shell">
-  <aside class="sidebar" aria-label="主导航">
-    <div class="brand"><div class="brand-mark" aria-hidden="true">CA</div><div><strong>Config Atlas</strong><span>EXCEL REVIEW · READ ONLY</span></div></div>
-    <nav class="sidebar-nav">
-      <p class="nav-label">系统配置</p><a class="nav-item" href="/"><span class="nav-icon" aria-hidden="true">⌂</span><span>基础连接</span></a>
-      <p class="nav-label">对比工具</p><a class="nav-item" href="/compare"><span class="nav-icon" aria-hidden="true">⇄</span><span>版本比对</span><span class="nav-current">M2</span></a>
-      <a class="nav-item active" href="/monitor" aria-current="page"><span class="nav-icon" aria-hidden="true">◉</span><span>版本监控</span><span class="nav-current">M3</span></a>
-      <p class="nav-label">结果</p><a class="nav-item" href="/compare/history"><span class="nav-icon" aria-hidden="true">▤</span><span>历史任务</span></a>
-    </nav>
-    <div class="sidebar-footer"><span class="sidebar-readonly"><span class="status-dot status-ok"></span> SVN 只读</span><span class="sidebar-version">M3 · 每日监控</span></div>
-  </aside>
+  {% include '_sidebar.html' %}
   <div class="app-content monitor-content">
     <header class="topbar monitor-topbar"><div><p class="eyebrow">VERSION MONITOR / TASK INDEX</p><h1>监控任务</h1><p class="subtitle">运行、调度与报告状态</p></div><a class="monitor-primary-link" href="/monitor">新建任务</a></header>
     <nav class="monitor-tabs" aria-label="版本监控页面"><a href="/monitor">新建与概览</a><a class="is-active" href="/monitor/tasks" aria-current="page">全部任务</a></nav>

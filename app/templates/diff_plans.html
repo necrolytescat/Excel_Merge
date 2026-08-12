@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Config Atlas · 表格计划对比</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.4">
+  <link rel="stylesheet" href="{{ url_for('static', path='diff_plans.css') }}?v=1.0.0">
+  <script src="{{ url_for('static', path='diff_plans.js') }}?v=1.0.0" defer></script>
+</head>
+<body class="diff-plan-page" data-page="index">
+<div class="app-shell">
+  {% include '_sidebar.html' %}
+  <div class="app-content diff-plan-content">
+    <header class="topbar diff-plan-topbar">
+      <div><p class="eyebrow">DIFFPLAN / SAVED WORKBOOK SETS</p><h1>表格计划对比</h1><p class="subtitle">保存常用表格清单，在多个已提交分支间重复执行语义比对</p></div>
+      <a class="diff-plan-primary-link" href="/diff-plans/new">新建计划</a>
+    </header>
+    <main class="diff-plan-main">
+      <nav class="diff-plan-view-switch" aria-label="计划状态范围">
+        <button type="button" class="is-selected" data-plan-view="active" aria-pressed="true">有效计划</button>
+        <button type="button" data-plan-view="archived" aria-pressed="false">已归档</button>
+      </nav>
+      <section class="diff-plan-toolbar" aria-labelledby="plan-index-title">
+        <div><p class="eyebrow">PLAN INDEX</p><h2 id="plan-index-title">计划列表</h2><p id="plan-list-meta">正在读取计划</p></div>
+        <label class="diff-plan-search"><span>搜索计划</span><input id="plan-query" type="search" maxlength="128" autocomplete="off" placeholder="名称、分支或表格路径"></label>
+      </section>
+      <p class="diff-plan-alert hidden" id="plan-alert" role="alert"></p>
+      <section class="diff-plan-list" id="plan-list" aria-live="polite">
+        <div class="diff-plan-loading"><span class="diff-plan-spinner" aria-hidden="true"></span>正在读取计划</div>
+      </section>
+      <section class="diff-plan-empty hidden" id="plan-empty">
+        <span aria-hidden="true">☷</span><strong>暂无有效计划</strong><p>创建计划后，可以重复选择最新 SVN Revision 执行表格比对。</p><a class="primary" href="/diff-plans/new">新建计划</a>
+      </section>
+    </main>
+  </div>
+</div>
+</body>
+</html>
