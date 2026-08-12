@@ -144,17 +144,28 @@ try {
 
     await navigate(`${baseUrl}/diff-plans/new`, viewport.width, viewport.height);
     await retry(async () => {
-      const enabled = await evaluate("!document.querySelector('#source-endpoint').disabled");
+      const enabled = await evaluate("!document.querySelector('#source-endpoint-query').disabled");
       if (!enabled) throw new Error("分支列表尚未加载");
       return enabled;
     });
-    const endpointCount = await evaluate("document.querySelector('#source-endpoint').options.length - 1");
-    assert(endpointCount >= 2, `${viewport.name}: 可用分支不足，无法验证多分支选择`);
-    await evaluate(`(() => {
-      const source = document.querySelector('#source-endpoint');
-      source.value = source.options[1].value;
-      source.dispatchEvent(new Event('change', { bubbles: true }));
+    const endpointCount = await evaluate("document.querySelectorAll('#source-endpoint-options [data-endpoint-id]').length");
+    assert(endpointCount > 2, `${viewport.name}: 页面仍只加载已登记端点，未合并 SVN 候选`);
+    const fuzzyBranches = await evaluate(`(() => {
+      const query = document.querySelector('#source-endpoint-query');
+      query.value = 'TC-Fix-5.0.1';
+      query.dispatchEvent(new Event('input', { bubbles: true }));
+      return [...document.querySelectorAll('#source-endpoint-options [data-endpoint-id] span')].map((node) => node.textContent.trim());
     })()`);
+    assert(fuzzyBranches.includes("TC-Fix-5.0.1.0"), `${viewport.name}: 模糊搜索未匹配 TC-Fix-5.0.1.0`);
+    assert(fuzzyBranches.includes("TC-Fix-5.0.10.0"), `${viewport.name}: 模糊搜索未匹配 TC-Fix-5.0.10.0`);
+    const selectedSource = await evaluate(`(() => {
+      const query = document.querySelector('#source-endpoint-query');
+      query.value = 'KR-Fix-1.0.0.0';
+      query.dispatchEvent(new Event('input', { bubbles: true }));
+      query.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      return document.querySelector('#source-endpoint').value;
+    })()`);
+    assert(selectedSource, `${viewport.name}: 基准分支键盘选择失败`);
     await retry(async () => {
       const loaded = await evaluate("!document.querySelector('#workbook-query').disabled && document.querySelectorAll('[data-workbook-choice]').length > 0");
       if (!loaded) throw new Error("TABLE 工作簿清单尚未加载");
@@ -162,6 +173,9 @@ try {
     }, 120);
     const interaction = await evaluate(`(() => {
       const workbook = document.querySelector('[data-workbook-choice] input');
+      const targetQuery = document.querySelector('#target-endpoint-query');
+      targetQuery.value = 'KR-Fix';
+      targetQuery.dispatchEvent(new Event('input', { bubbles: true }));
       const target = document.querySelector('[data-target-choice] input');
       workbook.click();
       target.click();
@@ -185,14 +199,15 @@ try {
 
   await navigate(`${baseUrl}/diff-plans/new`, 1440, 1000);
   await retry(async () => {
-    const enabled = await evaluate("!document.querySelector('#source-endpoint').disabled");
+    const enabled = await evaluate("!document.querySelector('#source-endpoint-query').disabled");
     if (!enabled) throw new Error("生命周期检查：分支列表尚未加载");
     return enabled;
   });
   await evaluate(`(() => {
-    const source = document.querySelector('#source-endpoint');
-    source.value = source.options[1].value;
-    source.dispatchEvent(new Event('change', { bubbles: true }));
+    const query = document.querySelector('#source-endpoint-query');
+    query.value = 'KR-Fix-1.0.0.0';
+    query.dispatchEvent(new Event('input', { bubbles: true }));
+    query.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
   })()`);
   await retry(async () => {
     const loaded = await evaluate("!document.querySelector('#workbook-query').disabled && document.querySelectorAll('[data-workbook-choice]').length > 0");
@@ -202,6 +217,9 @@ try {
   await evaluate(`(() => {
     document.querySelector('#plan-name').value = 'M4 浏览器隔离验收计划';
     document.querySelector('[data-workbook-choice] input').click();
+    const targetQuery = document.querySelector('#target-endpoint-query');
+    targetQuery.value = 'KR-Fix-1.0.2.0';
+    targetQuery.dispatchEvent(new Event('input', { bubbles: true }));
     document.querySelector('[data-target-choice] input').click();
     document.querySelector('#save-plan').click();
   })()`);

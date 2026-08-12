@@ -6,8 +6,8 @@
   <link rel="icon" href="data:,">
   <title>Config Atlas · {{ '编辑' if plan_id else '新建' }}表格计划</title>
   <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.4">
-  <link rel="stylesheet" href="{{ url_for('static', path='diff_plans.css') }}?v=1.0.0">
-  <script src="{{ url_for('static', path='diff_plan_form.js') }}?v=1.0.0" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', path='diff_plans.css') }}?v=1.1.0">
+  <script src="{{ url_for('static', path='diff_plan_form.js') }}?v=1.1.0" defer></script>
 </head>
 <body class="diff-plan-page" data-page="form" data-plan-id="{{ plan_id or '' }}">
 <div class="app-shell">
@@ -27,7 +27,17 @@
           <div class="diff-plan-section-heading"><div><p class="eyebrow">PLAN IDENTITY</p><h2 id="plan-basic-title">计划与基准</h2></div><span>SVN 只读</span></div>
           <div class="diff-plan-basic-grid">
             <label><span>计划名称</span><input id="plan-name" type="text" maxlength="128" required autocomplete="off" placeholder="例如：战斗数值核心表"></label>
-            <label><span>基准分支</span><select id="source-endpoint" required disabled><option value="">正在读取分支</option></select></label>
+            <label class="diff-plan-endpoint-field"><span>基准分支</span>
+              <select class="hidden" id="source-endpoint" required disabled aria-hidden="true"><option value="">正在读取分支</option></select>
+              <div class="diff-plan-combobox" id="source-combobox">
+                <div class="diff-plan-combobox-control">
+                  <input id="source-endpoint-query" type="search" autocomplete="off" placeholder="搜索主干或 Fix 分支" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="source-endpoint-options" disabled>
+                  <button id="source-endpoint-toggle" type="button" aria-label="展开基准分支列表" aria-expanded="false" disabled><span aria-hidden="true">⌄</span></button>
+                </div>
+                <div class="diff-plan-combobox-panel hidden" id="source-endpoint-options" role="listbox" aria-label="基准分支匹配结果"></div>
+              </div>
+              <small class="diff-plan-endpoint-state" id="source-endpoint-state" aria-live="polite">正在读取 SVN 分支</small>
+            </label>
           </div>
         </section>
 
@@ -43,7 +53,14 @@
 
           <div class="diff-plan-target-pane">
             <div class="diff-plan-pane-heading"><div><p class="eyebrow">TARGET BRANCHES</p><h2>选择目标分支</h2><p>基准分支将分别与每个目标分支比对</p></div><strong id="target-selection-count">0 / 4</strong></div>
-            <div class="diff-plan-target-list" id="target-list"><div class="diff-plan-pane-empty">正在读取可用分支</div></div>
+            <div class="diff-plan-combobox diff-plan-target-combobox" id="target-combobox">
+              <div class="diff-plan-combobox-control">
+                <input id="target-endpoint-query" type="search" autocomplete="off" placeholder="搜索并勾选目标分支" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="target-list" disabled>
+                <button id="target-endpoint-toggle" type="button" aria-label="展开目标分支列表" aria-expanded="false" disabled><span aria-hidden="true">⌄</span></button>
+              </div>
+              <div class="diff-plan-combobox-panel diff-plan-target-list hidden" id="target-list" role="listbox" aria-multiselectable="true"><div class="diff-plan-pane-empty">正在读取可用分支</div></div>
+            </div>
+            <small class="diff-plan-endpoint-state" id="target-endpoint-state" aria-live="polite">最多选择 4 个目标分支</small>
           </div>
         </section>
 

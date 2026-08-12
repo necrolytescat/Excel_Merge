@@ -52,6 +52,25 @@
 .diff-plan-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 15px; }
 .diff-plan-section-heading > span { color: #667085; font-size: 11px; }
 .diff-plan-basic-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 14px; }
+.diff-plan-endpoint-field { min-width: 0; }
+.diff-plan-combobox { position: relative; min-width: 0; }
+.diff-plan-combobox-control { position: relative; min-width: 0; }
+.diff-plan-combobox-control input { width: 100%; padding-right: 42px; }
+.diff-plan-combobox-control button { position: absolute; top: 1px; right: 1px; bottom: 1px; display: grid; width: 38px; min-height: 0; place-items: center; border: 0; border-left: 1px solid #eaecf0; border-radius: 0 5px 5px 0; background: #fff; color: #475467; padding: 0; font-size: 16px; }
+.diff-plan-combobox-control button:hover:not(:disabled) { background: #f8f9fc; color: #172033; }
+.diff-plan-combobox-control button:focus-visible { z-index: 1; outline: 2px solid #2f5bea; outline-offset: -2px; }
+.diff-plan-combobox-panel { position: absolute; z-index: 30; top: calc(100% + 5px); right: 0; left: 0; max-height: 300px; overflow-y: auto; border: 1px solid #b8c7e8; border-radius: 6px; background: #fff; box-shadow: 0 10px 24px rgba(16, 24, 40, .14); padding: 4px; }
+.diff-plan-endpoint-option { display: grid; width: 100%; min-height: 48px; align-content: center; gap: 3px; border: 0; border-radius: 4px; background: transparent; color: #344054; padding: 7px 9px; text-align: left; }
+.diff-plan-endpoint-option:hover,
+.diff-plan-endpoint-option:focus-visible { background: #f2f4f7; outline: 0; }
+.diff-plan-endpoint-option.is-selected { background: #eef2ff; color: #2647b7; }
+.diff-plan-endpoint-option span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 800; }
+.diff-plan-endpoint-option small { overflow: hidden; color: #667085; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.diff-plan-target-combobox { margin-top: 14px; }
+.diff-plan-target-combobox .diff-plan-combobox-panel { max-height: 316px; }
+.diff-plan-target-combobox .diff-plan-choice { padding-right: 8px; padding-left: 8px; }
+.diff-plan-target-combobox .diff-plan-choice[aria-selected="true"] { background: #eef2ff; }
+.diff-plan-endpoint-state { display: block; overflow: hidden; margin-top: 6px; color: #667085; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .diff-plan-page select { width: 100%; border: 1px solid #d0d5dd; border-radius: 6px; background: #fff; color: #172033; padding: 10px 11px; font: inherit; }
 .diff-plan-page select:focus,
 .diff-plan-page input:focus { border-color: #2f5bea; box-shadow: 0 0 0 3px #eef2ff; outline: 0; }
@@ -65,6 +84,7 @@
 .diff-plan-workbook-search { margin-top: 14px; }
 .diff-plan-workbook-list,
 .diff-plan-target-list { display: grid; align-content: start; max-height: 316px; overflow-y: auto; margin-top: 12px; border-top: 1px solid #eaecf0; }
+.diff-plan-combobox-panel.diff-plan-target-list { margin-top: 0; border-top: 1px solid #b8c7e8; }
 .diff-plan-choice { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 48px; border-bottom: 1px solid #eaecf0; color: #344054; cursor: pointer; padding: 8px 4px; }
 .diff-plan-choice:hover { background: #f8f9fc; }
 .diff-plan-choice input { width: 15px; height: 15px; margin: 0; accent-color: #2f5bea; }
@@ -132,6 +152,7 @@
   .diff-plan-basic-grid,
   .diff-plan-revision-grid,
   .diff-plan-detail-grid { grid-template-columns: 1fr; }
+  .diff-plan-combobox-panel { max-height: min(300px, 48vh); }
   .diff-plan-form-actions { align-items: stretch; flex-direction: column; }
   .diff-plan-form-actions > div:last-child { display: grid; grid-template-columns: 1fr 1fr; }
   .diff-plan-detail-summary { grid-template-columns: 1fr; }

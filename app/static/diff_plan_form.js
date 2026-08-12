@@ -2,10 +2,17 @@
   const body = document.body;
   const planId = body.dataset.planId || "";
   const source = document.getElementById("source-endpoint");
+  const sourceQuery = document.getElementById("source-endpoint-query");
+  const sourceOptions = document.getElementById("source-endpoint-options");
+  const sourceToggle = document.getElementById("source-endpoint-toggle");
+  const sourceState = document.getElementById("source-endpoint-state");
+  const targetQuery = document.getElementById("target-endpoint-query");
+  const targetToggle = document.getElementById("target-endpoint-toggle");
+  const targetList = document.getElementById("target-list");
+  const targetState = document.getElementById("target-endpoint-state");
   const nameInput = document.getElementById("plan-name");
   const workbookQuery = document.getElementById("workbook-query");
   const workbookList = document.getElementById("workbook-list");
-  const targetList = document.getElementById("target-list");
   const workbookCount = document.getElementById("workbook-selection-count");
   const targetCount = document.getElementById("target-selection-count");
   const catalogContext = document.getElementById("catalog-context");
@@ -18,6 +25,7 @@
   const sourceDialog = document.getElementById("source-change-dialog");
   const state = {
     endpoints: [],
+    registryRecords: [],
     workbooks: [],
     selectedWorkbooks: new Set(),
     selectedTargets: new Set(),
@@ -25,7 +33,6 @@
     version: null,
     initialSource: "",
     pendingSource: "",
-    loading: false,
   };
 
   function requestId() {
@@ -49,8 +56,168 @@
     alert.textContent = "";
   }
 
+  function endpointIdForMatch(match) {
+    return (match.region + "_" + match.track + "_" + match.branch)
+      .replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 128);
+  }
+
+  function endpointBranch(endpoint) {
+    if (endpoint?.branch) return endpoint.branch;
+    const parts = String(endpoint?.label || "").split("·");
+    if (parts.length > 1) return parts[parts.length - 1].trim();
+    try {
+      const path = new URL(endpoint?.url || "").pathname.replace(/\/$/, "");
+      return decodeURIComponent(path.split("/").pop() || endpoint?.id || "");
+    } catch {
+      return endpoint?.id || "";
+    }
+  }
+
+  function recordFromMatch(match) {
+    return {
+      id: endpointIdForMatch(match),
+      region: match.region,
+      track: match.track,
+      label: match.label || match.branch,
+      url: match.url,
+      logical_scopes: ["TABLE"],
+      physical_path_filters: {},
+      enabled: true,
+      branch: match.branch,
+      match_type: match.match_type,
+      pendingRegistration: true,
+    };
+  }
+
+  function mergeEndpointSources(records, matches) {
+    state.registryRecords = records || [];
+    const endpoints = new Map();
+    state.registryRecords.forEach((record) => endpoints.set(record.id, { ...record, pendingRegistration: false }));
+    (matches || []).forEach((match) => {
+      const candidate = recordFromMatch(match);
+      if (!endpoints.has(candidate.id)) endpoints.set(candidate.id, candidate);
+    });
+    state.endpoints = [...endpoints.values()]
+      .filter((endpoint) => endpoint.enabled)
+      .sort((left, right) => endpointBranch(left).localeCompare(endpointBranch(right), "zh-CN", { numeric: true }));
+  }
+
+  function endpointById(id) {
+    return state.endpoints.find((item) => item.id === id);
+  }
+
   function endpointLabel(id) {
-    return state.endpoints.find((item) => item.id === id)?.label || id;
+    return endpointById(id)?.label || id;
+  }
+
+  function matchingEndpoints(query, { excludeSource = false } = {}) {
+    const normalized = String(query || "").trim().toLocaleLowerCase();
+    return state.endpoints.filter((endpoint) => {
+      if (excludeSource && endpoint.id === source.value) return false;
+      return !normalized || [endpointBranch(endpoint), endpoint.label, endpoint.region, endpoint.track]
+        .some((value) => String(value || "").toLocaleLowerCase().includes(normalized));
+    });
+  }
+
+  async function ensureEndpointsRegistered(endpointIds) {
+    const pending = [...new Set(endpointIds)]
+      .map(endpointById)
+      .filter((endpoint) => endpoint?.pendingRegistration);
+    if (!pending.length) return;
+    const records = new Map(state.registryRecords.map((record) => [record.id, record]));
+    pending.forEach((endpoint) => {
+      const { pendingRegistration, branch, match_type, ...record } = endpoint;
+      records.set(record.id, record);
+    });
+    const payload = await api("/api/svn/endpoints", {
+      method: "POST",
+      body: JSON.stringify({ endpoints: [...records.values()] }),
+    });
+    state.registryRecords = payload.endpoints || [];
+    const registered = new Map(state.registryRecords.map((record) => [record.id, record]));
+    state.endpoints = state.endpoints.map((endpoint) => {
+      const record = registered.get(endpoint.id);
+      return record ? { ...record, branch: endpointBranch(endpoint), match_type: endpoint.match_type, pendingRegistration: false } : endpoint;
+    });
+  }
+
+  function setComboboxOpen(kind, open) {
+    const input = kind === "source" ? sourceQuery : targetQuery;
+    const button = kind === "source" ? sourceToggle : targetToggle;
+    const panel = kind === "source" ? sourceOptions : targetList;
+    panel.classList.toggle("hidden", !open);
+    input.setAttribute("aria-expanded", String(open));
+    button.setAttribute("aria-expanded", String(open));
+    if (open) kind === "source" ? renderSourceOptions() : renderTargets();
+  }
+
+  function bindOptionKeyboard(panel, kind) {
+    panel.addEventListener("keydown", (event) => {
+      if (!["ArrowDown", "ArrowUp", "Escape"].includes(event.key)) return;
+      event.preventDefault();
+      if (event.key === "Escape") {
+        setComboboxOpen(kind, false);
+        (kind === "source" ? sourceQuery : targetQuery).focus();
+        return;
+      }
+      const options = [...panel.querySelectorAll("button:not(:disabled), input:not(:disabled)")];
+      const index = options.indexOf(document.activeElement);
+      const next = event.key === "ArrowDown"
+        ? Math.min(options.length - 1, index + 1)
+        : Math.max(0, index - 1);
+      options[next]?.focus();
+    });
+  }
+
+  function bindComboboxInput(input, toggle, kind) {
+    input.addEventListener("focus", () => setComboboxOpen(kind, true));
+    input.addEventListener("input", () => setComboboxOpen(kind, true));
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        setComboboxOpen(kind, false);
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setComboboxOpen(kind, true);
+        const panel = kind === "source" ? sourceOptions : targetList;
+        panel.querySelector("button:not(:disabled), input:not(:disabled)")?.focus();
+      } else if (event.key === "Enter" && kind === "source") {
+        const option = sourceOptions.querySelector("button[data-endpoint-id]");
+        if (option) { event.preventDefault(); option.click(); }
+      }
+    });
+    toggle.addEventListener("click", () => {
+      const panel = kind === "source" ? sourceOptions : targetList;
+      setComboboxOpen(kind, panel.classList.contains("hidden"));
+      input.focus();
+    });
+  }
+
+  function renderSourceOptions() {
+    const matches = matchingEndpoints(sourceQuery.value);
+    sourceOptions.replaceChildren();
+    sourceState.textContent = "匹配到 " + matches.length + " 个分支";
+    if (!matches.length) {
+      const empty = document.createElement("div");
+      empty.className = "diff-plan-pane-empty";
+      empty.textContent = "没有匹配的 SVN 分支";
+      sourceOptions.append(empty);
+      return;
+    }
+    matches.forEach((endpoint) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.role = "option";
+      button.dataset.endpointId = endpoint.id;
+      button.className = "diff-plan-endpoint-option" + (endpoint.id === source.value ? " is-selected" : "");
+      button.setAttribute("aria-selected", String(endpoint.id === source.value));
+      const name = document.createElement("span");
+      name.textContent = endpointBranch(endpoint);
+      const meta = document.createElement("small");
+      meta.textContent = endpoint.region + " · " + endpoint.track + (endpoint.pendingRegistration ? " · SVN 候选" : "");
+      button.append(name, meta);
+      button.addEventListener("click", () => requestSource(endpoint.id));
+      sourceOptions.append(button);
+    });
   }
 
   function formatBytes(value) {
@@ -71,6 +238,7 @@
       input.disabled = !input.checked && state.selectedTargets.size >= 4;
       input.closest("label").classList.toggle("is-disabled", input.disabled);
     });
+    targetState.textContent = "已选择 " + state.selectedTargets.size + " 个 · 共 " + matchingEndpoints("", { excludeSource: true }).length + " 个可选";
     renderRevisions();
   }
 
@@ -108,19 +276,22 @@
   }
 
   function renderTargets() {
+    const choices = matchingEndpoints(targetQuery.value, { excludeSource: true });
     targetList.replaceChildren();
-    const choices = state.endpoints.filter((item) => item.enabled && item.id !== source.value);
     if (!choices.length) {
       const empty = document.createElement("div");
       empty.className = "diff-plan-pane-empty";
-      empty.textContent = "没有其他可用分支";
+      empty.textContent = state.endpoints.length ? "没有匹配的目标分支" : "没有其他可用分支";
       targetList.append(empty);
+      syncCounts();
       return;
     }
     choices.forEach((item) => {
       const row = document.createElement("label");
       row.className = "diff-plan-choice";
       row.dataset.targetChoice = item.id;
+      row.role = "option";
+      row.setAttribute("aria-selected", String(state.selectedTargets.has(item.id)));
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
       checkbox.checked = state.selectedTargets.has(item.id);
@@ -130,12 +301,13 @@
           state.selectedTargets.delete(item.id);
           state.revisions.delete(item.id);
         }
+        row.setAttribute("aria-selected", String(checkbox.checked));
         syncCounts();
       });
       const label = document.createElement("span");
-      label.textContent = item.label;
+      label.textContent = endpointBranch(item);
       const meta = document.createElement("small");
-      meta.textContent = item.region + " · " + item.track;
+      meta.textContent = item.region + " · " + item.track + (item.pendingRegistration ? " · SVN 候选" : "");
       row.append(checkbox, label, meta);
       targetList.append(row);
     });
@@ -172,6 +344,7 @@
     workbookQuery.disabled = true;
     catalogContext.textContent = "正在冻结 " + endpointLabel(endpointId) + " 的 HEAD";
     try {
+      await ensureEndpointsRegistered([endpointId]);
       const payload = await api("/api/diff-plans/workbook-catalog", {
         method: "POST",
         body: JSON.stringify({ schema_version: "m4.workbook-catalog.request.v1", endpoint_id: endpointId, revision: "HEAD" }),
@@ -182,6 +355,7 @@
       workbookQuery.disabled = false;
       catalogContext.textContent = endpointLabel(endpointId) + " · r" + payload.resolved_revision + " · TABLE 共 " + payload.total + " 张";
       renderWorkbooks();
+      renderSourceOptions();
     } catch (error) {
       state.workbooks = [];
       workbookList.innerHTML = '<div class="diff-plan-pane-empty">TABLE 清单加载失败</div>';
@@ -191,31 +365,66 @@
   }
 
   function applySource(endpointId, { reset = false } = {}) {
+    const endpoint = endpointById(endpointId);
     source.value = endpointId;
+    sourceQuery.value = endpoint ? endpointBranch(endpoint) : endpointId;
+    setComboboxOpen("source", false);
     if (reset) {
       state.selectedWorkbooks.clear();
       state.revisions.clear();
     }
     state.selectedTargets.delete(endpointId);
+    targetQuery.disabled = false;
+    targetToggle.disabled = false;
+    targetQuery.value = "";
     renderTargets();
     void loadCatalog(endpointId);
   }
 
+  function requestSource(endpointId) {
+    if (!endpointId || endpointId === source.value) {
+      setComboboxOpen("source", false);
+      return;
+    }
+    const previous = state.initialSource || source.value;
+    if (previous && state.selectedWorkbooks.size) {
+      state.pendingSource = endpointId;
+      sourceDialog.showModal();
+      return;
+    }
+    state.initialSource = endpointId;
+    applySource(endpointId);
+  }
+
   async function loadEndpoints() {
-    const payload = await api("/api/svn/endpoints");
-    state.endpoints = payload.endpoints;
+    const [config, registry] = await Promise.all([api("/api/svn/config"), api("/api/svn/endpoints")]);
+    let matches = [];
+    if (config.server_url) {
+      try {
+        const params = new URLSearchParams({ url: config.server_url, revision: "HEAD" });
+        const candidates = await api("/api/svn/branch-candidates?" + params.toString());
+        matches = candidates.matches || [];
+      } catch {
+        matches = [];
+      }
+    }
+    mergeEndpointSources(registry.endpoints || [], matches);
     source.replaceChildren();
     const placeholder = document.createElement("option");
     placeholder.value = "";
     placeholder.textContent = "选择基准分支";
     source.append(placeholder);
-    state.endpoints.filter((item) => item.enabled).forEach((item) => {
+    state.endpoints.forEach((item) => {
       const option = document.createElement("option");
       option.value = item.id;
       option.textContent = item.label;
       source.append(option);
     });
     source.disabled = false;
+    sourceQuery.disabled = false;
+    sourceToggle.disabled = false;
+    sourceState.textContent = "共 " + state.endpoints.length + " 个 SVN 分支";
+    renderSourceOptions();
   }
 
   async function loadPlan() {
@@ -258,6 +467,7 @@
       workbook_paths: [...state.selectedWorkbooks],
     };
     try {
+      await ensureEndpointsRegistered([source.value, ...state.selectedTargets]);
       const payload = planId
         ? await api("/api/diff-plans/" + planId, { method: "PUT", body: JSON.stringify({ schema_version: "m4.diff-plan-update.request.v1", expected_version: state.version, ...definition }) })
         : await api("/api/diff-plans", { method: "POST", body: JSON.stringify({ schema_version: "m4.diff-plan-create.request.v1", ...definition }) });
@@ -272,25 +482,21 @@
     }
   }
 
-  source.addEventListener("change", () => {
-    const next = source.value;
-    if (!next) return;
-    const previous = state.initialSource || state.pendingSource;
-    if (previous && previous !== next && state.selectedWorkbooks.size) {
-      state.pendingSource = next;
-      source.value = previous;
-      sourceDialog.showModal();
-      return;
-    }
-    state.initialSource = next;
-    applySource(next);
-  });
+  source.addEventListener("change", () => requestSource(source.value));
   sourceDialog.addEventListener("close", () => {
     if (sourceDialog.returnValue === "confirm" && state.pendingSource) {
       state.initialSource = state.pendingSource;
       applySource(state.pendingSource, { reset: true });
     }
     state.pendingSource = "";
+  });
+  bindComboboxInput(sourceQuery, sourceToggle, "source");
+  bindComboboxInput(targetQuery, targetToggle, "target");
+  bindOptionKeyboard(sourceOptions, "source");
+  bindOptionKeyboard(targetList, "target");
+  document.addEventListener("click", (event) => {
+    if (!document.getElementById("source-combobox").contains(event.target)) setComboboxOpen("source", false);
+    if (!document.getElementById("target-combobox").contains(event.target)) setComboboxOpen("target", false);
   });
   workbookQuery.addEventListener("input", renderWorkbooks);
   saveOnly.addEventListener("click", () => void save({ run: false }));
@@ -300,10 +506,18 @@
     try {
       await loadEndpoints();
       if (planId) await loadPlan();
-      else renderTargets();
+      else {
+        targetList.replaceChildren();
+        const empty = document.createElement("div");
+        empty.className = "diff-plan-pane-empty";
+        empty.textContent = "请先选择基准分支";
+        targetList.append(empty);
+      }
     } catch (error) {
       showError(error.message);
       source.disabled = true;
+      sourceQuery.disabled = true;
+      sourceToggle.disabled = true;
     }
   })();
 })();

@@ -136,6 +136,18 @@ def test_diff_plan_pages_and_navigation_contract(tmp_path):
     assert "仅保存" in form.text
     assert "保存并开始" in form.text
     assert "本次运行 Revision 设置" in form.text
+    assert 'id="source-endpoint-query"' in form.text
+    assert 'id="source-endpoint-options" role="listbox"' in form.text
+    assert 'id="target-endpoint-query"' in form.text
+    assert 'id="target-list" role="listbox" aria-multiselectable="true"' in form.text
+    assert form.text.count('role="combobox"') == 2
+
+    script = (Path(__file__).parents[2] / "app" / "static" / "diff_plan_form.js").read_text(encoding="utf-8")
+    assert "/api/svn/config" in script
+    assert "/api/svn/endpoints" in script
+    assert "/api/svn/branch-candidates" in script
+    assert "endpointIdForMatch" in script
+    assert "ensureEndpointsRegistered" in script
 
 
 class StubRunService:
