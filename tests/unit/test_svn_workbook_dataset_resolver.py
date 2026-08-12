@@ -265,7 +265,13 @@ def test_svn_api_uses_frozen_revisions_exact_manifest_files_and_cleans_up():
     assert result["summary"]["modified_rows"] == 273
     assert result["summary"]["modified_fields"] == 375
     assert provider.info_calls == []
-    assert provider.list_tree_calls == []
+    assert {
+        (endpoint.url, endpoint.revision, prefix)
+        for endpoint, prefix in provider.list_tree_calls
+    } == {
+        ("mock://left", SOURCE_REVISION, ""),
+        ("mock://right", TARGET_REVISION, ""),
+    }
     assert {
         (call[0].url, call[0].revision, call[1])
         for call in provider.read_calls
@@ -319,11 +325,34 @@ def test_missing_table_binding_is_discovered_at_request_revision():
 
     assert response.status_code == 200
     assert provider.info_calls == []
-    assert len(provider.list_tree_calls) == 1
-    endpoint, prefix = provider.list_tree_calls[0]
-    assert endpoint.url == "mock://left"
-    assert endpoint.revision == SOURCE_REVISION
-    assert prefix == ""
+    assert {
+        (endpoint.url, endpoint.revision, prefix)
+        for endpoint, prefix in provider.list_tree_calls
+    } == {
+        ("mock://left", SOURCE_REVISION, ""),
+        ("mock://right", TARGET_REVISION, ""),
+    }
+
+
+def test_table_binding_uses_actual_path_case_at_request_revision():
+    fixture = _atlas_fixture()
+    records = _endpoint_records()
+    records[0]["physical_path_filters"] = {"TABLE": "LEFT/TABLE"}
+    _, client, provider = _create_client(fixture, records=records)
+
+    response = client.post(
+        "/api/diff/workbooks/compare",
+        json=_request_payload(),
+    )
+
+    assert response.status_code == 200
+    source_paths = {
+        path
+        for endpoint, path in provider.read_calls
+        if endpoint.url == "mock://left"
+    }
+    assert f"left/Table/{WORKBOOK_NAME}" in source_paths
+    assert not any(path.startswith("LEFT/TABLE/") for path in source_paths)
 
 
 @pytest.mark.parametrize(

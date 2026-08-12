@@ -108,7 +108,8 @@ def test_m2_workbench_exposes_layout_and_all_page_states_with_real_diff_api():
     assert "COMPARISON OUTPUT" not in results_html
     assert "result-execution-state" not in results_html
     assert "endpointDirectoryName(sourceEndpoint)" in compare_js
-    assert "context.source?.branch" in results_js
+    assert "side?.branch" in results_js
+    assert '" · r" + side.resolvedRevision' in results_js
 
     for state in (
         "idle",

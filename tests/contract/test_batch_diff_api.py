@@ -226,6 +226,36 @@ def test_create_api_is_strict_idempotent_and_initial_response_is_queued(tmp_path
         assert response.json()["error"]["code"] == "BATCH_IDEMPOTENCY_CONFLICT"
 
 
+def test_same_endpoint_allows_different_revisions_and_rejects_identical_pair(tmp_path):
+    resolver = StaticResolver([])
+    runner = MappingRunner({})
+    batch_service = service(tmp_path, resolver, runner)
+    try:
+        different = BatchCreateRequestPayload(
+            schema_version="m2.batch-create.request.v1",
+            request_id=uuid4(),
+            source=BatchEndpointPayload(endpoint_id="SAME", revision=101),
+            target=BatchEndpointPayload(endpoint_id="SAME", revision=102),
+        )
+        task, created = batch_service.create_task(different)
+        assert created is True
+        assert task.source.endpoint_id == task.target.endpoint_id == "SAME"
+        assert task.source.revision == 101
+        assert task.target.revision == 102
+
+        identical = BatchCreateRequestPayload(
+            schema_version="m2.batch-create.request.v1",
+            request_id=uuid4(),
+            source=BatchEndpointPayload(endpoint_id="SAME", revision=101),
+            target=BatchEndpointPayload(endpoint_id="SAME", revision=101),
+        )
+        with pytest.raises(BatchDiffError) as captured:
+            batch_service.create_task(identical)
+        assert captured.value.code == "BATCH_ENDPOINT_REVISIONS_MUST_DIFFER"
+    finally:
+        batch_service.close()
+
+
 def test_snapshot_candidates_use_fixed_revisions_without_info_or_head():
     fixture = {
         "tree": [

@@ -106,14 +106,11 @@ class SnapshotService:
     def freeze_head(self, record: Mapping[str, Any]) -> int | str:
         return self._resolve_head(record)[0]
 
-    def discover_scope_paths(
+    def _discover_scope_paths_from_entries(
         self,
         record: Mapping[str, Any],
-        revision: int | str = "HEAD",
+        entries: list[TreeEntry],
     ) -> dict[str, str]:
-        url = self._validate_url(record)
-        endpoint = EndpointSpec(url=url, revision=revision, label=str(record.get("label", "")))
-        entries = self.provider.list_tree(endpoint)
         directories = {
             normalize_relative_path(entry.path)
             for entry in entries
@@ -147,19 +144,52 @@ class SnapshotService:
             )[0]
         return resolved
 
+    def discover_scope_paths(
+        self,
+        record: Mapping[str, Any],
+        revision: int | str = "HEAD",
+    ) -> dict[str, str]:
+        url = self._validate_url(record)
+        endpoint = EndpointSpec(url=url, revision=revision, label=str(record.get("label", "")))
+        return self._discover_scope_paths_from_entries(
+            record,
+            self.provider.list_tree(endpoint),
+        )
+
     def resolve_scope_paths(
         self,
         record: Mapping[str, Any],
         revision: int | str,
+        *,
+        entries: list[TreeEntry] | None = None,
     ) -> dict[str, str]:
         configured = {
             logical: normalize_relative_path(str(path))
             for logical, path in dict(record.get("physical_path_filters") or {}).items()
             if logical in LOGICAL_SCOPES and path
         }
-        if set(configured) == set(LOGICAL_SCOPES):
+        if entries is None:
+            url = self._validate_url(record)
+            endpoint = EndpointSpec(
+                url=url,
+                revision=revision,
+                label=str(record.get("label", "")),
+            )
+            entries = self.provider.list_tree(endpoint)
+        known_paths = {
+            normalize_relative_path(entry.path).casefold()
+            for entry in entries
+        }
+        if set(configured) == set(LOGICAL_SCOPES) and all(
+            any(
+                path == prefix.casefold()
+                or path.startswith(prefix.casefold() + "/")
+                for path in known_paths
+            )
+            for prefix in configured.values()
+        ):
             return configured
-        return self.discover_scope_paths(record, revision)
+        return self._discover_scope_paths_from_entries(record, entries)
 
     @staticmethod
     def _scope_for_path(path: str, physical: Mapping[str, str]) -> str:
@@ -249,22 +279,28 @@ class SnapshotService:
         self,
         record: Mapping[str, Any],
         revision: int,
+        *,
+        repository_uuid: str | None = None,
     ) -> SnapshotEndpointPayload:
         """读取指定 Revision，不调用 info() 或重新解析 HEAD。"""
         url = self._validate_url(record)
-        physical = self.resolve_scope_paths(record, revision)
         endpoint = validate_endpoint(
             EndpointSpec(
                 url=url,
                 revision=revision,
-                path_filter=tuple(physical.values()),
                 label=str(record.get("label", "")),
             ),
             self.allowed_schemes,
         )
+        all_entries = self.provider.list_tree(endpoint)
+        physical = self.resolve_scope_paths(
+            record,
+            revision,
+            entries=all_entries,
+        )
         entries = [
             entry
-            for entry in self.provider.list_tree(endpoint)
+            for entry in all_entries
             if entry.kind == "file"
             and entry.path.casefold().endswith(EXCEL_EXTENSIONS)
             and self._scope_for_path(entry.path, physical) != "UNKNOWN"
@@ -278,7 +314,7 @@ class SnapshotService:
                     endpoint,
                     entry,
                     self._scope_for_path(entry.path, physical),
-                    url,
+                    repository_uuid or url,
                 ): entry.path
                 for entry in entries
             }
@@ -303,53 +339,15 @@ class SnapshotService:
 
     def _snapshot_endpoint(self, record: Mapping[str, Any]) -> SnapshotEndpointPayload:
         resolved_revision, repository_uuid = self._resolve_head(record)
-        physical = self.resolve_scope_paths(record, resolved_revision)
-        endpoint = validate_endpoint(
-            EndpointSpec(
-                url=str(record["url"]),
-                revision=resolved_revision,
-                path_filter=tuple(physical.values()),
-                label=str(record.get("label", "")),
-            ),
-            self.allowed_schemes,
-        )
-        entries = [
-            entry
-            for entry in self.provider.list_tree(endpoint)
-            if entry.kind == "file"
-            and entry.path.casefold().endswith(EXCEL_EXTENSIONS)
-            and self._scope_for_path(entry.path, physical) != "UNKNOWN"
-        ]
-        entries.sort(key=lambda item: item.path.casefold())
-        files: list[SnapshotFilePayload] = []
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {
-                executor.submit(
-                    self._fetch_file,
-                    endpoint,
-                    entry,
-                    self._scope_for_path(entry.path, physical),
-                    repository_uuid,
-                ): entry.path
-                for entry in entries
-            }
-            for future in as_completed(futures):
-                files.append(future.result())
-        files.sort(key=lambda item: item.path.casefold())
-        total_size = sum(item.size or 0 for item in files)
-        failed_count = sum(1 for item in files if item.error is not None)
-        return SnapshotEndpointPayload(
-            endpoint_id=str(record["id"]),
-            label=str(record.get("label", record["id"])),
-            url=str(record["url"]),
-            resolved_revision=resolved_revision,
-            physical_path_filters=physical,
-            files=files,
-            stats=SnapshotStatsPayload(
-                file_count=len(files),
-                total_size=total_size,
-                failed_count=failed_count,
-            ),
+        if not isinstance(resolved_revision, int):
+            raise SVNProviderError(
+                "SVN_INVALID_REVISION",
+                f"端点没有返回有效 HEAD Revision：{record['id']}",
+            )
+        return self._snapshot_endpoint_at_revision(
+            record,
+            resolved_revision,
+            repository_uuid=repository_uuid,
         )
 
     def create_snapshot(
@@ -358,12 +356,42 @@ class SnapshotService:
         *,
         source_id: str,
         target_id: str,
+        source_revision: int | str = "HEAD",
+        target_revision: int | str = "HEAD",
     ) -> SnapshotResponsePayload:
         normalized = self.normalize_registry([dict(record) for record in records])
         source_record = self._get_record(normalized, source_id)
         target_record = self._get_record(normalized, target_id)
-        source = self._snapshot_endpoint(source_record)
-        target = self._snapshot_endpoint(target_record)
+        source_resolved, source_repository = (
+            self._resolve_head(source_record)
+            if source_revision == "HEAD"
+            else (int(source_revision), None)
+        )
+        target_resolved, target_repository = (
+            self._resolve_head(target_record)
+            if target_revision == "HEAD"
+            else (int(target_revision), None)
+        )
+        if not isinstance(source_resolved, int) or not isinstance(target_resolved, int):
+            raise SVNProviderError(
+                "SVN_INVALID_REVISION",
+                "端点没有返回有效 HEAD Revision",
+            )
+        if source_id == target_id and source_resolved == target_resolved:
+            raise SVNProviderError(
+                "SVN_ENDPOINT_REVISIONS_MUST_DIFFER",
+                "同一分支的左右 Revision 必须不同",
+            )
+        source = self._snapshot_endpoint_at_revision(
+            source_record,
+            source_resolved,
+            repository_uuid=source_repository,
+        )
+        target = self._snapshot_endpoint_at_revision(
+            target_record,
+            target_resolved,
+            repository_uuid=target_repository,
+        )
         return SnapshotResponsePayload(
             captured_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             logical_scopes=list(LOGICAL_SCOPES),
@@ -384,6 +412,11 @@ class SnapshotService:
         normalized = self.normalize_registry([dict(record) for record in records])
         source_record = self._get_record(normalized, source_id)
         target_record = self._get_record(normalized, target_id)
+        if source_id == target_id and source_revision == target_revision:
+            raise SVNProviderError(
+                "SVN_ENDPOINT_REVISIONS_MUST_DIFFER",
+                "同一分支的左右 Revision 必须不同",
+            )
         source = self._snapshot_endpoint_at_revision(source_record, source_revision)
         target = self._snapshot_endpoint_at_revision(target_record, target_revision)
         return SnapshotResponsePayload(
@@ -397,13 +430,17 @@ class SnapshotService:
     def bind_snapshot_scopes(
         records: list[Mapping[str, Any]],
         snapshot: SnapshotResponsePayload,
+        *,
+        bind_source: bool = True,
+        bind_target: bool = True,
     ) -> list[dict[str, Any]]:
         """将本次快照解析出的 Table 物理路径回写端点注册表。"""
         normalized = SnapshotService.normalize_registry([dict(record) for record in records])
-        bindings = {
-            snapshot.source.endpoint_id: snapshot.source.physical_path_filters,
-            snapshot.target.endpoint_id: snapshot.target.physical_path_filters,
-        }
+        bindings = {}
+        if bind_source:
+            bindings[snapshot.source.endpoint_id] = snapshot.source.physical_path_filters
+        if bind_target:
+            bindings[snapshot.target.endpoint_id] = snapshot.target.physical_path_filters
         for record in normalized:
             physical = bindings.get(str(record["id"]))
             if physical:

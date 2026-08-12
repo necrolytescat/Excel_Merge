@@ -18,6 +18,7 @@
   const state = bridge.state;
   const loadingRefs = new Set();
   const summaryLoadingRefs = new Set();
+  const endpointNames = new Map();
   let pollTimer = 0;
   let commandBusy = false;
 
@@ -228,17 +229,50 @@
     }
   }
 
+  function endpointDirectoryName(endpoint) {
+    try {
+      const path = new URL(endpoint?.url || "").pathname.replace(/\/$/, "");
+      return decodeURIComponent(path.split("/").pop() || "");
+    } catch {
+      return "";
+    }
+  }
+
+  async function loadEndpointNames() {
+    try {
+      const body = await bridge.request("/api/svn/endpoints");
+      (body.endpoints || []).forEach((endpoint) => {
+        endpointNames.set(
+          endpoint.id,
+          endpointDirectoryName(endpoint) || endpoint.label || endpoint.id,
+        );
+      });
+    } catch {
+      endpointNames.clear();
+    }
+  }
+
   function syncTask(task) {
+    const previousSource = state.context.source || {};
+    const previousTarget = state.context.target || {};
+    const sourceName = previousSource.endpointId === task.source.endpoint_id
+      && previousSource.branch
+      ? previousSource.branch
+      : (endpointNames.get(task.source.endpoint_id) || task.source.endpoint_id);
+    const targetName = previousTarget.endpointId === task.target.endpoint_id
+      && previousTarget.branch
+      ? previousTarget.branch
+      : (endpointNames.get(task.target.endpoint_id) || task.target.endpoint_id);
     state.context.source = {
       endpointId: task.source.endpoint_id,
-      label: task.source.endpoint_id,
-      branch: task.source.endpoint_id,
+      label: sourceName,
+      branch: sourceName,
       resolvedRevision: task.source.revision,
     };
     state.context.target = {
       endpointId: task.target.endpoint_id,
-      label: task.target.endpoint_id,
-      branch: task.target.endpoint_id,
+      label: targetName,
+      branch: targetName,
       resolvedRevision: task.target.revision,
     };
     state.context.capturedAt = task.created_at;
@@ -460,6 +494,9 @@
   const demoPage = document.body.dataset.demoMode === "true";
   if (!demoPage && state.context?.mode === "formal" && state.context.batchTaskId) {
     $("batch-task-panel").classList.remove("hidden");
-    void refreshTask();
+    void (async () => {
+      await loadEndpointNames();
+      await refreshTask();
+    })();
   }
 })();

@@ -1,12 +1,19 @@
 """将 API 请求转换为 Provider 调用，并统一校验和序列化。"""
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import json
 from typing import Any
 
 from core.models import EndpointSpec
-from core.svn_provider import SVNProvider, validate_endpoint
+from core.svn_history import canonicalize_svn_url
+from core.svn_provider import SVNProvider, SVNProviderError, validate_endpoint
 
 from app.schemas.svn import (
+    BranchLogCommitPayload,
+    BranchLogPagePayload,
     ChangedPathPayload,
     CommitPayload,
     ContentPayload,
@@ -80,6 +87,91 @@ class SVNService:
             )
             for commit in commits
         ]
+
+    @staticmethod
+    def _branch_cursor_url_hash(url: str) -> str:
+        try:
+            canonical = canonicalize_svn_url(url)
+        except ValueError as exc:
+            raise SVNProviderError("SVN_NOT_FOUND", "SVN URL 格式无效") from exc
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _encode_branch_cursor(cls, url: str, revision: int) -> str:
+        raw = json.dumps(
+            {"v": 1, "url": cls._branch_cursor_url_hash(url), "revision": revision},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    @classmethod
+    def _decode_branch_cursor(cls, url: str, cursor: str) -> int:
+        try:
+            padding = "=" * (-len(cursor) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(cursor + padding))
+            revision = payload["revision"]
+            if (
+                payload.get("v") != 1
+                or payload.get("url") != cls._branch_cursor_url_hash(url)
+                or not isinstance(revision, int)
+                or isinstance(revision, bool)
+                or revision <= 0
+            ):
+                raise ValueError
+            return revision
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            UnicodeDecodeError,
+            binascii.Error,
+            json.JSONDecodeError,
+        ):
+            raise SVNProviderError("SVN_INVALID_CURSOR", "分支提交游标无效") from None
+
+    def branch_logs(
+        self,
+        *,
+        url: str,
+        limit: int,
+        cursor: str | None,
+    ) -> BranchLogPagePayload:
+        endpoint = self.endpoint(EndpointPayload(url=url, revision="HEAD"))
+        upper_revision: int | str = (
+            self._decode_branch_cursor(endpoint.url, cursor) if cursor else "HEAD"
+        )
+        reader = getattr(self.provider, "branch_log_page", None)
+        if reader is None:
+            raise SVNProviderError(
+                "SVN_HISTORY_UNAVAILABLE",
+                "当前 SVN Provider 不支持分支历史",
+            )
+        rows = sorted(
+            reader(endpoint, upper_revision, limit + 1),
+            key=lambda item: int(item.revision),
+            reverse=True,
+        )
+        has_more = len(rows) > limit
+        visible = rows[:limit]
+        next_cursor = (
+            self._encode_branch_cursor(endpoint.url, int(rows[limit].revision))
+            if has_more
+            else None
+        )
+        return BranchLogPagePayload(
+            commits=[
+                BranchLogCommitPayload(
+                    revision=int(item.revision),
+                    author=item.author,
+                    date=item.date,
+                    message=item.message,
+                )
+                for item in visible
+            ],
+            next_cursor=next_cursor,
+            has_more=has_more,
+        )
 
     def content(self, payload: EndpointPayload, path: str, preview_limit: int | None = None) -> ContentPayload:
         endpoint = self.endpoint(payload)

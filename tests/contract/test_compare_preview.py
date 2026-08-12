@@ -23,7 +23,13 @@ def test_compare_input_is_formalized_and_table_excel_only():
     assert 'id="target-endpoint"' in response.text
     assert 'id="swap-endpoints"' in response.text
     assert 'id="create-snapshot"' in response.text
-    assert 'src="http://testserver/static/compare.js?v=1.2.0"' in response.text
+    assert 'src="http://testserver/static/compare.js?v=1.4.1"' in response.text
+    assert 'id="source-revision-trigger"' in response.text
+    assert 'id="target-revision-trigger"' in response.text
+    assert 'role="listbox"' in response.text
+    assert "提交 LOG" in response.text
+    assert "冻结所选 Revision" in response.text
+    assert "分别冻结当前 HEAD" not in response.text
     assert "锁定并读取快照" in response.text
     assert "Table" in response.text
     assert "全量 Excel" in response.text
@@ -64,6 +70,23 @@ def test_compare_script_uses_registered_and_branch_candidates():
     assert "/api/svn/endpoints" in response.text
     assert "/api/svn/branch-candidates" in response.text
     assert "/api/svn/snapshots" in response.text
+    assert "/api/svn/branch-logs" in response.text
+    assert "loadRevisionPage" in response.text
+    assert "maybeLoadMoreRevisions" in response.text
+    assert 'addEventListener("scroll"' in response.text
+    assert "formatRevisionDate" in response.text
+    assert "invalidateSnapshotContext" in response.text
+    assert "invalidateRevisionRequest" in response.text
+    assert "[state.revisions.source, state.revisions.target]" in response.text
+    assert "requestToken !== selection.requestToken" in response.text
+    assert "options.contains(document.activeElement)" in response.text
+    assert "focusedOption.focus({ preventScroll: true })" in response.text
+    assert 'event.key === "Enter" || event.key === " "' in response.text
+    assert 'value === "HEAD" ? "HEAD" : Number(value)' in response.text
+    assert "revision: state.revisions.source.selected" in response.text
+    assert "revision: state.revisions.target.selected" in response.text
+    assert 'sessionStorage.removeItem(TASK_CONTEXT_KEY)' in response.text
+    assert "BATCH_ENDPOINT_REVISIONS_MUST_DIFFER" not in response.text
     assert "pendingRegistration" in response.text
     assert "buildDifferenceFiles" in response.text
     assert "content_hash" in response.text
@@ -95,8 +118,8 @@ def test_formal_results_page_calls_m2_diff_api_without_demo_fixture_dependency()
     assert "app.css?v=0.3.3" in page.text
     assert "compare_results_readability.css?v=2.1.5" in page.text
     assert "compare_results_batch.css?v=1.1.2" in page.text
-    assert "compare_results.js?v=2.2.0" in page.text
-    assert "compare_results_batch.js?v=1.3.0" in page.text
+    assert "compare_results.js?v=2.3.0" in page.text
+    assert "compare_results_batch.js?v=1.4.0" in page.text
     assert 'class="result-overview-grid"' in page.text
     assert 'id="batch-task-panel"' in page.text
     assert 'id="result-heading-panel"' in page.text
@@ -125,8 +148,12 @@ def test_formal_results_page_calls_m2_diff_api_without_demo_fixture_dependency()
     assert "m2.diff.v1" in mapper.text
     assert "/api/diff/batches/" in batch_script.text
     assert "/api/diff/batch-results/" in batch_script.text
+    assert "/api/svn/endpoints" in batch_script.text
+    assert "endpointDirectoryName" in batch_script.text
+    assert "endpointNames.get(task.source.endpoint_id)" in batch_script.text
     assert "m2.batch-cancel.request.v1" in batch_script.text
     assert "m2.batch-retry.request.v1" in batch_script.text
+    assert '" · r" + side.resolvedRevision' in script.text
     assert "batchTaskId" in batch_script.text
     assert "result_ref" in batch_script.text
     assert 'state: "diff_pending"' in batch_script.text
@@ -368,12 +395,12 @@ def test_compare_demo_is_separate_and_development_only():
     assert formal_response.status_code == 200
     assert 'data-demo-mode="false"' in formal_response.text
     assert 'class="compare-readable-page"' in formal_response.text
-    assert "compare_readability.css?v=1.0.0" in formal_response.text
+    assert "compare_readability.css?v=1.2.0" in formal_response.text
     assert "本地样本入口" not in formal_response.text
     assert demo_response.status_code == 200
     assert 'data-demo-mode="true"' in demo_response.text
     assert 'class="compare-readable-page"' in demo_response.text
-    assert "compare_readability.css?v=1.0.0" in demo_response.text
+    assert "compare_readability.css?v=1.2.0" in demo_response.text
     assert "Excel Diff 流程示例" in demo_response.text
     assert results_response.status_code == 200
     assert 'class="results-readable-page"' in results_response.text

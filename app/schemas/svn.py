@@ -1,7 +1,7 @@
 """SVN API 的 Pydantic 请求/响应模型。"""
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -111,6 +111,20 @@ class LogPayload(BaseModel):
     commits: list[CommitPayload]
 
 
+class BranchLogCommitPayload(BaseModel):
+    revision: int = Field(..., gt=0, strict=True)
+    author: str = ""
+    date: str = ""
+    message: str = ""
+
+
+class BranchLogPagePayload(BaseModel):
+    schema_version: Literal["m2.svn-branch-log.v1"] = "m2.svn-branch-log.v1"
+    commits: list[BranchLogCommitPayload] = Field(default_factory=list)
+    next_cursor: str | None = None
+    has_more: bool
+
+
 class ErrorResponse(BaseModel):
     error: ErrorPayload
 
@@ -130,8 +144,12 @@ class EndpointRegistryPayload(BaseModel):
     endpoints: list[EndpointRecordPayload] = Field(default_factory=list)
 
 
+SnapshotRevision = Annotated[int, Field(gt=0, strict=True)] | Literal["HEAD"]
+
+
 class SnapshotEndpointRefPayload(BaseModel):
     endpoint_id: str = Field(..., min_length=1, max_length=128)
+    revision: SnapshotRevision = "HEAD"
 
 
 class SnapshotRequestPayload(BaseModel):

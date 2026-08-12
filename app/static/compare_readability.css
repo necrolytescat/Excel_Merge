@@ -122,6 +122,175 @@
   font-size: 13px;
 }
 
+.compare-readable-page .revision-picker {
+  position: relative;
+  display: grid;
+  gap: 7px;
+}
+
+.compare-readable-page .revision-picker-label {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.compare-readable-page .revision-trigger {
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 11px;
+  border: 1px solid #c8d0dc;
+  border-radius: 6px;
+  background: #fff;
+  color: #182230;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+}
+
+.compare-readable-page .revision-trigger > span:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.compare-readable-page .revision-trigger strong,
+.compare-readable-page .revision-trigger small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compare-readable-page .revision-trigger strong {
+  font-size: 13px;
+}
+
+.compare-readable-page .revision-trigger small {
+  color: #667085;
+  font-size: 12px;
+}
+
+.compare-readable-page .revision-trigger:focus-visible,
+.compare-readable-page .revision-option:focus-visible,
+.compare-readable-page .revision-load-more:focus-visible {
+  outline: 2px solid #3157a4;
+  outline-offset: 2px;
+}
+
+.compare-readable-page .revision-trigger:disabled {
+  cursor: not-allowed;
+  background: #f5f7fa;
+  color: #98a2b3;
+}
+
+.compare-readable-page .revision-trigger-icon {
+  flex: 0 0 auto;
+  font-size: 18px;
+}
+
+.compare-readable-page .revision-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: min(420px, calc(100vh - 96px));
+  overflow: hidden;
+  border: 1px solid #c8d0dc;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(16, 24, 40, 0.16);
+}
+
+.compare-readable-page .revision-options {
+  max-height: min(330px, calc(100vh - 186px));
+  overflow-y: auto;
+}
+
+.compare-readable-page .revision-option {
+  width: 100%;
+  min-height: 52px;
+  padding: 9px 11px;
+  border: 0;
+  border-bottom: 1px solid #eaecf0;
+  border-radius: 0;
+  background: #fff;
+  color: #182230;
+  display: grid;
+  grid-template-columns: 70px minmax(80px, 0.6fr) minmax(132px, 0.9fr) minmax(140px, 1.5fr);
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+}
+
+.compare-readable-page .revision-option:hover,
+.compare-readable-page .revision-option.is-active {
+  background: #f2f5fa;
+}
+
+.compare-readable-page .revision-option[aria-selected="true"] {
+  box-shadow: inset 3px 0 #3157a4;
+  background: #eef3fb;
+}
+
+.compare-readable-page .revision-option-revision {
+  font-size: 13px;
+  font-weight: 700;
+  color: #24427b;
+}
+
+.compare-readable-page .revision-option-author,
+.compare-readable-page .revision-option-date,
+.compare-readable-page .revision-option-message {
+  min-width: 0;
+  font-size: 12px;
+}
+
+.compare-readable-page .revision-option-author {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #475467;
+}
+
+.compare-readable-page .revision-option-date {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #667085;
+}
+
+.compare-readable-page .revision-option-message {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.35;
+}
+
+.compare-readable-page .revision-load-more {
+  width: 100%;
+  min-height: 44px;
+  border: 0;
+  border-radius: 0;
+  background: #f8fafc;
+  color: #3157a4;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.compare-readable-page .revision-load-more:disabled {
+  color: #98a2b3;
+}
+
+.compare-readable-page .revision-menu-status {
+  margin: 0;
+  padding: 8px 11px;
+  background: #f8fafc;
+  color: #667085;
+  font-size: 11px;
+}
+
 .compare-readable-page .scope-line {
   font-size: 12px;
 }
@@ -231,4 +400,15 @@
 .compare-readable-page .candidate-caption,
 .compare-readable-page footer {
   font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .compare-readable-page .revision-option {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+
+  .compare-readable-page .revision-option-date,
+  .compare-readable-page .revision-option-message {
+    grid-column: 1 / -1;
+  }
 }

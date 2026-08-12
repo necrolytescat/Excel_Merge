@@ -102,7 +102,25 @@
     mockMode: false,
     results: new Map(),
     pageState: "idle",
+    revisions: {
+      source: revisionSelectionState(),
+      target: revisionSelectionState(),
+    },
   };
+
+  function revisionSelectionState() {
+    return {
+      selected: "HEAD",
+      commits: [],
+      cursor: null,
+      hasMore: false,
+      loading: false,
+      loaded: false,
+      error: "",
+      open: false,
+      requestToken: 0,
+    };
+  }
 
   const $ = (id) => document.getElementById(id);
   const sourceInput = $("source-endpoint");
@@ -275,12 +293,14 @@
       $(`${prefix}-url`).textContent = "请选择一个已启用端点或匹配分支";
       $(`${prefix}-scope-detail`).textContent = "全量 Excel";
       setDot(`${prefix}-status`, "待选择", "unknown");
+      renderRevisionPicker(side);
       return;
     }
     $(`${prefix}-label`).textContent = endpoint.label;
     $(`${prefix}-url`).textContent = formatUrl(endpoint.url);
     $(`${prefix}-scope-detail`).textContent = scopePath(endpoint);
     setDot(`${prefix}-status`, endpoint.pendingRegistration ? "SVN 候选" : "已登记", endpoint.pendingRegistration ? "unknown" : "ok");
+    renderRevisionPicker(side);
   }
 
   function endpointDirectoryName(endpoint) {
@@ -341,9 +361,262 @@
     renderEndpointMatches(side, input.value);
   }
 
+  function sideEndpointId(side) {
+    return side === "source" ? state.sourceId : state.targetId;
+  }
+
+  function revisionDisplay(commit) {
+    if (!commit) return { value: "当前 HEAD", detail: "确认时解析该分支最新版本" };
+    return {
+      value: "r" + commit.revision,
+      detail: (commit.author || "未知提交人") + " · " + formatRevisionDate(commit.date),
+    };
+  }
+
+  function formatRevisionDate(value) {
+    if (!value) return "时间未知";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return new Intl.DateTimeFormat("zh-CN", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(parsed).replaceAll("/", "-");
+  }
+
+  function selectedRevisionCommit(side) {
+    const selection = state.revisions[side];
+    if (selection.selected === "HEAD") return null;
+    return selection.commits.find(
+      (commit) => commit.revision === Number(selection.selected),
+    ) || {
+      revision: Number(selection.selected),
+      author: "",
+      message: "历史提交",
+    };
+  }
+
+  function createRevisionOption(side, commit, index) {
+    const selection = state.revisions[side];
+    const isHead = commit === null;
+    const value = isHead ? "HEAD" : commit.revision;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "revision-option";
+    button.role = "option";
+    button.dataset.revision = String(value);
+    button.dataset.optionIndex = String(index);
+    button.tabIndex = index === 0 ? 0 : -1;
+    button.setAttribute("aria-selected", String(selection.selected === value));
+
+    const revision = document.createElement("span");
+    revision.className = "revision-option-revision";
+    revision.textContent = isHead ? "HEAD" : "r" + commit.revision;
+    const author = document.createElement("span");
+    author.className = "revision-option-author";
+    author.textContent = isHead ? "当前版本" : (commit.author || "未知提交人");
+    const date = document.createElement("time");
+    date.className = "revision-option-date";
+    date.textContent = isHead ? "确认时解析" : formatRevisionDate(commit.date);
+    if (!isHead && commit.date) date.dateTime = commit.date;
+    const message = document.createElement("span");
+    message.className = "revision-option-message";
+    message.textContent = isHead ? "确认时解析该分支最新版本" : (commit.message || "无提交说明");
+    message.title = message.textContent;
+    button.append(revision, author, date, message);
+    button.addEventListener("click", () => selectRevision(side, value));
+    button.addEventListener("keydown", (event) => handleRevisionOptionKeydown(side, event));
+    return button;
+  }
+
+  function renderRevisionPicker(side) {
+    const prefix = side;
+    const selection = state.revisions[side];
+    const endpoint = state.endpoints.get(sideEndpointId(side));
+    const trigger = $(`${prefix}-revision-trigger`);
+    trigger.disabled = !endpoint || state.busy;
+    trigger.setAttribute("aria-expanded", String(selection.open));
+    const display = revisionDisplay(selectedRevisionCommit(side));
+    $(`${prefix}-revision-value`).textContent = display.value;
+    $(`${prefix}-revision-detail`).textContent = endpoint
+      ? display.detail
+      : "选择分支后可查看历史提交";
+    const menu = $(`${prefix}-revision-menu`);
+    menu.classList.toggle("hidden", !selection.open);
+    const options = $(`${prefix}-revision-options`);
+    const previousScrollTop = options.scrollTop;
+    const focusedRevision = options.contains(document.activeElement)
+      ? document.activeElement.dataset.revision
+      : "";
+    options.textContent = "";
+    options.appendChild(createRevisionOption(side, null, 0));
+    selection.commits.forEach((commit, index) => {
+      options.appendChild(createRevisionOption(side, commit, index + 1));
+    });
+    options.scrollTop = previousScrollTop;
+    if (focusedRevision) {
+      const focusedOption = [...options.querySelectorAll(".revision-option")]
+        .find((option) => option.dataset.revision === focusedRevision);
+      if (focusedOption) {
+        options.querySelectorAll(".revision-option")
+          .forEach((option) => { option.tabIndex = option === focusedOption ? 0 : -1; });
+        focusedOption.focus({ preventScroll: true });
+      }
+    }
+    options.scrollTop = previousScrollTop;
+    const loadMore = $(`${prefix}-revision-load-more`);
+    loadMore.classList.toggle(
+      "hidden",
+      !selection.hasMore && !selection.loading && !selection.error,
+    );
+    loadMore.disabled = selection.loading;
+    loadMore.textContent = selection.loading
+      ? "正在加载…"
+      : (selection.error ? "重试" : "加载更多");
+    if (!endpoint) {
+      $(`${prefix}-revision-status`).textContent = "请先选择分支";
+    } else if (selection.loading) {
+      $(`${prefix}-revision-status`).textContent = selection.loaded
+        ? "正在加载更多提交"
+        : "正在读取最近提交";
+    } else if (selection.error) {
+      $(`${prefix}-revision-status`).textContent = selection.error + "，可重试";
+    } else if (selection.loaded) {
+      $(`${prefix}-revision-status`).textContent = selection.commits.length
+        ? "已加载 " + selection.commits.length + " 条该分支提交"
+        : "该分支没有可显示的提交";
+    } else {
+      $(`${prefix}-revision-status`).textContent = "默认使用当前 HEAD";
+    }
+  }
+
+  function closeRevisionPicker(side, { focusTrigger = false } = {}) {
+    const selection = state.revisions[side];
+    if (!selection.open) return;
+    selection.open = false;
+    renderRevisionPicker(side);
+    if (focusTrigger) $(`${side}-revision-trigger`).focus();
+  }
+
+  async function loadRevisionPage(side, { append = false } = {}) {
+    const selection = state.revisions[side];
+    const endpointId = sideEndpointId(side);
+    const endpoint = state.endpoints.get(endpointId);
+    if (!endpoint || selection.loading) return;
+    const requestToken = ++selection.requestToken;
+    selection.loading = true;
+    selection.error = "";
+    renderRevisionPicker(side);
+    const params = new URLSearchParams({ url: endpoint.url, limit: "30" });
+    if (append && selection.cursor) params.set("cursor", selection.cursor);
+    try {
+      const body = await request("/api/svn/branch-logs?" + params.toString());
+      if (
+        requestToken !== selection.requestToken
+        || endpointId !== sideEndpointId(side)
+      ) return;
+      const merged = append ? [...selection.commits] : [];
+      const seen = new Set(merged.map((commit) => commit.revision));
+      (body.commits || []).forEach((commit) => {
+        if (!seen.has(commit.revision)) {
+          seen.add(commit.revision);
+          merged.push(commit);
+        }
+      });
+      merged.sort((a, b) => b.revision - a.revision);
+      selection.commits = merged;
+      selection.cursor = body.next_cursor || null;
+      selection.hasMore = Boolean(body.has_more && body.next_cursor);
+      selection.loaded = true;
+    } catch (error) {
+      if (requestToken !== selection.requestToken) return;
+      selection.hasMore = Boolean(selection.cursor);
+      selection.error = errorMessage(error);
+    } finally {
+      if (requestToken === selection.requestToken) {
+        selection.loading = false;
+        renderRevisionPicker(side);
+      }
+    }
+  }
+
+  function maybeLoadMoreRevisions(side) {
+    const selection = state.revisions[side];
+    if (
+      !selection.open
+      || selection.loading
+      || selection.error
+      || !selection.hasMore
+      || !selection.cursor
+    ) return;
+    const options = $(side + "-revision-options");
+    const remaining = options.scrollHeight - options.scrollTop - options.clientHeight;
+    if (remaining <= 48) void loadRevisionPage(side, { append: true });
+  }
+
+  function openRevisionPicker(side) {
+    const selection = state.revisions[side];
+    if (!state.endpoints.has(sideEndpointId(side)) || state.busy) return;
+    const otherSide = side === "source" ? "target" : "source";
+    closeRevisionPicker(otherSide);
+    selection.open = true;
+    renderRevisionPicker(side);
+    if (!selection.loaded && !selection.loading) void loadRevisionPage(side);
+    window.setTimeout(() => {
+      $(`${side}-revision-options`).querySelector(".revision-option")?.focus();
+    }, 0);
+  }
+
+  function selectRevision(side, value) {
+    const selection = state.revisions[side];
+    if (selection.selected !== value) {
+      selection.selected = value;
+      invalidateSnapshotContext();
+    }
+    closeRevisionPicker(side, { focusTrigger: true });
+    renderRevisionPicker(side);
+    updateControls();
+  }
+
+  function handleRevisionOptionKeydown(side, event) {
+    const options = [...$(`${side}-revision-options`).querySelectorAll(".revision-option")];
+    const current = options.indexOf(event.currentTarget);
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      const value = event.currentTarget.dataset.revision;
+      selectRevision(side, value === "HEAD" ? "HEAD" : Number(value));
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      const next = options[(current + delta + options.length) % options.length];
+      options.forEach((option) => { option.tabIndex = option === next ? 0 : -1; });
+      next.focus();
+    } else if (event.key === "Escape" || event.key === "Tab") {
+      closeRevisionPicker(side, { focusTrigger: event.key === "Escape" });
+    }
+  }
+
+  function resetRevisionSelection(side) {
+    const previousToken = state.revisions[side].requestToken;
+    state.revisions[side] = revisionSelectionState();
+    state.revisions[side].requestToken = previousToken + 1;
+    renderRevisionPicker(side);
+  }
+
+  function invalidateRevisionRequest(selection) {
+    selection.requestToken += 1;
+    selection.loading = false;
+  }
+
   function updateControls() {
+    const sameEndpoint = Boolean(state.sourceId && state.sourceId === state.targetId);
+    const sameSelection = state.revisions.source.selected === state.revisions.target.selected;
     const validPair = Boolean(
-      state.sourceId && state.targetId && state.sourceId !== state.targetId
+      state.sourceId && state.targetId && !(sameEndpoint && sameSelection)
         && state.endpoints.has(state.sourceId) && state.endpoints.has(state.targetId),
     );
     sourceInput.disabled = state.busy || state.endpoints.size === 0;
@@ -358,18 +631,27 @@
     if (validPair) {
       dot.className = "status-dot status-ok";
       strong.textContent = "两个端点已准备";
-      small.textContent = "确认后登记候选并分别冻结 HEAD";
+      small.textContent = "确认后登记候选并冻结所选版本";
     } else {
       dot.className = "status-dot status-unknown";
       strong.textContent = state.endpoints.size ? "请选择两个不同端点" : "暂无可选端点";
-      small.textContent = state.endpoints.size ? "左右端点不能相同" : "请先登记或匹配到分支";
+      small.textContent = state.endpoints.size
+        ? "同一分支必须选择不同 Revision"
+        : "请先登记或匹配到分支";
     }
+    renderRevisionPicker("source");
+    renderRevisionPicker("target");
     updateComparisonControls();
   }
 
   function setSelection(side, endpointId) {
+    const previous = sideEndpointId(side);
     if (side === "source") state.sourceId = endpointId;
     else state.targetId = endpointId;
+    if (previous !== endpointId) {
+      resetRevisionSelection(side);
+      invalidateSnapshotContext();
+    }
     renderSide(side, endpointId);
     updateControls();
   }
@@ -864,6 +1146,28 @@
     resultsLink.setAttribute("aria-disabled", "true");
   }
 
+  function invalidateSnapshotContext() {
+    const hadSnapshot = Boolean(state.snapshot || state.candidates.length);
+    state.snapshot = null;
+    state.candidates = [];
+    state.selectedPath = "";
+    candidateSearch.value = "";
+    candidateStatusFilter.value = "all";
+    candidateSearch.disabled = true;
+    candidateStatusFilter.disabled = true;
+    clearTaskContext();
+    renderManifest();
+    $("source-file-count").textContent = "—";
+    $("target-file-count").textContent = "—";
+    $("source-revision").textContent = "选择端点后显示";
+    $("target-revision").textContent = "选择端点后显示";
+    $("snapshot-total-size").textContent = "—";
+    $("snapshot-state").textContent = "未执行";
+    $("snapshot-summary-badge").textContent = "待确认";
+    $("snapshot-captured-at").textContent = "确认时冻结所选版本";
+    if (hadSnapshot) setPageState("idle", "版本选择已变化，请重新生成快照");
+  }
+
   async function openResultsPage() {
     if (!state.candidates.length) return;
     const sourceEndpoint = state.endpoints.get(state.sourceId);
@@ -1024,11 +1328,51 @@
   targetInput.addEventListener("input", () => handleEndpointInput("target", targetInput));
   swapButton.addEventListener("click", () => {
     [state.sourceId, state.targetId] = [state.targetId, state.sourceId];
+    [state.revisions.source, state.revisions.target] = [state.revisions.target, state.revisions.source];
+    invalidateRevisionRequest(state.revisions.source);
+    invalidateRevisionRequest(state.revisions.target);
+    state.revisions.source.open = false;
+    state.revisions.target.open = false;
+    invalidateSnapshotContext();
     populateEndpointInput(sourceInput, "source", state.sourceId);
     populateEndpointInput(targetInput, "target", state.targetId);
     renderSide("source", state.sourceId);
     renderSide("target", state.targetId);
     updateControls();
+  });
+
+  ["source", "target"].forEach((side) => {
+    $(`${side}-revision-trigger`).addEventListener("click", () => {
+      if (state.revisions[side].open) closeRevisionPicker(side);
+      else openRevisionPicker(side);
+    });
+    $(`${side}-revision-trigger`).addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        if (state.revisions[side].open) closeRevisionPicker(side);
+        else openRevisionPicker(side);
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        openRevisionPicker(side);
+      } else if (event.key === "Escape") {
+        closeRevisionPicker(side);
+      }
+    });
+    $(`${side}-revision-load-more`).addEventListener("click", () => {
+      void loadRevisionPage(side, { append: Boolean(state.revisions[side].cursor) });
+    });
+    $(side + "-revision-options").addEventListener("scroll", () => {
+      maybeLoadMoreRevisions(side);
+    });
+  });
+
+  document.addEventListener("click", (event) => {
+    ["source", "target"].forEach((side) => {
+      const picker = $(`${side}-revision-picker`);
+      if (state.revisions[side].open && !picker.contains(event.target)) {
+        closeRevisionPicker(side);
+      }
+    });
   });
 
   snapshotButton.addEventListener("click", async () => {
@@ -1048,10 +1392,19 @@
     try {
       setSnapshotProgress("正在登记所选候选分支");
       await persistPendingCandidates();
-      setSnapshotProgress("正在冻结 HEAD 并读取两个 Table 快照");
+      setSnapshotProgress("正在冻结所选版本并读取两个 Table 快照");
       const snapshot = await request("/api/svn/snapshots", {
         method: "POST",
-        body: JSON.stringify({ source: { endpoint_id: state.sourceId }, target: { endpoint_id: state.targetId } }),
+        body: JSON.stringify({
+          source: {
+            endpoint_id: state.sourceId,
+            revision: state.revisions.source.selected,
+          },
+          target: {
+            endpoint_id: state.targetId,
+            revision: state.revisions.target.selected,
+          },
+        }),
       });
       renderSnapshot(snapshot);
       finishSnapshotProgress(true);

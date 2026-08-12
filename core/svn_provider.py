@@ -70,6 +70,13 @@ class SVNProvider(Protocol):
         rev_to: Revision | None = None,
     ) -> list[CommitInfo]: ...
 
+    def branch_log_page(
+        self,
+        endpoint: EndpointSpec,
+        upper_revision: int | str,
+        limit: int,
+    ) -> list[CommitInfo]: ...
+
     def read_bytes(self, endpoint: EndpointSpec, path: str) -> bytes: ...
 
     def read_content(
@@ -286,6 +293,37 @@ class MockSVNProvider:
                 result.append(CommitInfo(revision=row["revision"], author=row.get("author", ""), date=row.get("date", ""), message=row.get("message", ""), changed_paths=paths))
         return result
 
+    def branch_log_page(
+        self,
+        endpoint: EndpointSpec,
+        upper_revision: int | str,
+        limit: int,
+    ) -> list[CommitInfo]:
+        endpoint = validate_endpoint(endpoint, DEFAULT_ALLOWED_SCHEMES + ("mock",))
+        self._scenario(endpoint)
+        upper = (
+            int(self.fixture["info"]["revision"])
+            if str(upper_revision).strip().upper() == "HEAD"
+            else _revision_number(upper_revision)
+        )
+        result = []
+        for row in self.fixture.get("logs", []):
+            revision = int(row["revision"])
+            if revision > upper:
+                continue
+            paths = tuple(ChangedPath(**path) for path in row.get("changed_paths", []))
+            result.append(
+                CommitInfo(
+                    revision=revision,
+                    author=row.get("author", ""),
+                    date=row.get("date", ""),
+                    message=row.get("message", ""),
+                    changed_paths=paths,
+                )
+            )
+        result.sort(key=lambda item: int(item.revision), reverse=True)
+        return result[: max(1, int(limit))]
+
     def read_bytes(self, endpoint: EndpointSpec, path: str) -> bytes:
         endpoint = validate_endpoint(endpoint, DEFAULT_ALLOWED_SCHEMES + ("mock",))
         self._scenario(endpoint)
@@ -337,6 +375,15 @@ class CLISVNProvider:
             return SVNProviderError("SVN_AUTH_FAILED", "SVN 认证失败", detail=stderr)
         if "timed out" in text or "timeout" in text:
             return SVNProviderError("SVN_TIMEOUT", "SVN 请求超时", detail=stderr)
+        if (
+            "e170013" in text
+            or "e730053" in text
+            or "unable to connect" in text
+            or "connection was aborted" in text
+            or "连接被中止" in text
+            or "中止了一个已建立的连接" in text
+        ):
+            return SVNProviderError("SVN_NOT_REACHABLE", "SVN 连接中断", detail=stderr)
         if "not found" in text or "does not exist" in text or "path not found" in text:
             return SVNProviderError("SVN_PATH_NOT_FOUND", "SVN 路径不存在", detail=stderr)
         return SVNProviderError(fallback, "SVN 请求失败", detail=stderr)
@@ -642,6 +689,45 @@ class CLISVNProvider:
             revision = logentry.get("revision", "")
             result.append(CommitInfo(revision=int(revision) if revision.isdigit() else revision, author=logentry.findtext("author", "") or "", date=logentry.findtext("date", "") or "", message=(logentry.findtext("msg", "") or "").strip(), changed_paths=tuple(paths)))
         return sorted(result, key=lambda item: int(item.revision) if str(item.revision).isdigit() else 0)
+
+    def branch_log_page(
+        self,
+        endpoint: EndpointSpec,
+        upper_revision: int | str,
+        limit: int,
+    ) -> list[CommitInfo]:
+        endpoint = self._validate(endpoint)
+        page_limit = max(1, int(limit))
+        upper = str(upper_revision).strip().upper()
+        if upper != "HEAD" and (not upper.isdigit() or int(upper) <= 0):
+            raise SVNProviderError("SVN_INVALID_REVISION", "revision 必须是正整数或 HEAD")
+        args = [
+            "log",
+            "--xml",
+            "--stop-on-copy",
+            "--limit",
+            str(page_limit),
+        ]
+        # URL 未指定 revision 时，SVN CLI 原生使用 HEAD:1；翻页才覆盖数字上界。
+        if upper != "HEAD":
+            args.extend(["--revision", f"{upper}:1"])
+        args.append(endpoint.url)
+        root = self._run_xml(args, fallback="SVN_NOT_REACHABLE")
+        commits = []
+        for logentry in root.iter("logentry"):
+            revision = logentry.get("revision", "")
+            if not revision.isdigit() or int(revision) <= 0:
+                raise SVNProviderError("SVN_HISTORY_INVALID", "SVN 日志包含无效 Revision")
+            commits.append(
+                CommitInfo(
+                    revision=int(revision),
+                    author=logentry.findtext("author", "") or "",
+                    date=logentry.findtext("date", "") or "",
+                    message=(logentry.findtext("msg", "") or "").strip(),
+                )
+            )
+        commits.sort(key=lambda item: int(item.revision), reverse=True)
+        return commits[:page_limit]
 
     def read_bytes(self, endpoint: EndpointSpec, path: str) -> bytes:
         endpoint = self._validate(endpoint)

@@ -78,10 +78,13 @@ class SnapshotBatchCandidateResolver:
         source: BatchEndpointPayload,
         target: BatchEndpointPayload,
     ) -> None:
-        if source.endpoint_id == target.endpoint_id:
+        if (
+            source.endpoint_id == target.endpoint_id
+            and source.revision == target.revision
+        ):
             raise BatchDiffError(
-                "BATCH_ENDPOINTS_MUST_DIFFER",
-                "左右端点必须不同",
+                "BATCH_ENDPOINT_REVISIONS_MUST_DIFFER",
+                "同一分支的左右 Revision 必须不同",
                 status_code=422,
             )
         records = {
@@ -305,10 +308,13 @@ class BatchDiffService:
         self,
         payload: BatchCreateRequestPayload,
     ) -> tuple[BatchTaskPayload, bool]:
-        if payload.source.endpoint_id == payload.target.endpoint_id:
+        if (
+            payload.source.endpoint_id == payload.target.endpoint_id
+            and payload.source.revision == payload.target.revision
+        ):
             raise BatchDiffError(
-                "BATCH_ENDPOINTS_MUST_DIFFER",
-                "左右端点必须不同",
+                "BATCH_ENDPOINT_REVISIONS_MUST_DIFFER",
+                "同一分支的左右 Revision 必须不同",
                 status_code=422,
             )
         validator = getattr(self.candidate_resolver, "validate_endpoints", None)

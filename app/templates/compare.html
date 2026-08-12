@@ -6,8 +6,8 @@
   <link rel="icon" href="data:,">
   <title>Config Atlas · {{ '流程示例' if demo_mode else '版本对比' }}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.3.1">
-  <link rel="stylesheet" href="{{ url_for('static', path='compare_readability.css') }}?v=1.0.0">
-  <script src="{{ url_for('static', path='compare.js') }}?v=1.2.0" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', path='compare_readability.css') }}?v=1.2.0">
+  <script src="{{ url_for('static', path='compare.js') }}?v=1.4.1" defer></script>
 </head>
 <body class="compare-readable-page" data-page-state="idle" data-demo-mode="{{ 'true' if demo_mode else 'false' }}">
   <div class="app-shell">
@@ -58,7 +58,7 @@
             <div>
               <p class="eyebrow">SNAPSHOT INPUT</p>
               <h2 id="snapshot-heading">确认两个端点并生成快照</h2>
-              <p>选择两个不同端点，确认时分别冻结当前 HEAD，并读取 Table 下的 Excel 文件。</p>
+              <p>选择左右端点与版本，确认时冻结所选 Revision，并读取 Table 下的 Excel 文件。</p>
             </div>
             <button id="swap-endpoints" type="button" class="secondary icon-text-button" disabled><span aria-hidden="true">⇄</span>交换端点</button>
           </div>
@@ -75,6 +75,18 @@
               </label>
               <div class="endpoint-match-list" id="source-endpoint-matches" aria-label="左侧端点匹配结果"></div>
               <p class="endpoint-url" id="source-url">请选择一个已启用端点</p>
+              <div class="revision-picker" id="source-revision-picker">
+                <span class="revision-picker-label">提交 LOG</span>
+                <button class="revision-trigger" id="source-revision-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="source-revision-options" disabled>
+                  <span><strong id="source-revision-value">当前 HEAD</strong><small id="source-revision-detail">选择分支后可查看历史提交</small></span>
+                  <span class="revision-trigger-icon" aria-hidden="true">⌄</span>
+                </button>
+                <div class="revision-menu hidden" id="source-revision-menu">
+                  <div class="revision-options" id="source-revision-options" role="listbox" aria-label="左侧分支提交"></div>
+                  <button class="revision-load-more hidden" id="source-revision-load-more" type="button">加载更多</button>
+                  <p class="revision-menu-status" id="source-revision-status" role="status" aria-live="polite">默认使用当前 HEAD</p>
+                </div>
+              </div>
               <div class="scope-line"><span>读取范围</span><code>Table</code><small id="source-scope-detail">全量 Excel</small></div>
             </div>
 
@@ -91,6 +103,18 @@
               </label>
               <div class="endpoint-match-list" id="target-endpoint-matches" aria-label="右侧端点匹配结果"></div>
               <p class="endpoint-url" id="target-url">请选择一个已启用端点</p>
+              <div class="revision-picker" id="target-revision-picker">
+                <span class="revision-picker-label">提交 LOG</span>
+                <button class="revision-trigger" id="target-revision-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="target-revision-options" disabled>
+                  <span><strong id="target-revision-value">当前 HEAD</strong><small id="target-revision-detail">选择分支后可查看历史提交</small></span>
+                  <span class="revision-trigger-icon" aria-hidden="true">⌄</span>
+                </button>
+                <div class="revision-menu hidden" id="target-revision-menu">
+                  <div class="revision-options" id="target-revision-options" role="listbox" aria-label="右侧分支提交"></div>
+                  <button class="revision-load-more hidden" id="target-revision-load-more" type="button">加载更多</button>
+                  <p class="revision-menu-status" id="target-revision-status" role="status" aria-live="polite">默认使用当前 HEAD</p>
+                </div>
+              </div>
               <div class="scope-line"><span>读取范围</span><code>Table</code><small id="target-scope-detail">全量 Excel</small></div>
             </div>
           </div>

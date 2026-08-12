@@ -1,9 +1,11 @@
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.services.config_service import ConfigStore
 from core.svn_provider import MockSVNProvider
 
 
@@ -20,6 +22,29 @@ def client():
         }
     }
     return TestClient(create_app(config=config, provider=MockSVNProvider(fixture)))
+
+
+def snapshot_client(tmp_path):
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    records = [
+        {
+            "id": endpoint_id,
+            "region": "KR",
+            "track": "FIX",
+            "label": endpoint_id,
+            "url": "https://mock.local/repo/branches/" + endpoint_id,
+            "logical_scopes": ["TABLE"],
+            "physical_path_filters": {},
+            "enabled": True,
+        }
+        for endpoint_id in ("LEFT", "RIGHT")
+    ]
+    app = create_app(
+        config={"svn": {"provider": "mock", "endpoint_registry": records}},
+        provider=MockSVNProvider(fixture),
+    )
+    app.state.config_store = ConfigStore(tmp_path / "settings.json")
+    return TestClient(app)
 
 
 def test_health_and_probe_contract():
@@ -46,6 +71,117 @@ def test_tree_log_and_content_contract():
     content = api.get("/api/svn/content", params={"url": "https://mock.local/repo", "revision": 105, "path": "table/Test.csv"})
     assert content.status_code == 200
     assert "new" in content.json()["text"]
+
+
+def test_branch_logs_are_branch_scoped_cursor_paginated_and_minimal():
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    fixture["info"]["revision"] = "165"
+    fixture["info"]["last_changed_revision"] = "165"
+    fixture["logs"] = [
+        {
+            "revision": revision,
+            "author": "author-" + str(revision),
+            "date": "2026-08-04T09:00:00Z",
+            "message": "message-" + str(revision),
+            "changed_paths": [{"path": "/repo/branches/foo/Table/A.xlsx", "action": "M"}],
+        }
+        for revision in range(101, 166)
+    ]
+    api = TestClient(
+        create_app(
+            config={"svn": {"provider": "mock"}},
+            provider=MockSVNProvider(fixture),
+        )
+    )
+    branch_url = "https://mock.local/repo/branches/foo"
+
+    first = api.get("/api/svn/branch-logs", params={"url": branch_url})
+
+    assert first.status_code == 200
+    body = first.json()
+    assert body["schema_version"] == "m2.svn-branch-log.v1"
+    assert len(body["commits"]) == 30
+    assert [item["revision"] for item in body["commits"]] == list(range(165, 135, -1))
+    assert set(body["commits"][0]) == {"revision", "author", "date", "message"}
+    assert body["commits"][0]["date"] == "2026-08-04T09:00:00Z"
+    assert body["has_more"] is True
+    assert body["next_cursor"]
+
+    second = api.get(
+        "/api/svn/branch-logs",
+        params={"url": branch_url, "cursor": body["next_cursor"]},
+    )
+    assert second.status_code == 200
+    second_body = second.json()
+    assert [item["revision"] for item in second_body["commits"]] == list(range(135, 105, -1))
+    assert not (
+        {item["revision"] for item in body["commits"]}
+        & {item["revision"] for item in second_body["commits"]}
+    )
+
+    final = api.get(
+        "/api/svn/branch-logs",
+        params={"url": branch_url, "cursor": second_body["next_cursor"]},
+    ).json()
+    assert [item["revision"] for item in final["commits"]] == list(range(105, 100, -1))
+    assert final["has_more"] is False
+    assert final["next_cursor"] is None
+
+    wrong_branch = api.get(
+        "/api/svn/branch-logs",
+        params={
+            "url": "https://mock.local/repo/branches/other",
+            "cursor": body["next_cursor"],
+        },
+    )
+    assert wrong_branch.status_code == 400
+    assert wrong_branch.json()["error"]["code"] == "SVN_INVALID_CURSOR"
+    malformed = api.get(
+        "/api/svn/branch-logs",
+        params={"url": branch_url, "cursor": "not-a-cursor"},
+    )
+    assert malformed.status_code == 400
+    assert malformed.json()["error"]["code"] == "SVN_INVALID_CURSOR"
+
+
+def test_snapshot_api_defaults_to_head_and_accepts_fixed_revisions(tmp_path):
+    api = snapshot_client(tmp_path)
+
+    default_response = api.post(
+        "/api/svn/snapshots",
+        json={
+            "source": {"endpoint_id": "LEFT"},
+            "target": {"endpoint_id": "RIGHT"},
+        },
+    )
+    assert default_response.status_code == 200
+    assert default_response.json()["source"]["resolved_revision"] == 105
+    assert default_response.json()["target"]["resolved_revision"] == 105
+
+    fixed_response = api.post(
+        "/api/svn/snapshots",
+        json={
+            "source": {"endpoint_id": "LEFT", "revision": 100},
+            "target": {"endpoint_id": "LEFT", "revision": 105},
+        },
+    )
+    assert fixed_response.status_code == 200
+    assert fixed_response.json()["source"]["resolved_revision"] == 100
+    assert fixed_response.json()["target"]["resolved_revision"] == 105
+
+
+@pytest.mark.parametrize("revision", [0, -1, True, "100", "head"])
+def test_snapshot_api_rejects_invalid_revision_values(tmp_path, revision):
+    api = snapshot_client(tmp_path)
+    response = api.post(
+        "/api/svn/snapshots",
+        json={
+            "source": {"endpoint_id": "LEFT", "revision": revision},
+            "target": {"endpoint_id": "RIGHT", "revision": "HEAD"},
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_api_returns_stable_error_shape():

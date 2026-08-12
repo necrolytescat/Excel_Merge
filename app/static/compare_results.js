@@ -1313,8 +1313,12 @@
 
   function renderTaskContext() {
     const context = state.context;
-    $("result-source-label").textContent = context.source?.branch || context.source?.label || "左侧";
-    $("result-target-label").textContent = context.target?.branch || context.target?.label || "右侧";
+    function sideLabel(side, fallback) {
+      const name = side?.branch || side?.label || fallback;
+      return side?.resolvedRevision ? name + " · r" + side.resolvedRevision : name;
+    }
+    $("result-source-label").textContent = sideLabel(context.source, "左侧");
+    $("result-target-label").textContent = sideLabel(context.target, "右侧");
     $("result-workbook-total").textContent = String(context.candidates.length);
     if (context.mode === "demo") $("mock-result-notice").classList.remove("hidden");
   }

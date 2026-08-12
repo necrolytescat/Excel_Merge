@@ -15,6 +15,7 @@ from app.schemas.svn import (
     SVNConfigUpdatePayload,
     EndpointCatalogPayload,
     BranchCandidatesPayload,
+    BranchLogPagePayload,
     BranchMatchPayload,
     EndpointRegistryPayload,
     SnapshotRequestPayload,
@@ -135,8 +136,15 @@ def create_snapshot(
         records,
         source_id=payload.source.endpoint_id,
         target_id=payload.target.endpoint_id,
+        source_revision=payload.source.revision,
+        target_revision=payload.target.revision,
     )
-    registry = snapshot_service.bind_snapshot_scopes(records, snapshot)
+    registry = snapshot_service.bind_snapshot_scopes(
+        records,
+        snapshot,
+        bind_source=payload.source.revision == "HEAD",
+        bind_target=payload.target.revision == "HEAD",
+    )
     request.app.state.config_store.save_endpoint_registry(registry)
     request.app.state.endpoint_registry = registry
     return snapshot
@@ -266,6 +274,16 @@ def logs(
 ) -> LogPayload:
     commits = service.logs(_endpoint(url, revision, path_filter), rev_from, rev_to)
     return LogPayload(commits=commits)
+
+
+@router.get("/branch-logs", response_model=BranchLogPagePayload)
+def branch_logs(
+    url: str = Query(..., min_length=1),
+    limit: int = Query(30, ge=1, le=100),
+    cursor: str | None = Query(None, min_length=1, max_length=512),
+    service: SVNService = Depends(get_service),
+) -> BranchLogPagePayload:
+    return service.branch_logs(url=url, limit=limit, cursor=cursor)
 
 
 @router.get("/content", response_model=ContentPayload)

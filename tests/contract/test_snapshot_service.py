@@ -102,6 +102,82 @@ def test_snapshot_freezes_each_head_once_and_reads_only_table_excel():
     assert all(revision == 210 for _, _, revision in provider.read_calls)
 
 
+def test_snapshot_accepts_fixed_revisions_without_head_and_allows_same_branch():
+    provider = CountingProvider(fixture())
+    same_branch_records = [records()[0]]
+    result = service(provider).create_snapshot(
+        same_branch_records,
+        source_id="KR_FIX_1_1_0",
+        source_revision=209,
+        target_id="KR_FIX_1_1_0",
+        target_revision=210,
+    )
+
+    assert result.source.resolved_revision == 209
+    assert result.target.resolved_revision == 210
+    assert provider.info_calls == []
+    assert {revision for _, _, revision in provider.read_calls} == {209, 210}
+
+
+def test_same_branch_head_resolving_to_selected_revision_is_rejected_before_scan():
+    provider = CountingProvider(fixture())
+    same_branch_records = [records()[0]]
+
+    try:
+        service(provider).create_snapshot(
+            same_branch_records,
+            source_id="KR_FIX_1_1_0",
+            source_revision="HEAD",
+            target_id="KR_FIX_1_1_0",
+            target_revision=210,
+        )
+    except SVNProviderError as exc:
+        assert exc.code == "SVN_ENDPOINT_REVISIONS_MUST_DIFFER"
+    else:
+        raise AssertionError("same resolved revision should fail")
+
+    assert provider.info_calls == [("https://mock.local/repo/Resource", "HEAD")]
+    assert provider.read_calls == []
+
+
+def test_same_branch_concrete_revisions_are_rejected_before_scan():
+    provider = CountingProvider(fixture())
+    same_branch_records = [records()[0]]
+
+    try:
+        service(provider).create_snapshot_at_revisions(
+            same_branch_records,
+            source_id="KR_FIX_1_1_0",
+            source_revision=210,
+            target_id="KR_FIX_1_1_0",
+            target_revision=210,
+        )
+    except SVNProviderError as exc:
+        assert exc.code == "SVN_ENDPOINT_REVISIONS_MUST_DIFFER"
+    else:
+        raise AssertionError("same concrete revision should fail")
+
+    assert provider.info_calls == []
+    assert provider.read_calls == []
+
+
+def test_fixed_revision_rediscovers_table_when_saved_binding_is_stale():
+    provider = CountingProvider(fixture())
+    stale = [records()[0]]
+    stale[0]["physical_path_filters"] = {"TABLE": "Removed/Table"}
+
+    result = service(provider).create_snapshot(
+        stale,
+        source_id="KR_FIX_1_1_0",
+        source_revision=209,
+        target_id="KR_FIX_1_1_0",
+        target_revision=210,
+    )
+
+    assert result.source.physical_path_filters["TABLE"].casefold() == "resource/table"
+    assert result.target.physical_path_filters["TABLE"].casefold() == "resource/table"
+
+
 def test_endpoint_registry_accepts_multiple_concrete_fix_records_and_rejects_disabled():
     provider = CountingProvider(fixture())
     snapshot = service(provider)

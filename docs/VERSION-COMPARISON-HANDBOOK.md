@@ -1,7 +1,7 @@
 # 版本对比模块工作手册
 
 > 状态：已交付，持续维护
-> 更新日期：2026-08-09
+> 更新日期：2026-08-12
 > 适用范围：左侧导航“版本对比”及其快照、批量 Diff、结果页和 Replay
 
 ## 1. 阅读规则
@@ -11,7 +11,7 @@
 当前事实来源优先级：
 
 1. 自动化测试和当前实现；
-2. `docs/contracts/` 中的契约及 ADR-006、ADR-007；
+2. `docs/contracts/` 中的契约及 ADR-006、ADR-007、ADR-008；
 3. 本手册；
 4. 历史归档。
 
@@ -23,7 +23,8 @@
 
 ```text
 选择左右 SVN 端点
--> 分别冻结当前 HEAD Revision
+-> 每侧默认 HEAD，也可选择该分支的历史 Revision
+-> 将两侧选择分别冻结为具体 Revision
 -> 读取两侧 Table Excel 快照
 -> 生成文件级差异候选
 -> 服务端按冻结 Revision 重建候选
@@ -35,8 +36,9 @@
 不可突破的边界：
 
 - `source=left`、`target=right`；source-only 表示右侧删除，target-only 表示右侧新增。
+- 同一端点允许选择两个不同 Revision；相同端点与相同最终 Revision 禁止比对。
 - Excel 与 CSV 必须来自同一侧、同一端点、同一冻结 Revision。
-- SVN Provider 只允许 `info/list/cat` 类读取；不得 commit、merge、update、copy 或写回。
+- SVN Provider 只允许 `info/list/log/cat` 类读取；不得 commit、merge、update、copy 或写回。
 - 不执行 Excel Merge，不生成写回文件，不执行宏或公式。
 - Excel 只提供候选、`main` 清单和展示结构；业务值以可靠导出的 CSV 为准。
 - `m2.diff.v1` 是唯一的工作簿明细 JSON；前端不得新增另一套 Diff JSON。
@@ -47,6 +49,7 @@
 
 ```text
 浏览器 /compare
+  -> GET /api/svn/branch-logs
   -> POST /api/svn/snapshots
   -> sessionStorage: excelDiffTaskContext
   -> POST /api/diff/batches
@@ -87,7 +90,7 @@ Demo 不是正式数据源，也不是主要验收入口。共享模板或渲染
 | 文件 | 职责 |
 |---|---|
 | `app/templates/compare.html` | 版本与快照页结构 |
-| `app/static/compare.js` | 端点、快照、候选、批量创建及页面上下文 |
+| `app/static/compare.js` | 端点与 Revision 选择、分支 LOG 分页、快照、候选、批量创建及页面上下文 |
 | pp/templates/history_tasks.html | 历史任务筛选、列表和页面状态结构 |
 | pp/static/history_tasks.js | 任务分页、筛选、ETag 刷新和结果入口 |
 | pp/static/history_tasks.css | 历史任务表格与响应式布局 |
@@ -141,7 +144,7 @@ Demo 不是正式数据源，也不是主要验收入口。共享模板或渲染
 
 | 文件 | 职责 |
 |---|---|
-| `app/services/snapshot_service.py` | 端点校验、HEAD 冻结、Table 清单、文件哈希与候选 |
+| `app/services/snapshot_service.py` | 端点校验、HEAD/历史 Revision 冻结、Table 清单、文件哈希与候选 |
 | `app/services/workbook_dataset_service.py` | 按请求 Revision 只读物化同侧 Excel 与 TableCsv |
 | `app/services/workbook_diff_service.py` | 将两侧本地数据集编排为 `m2.diff.v1` |
 | `app/services/batch_diff_service.py` | 服务端重建候选、单机调度、失败隔离、取消和重试 |
@@ -157,7 +160,8 @@ P3 运维服务由 app/services/operations_service.py 负责应用日志轮转�
 
 | 方法与路径 | 契约/用途 |
 |---|---|
-| `POST /api/svn/snapshots` | 冻结两侧 HEAD 并返回 Table Excel 快照 |
+| `GET /api/svn/branch-logs` | 当前分支提交 LOG 的游标分页，返回 `m2.svn-branch-log.v1` |
+| `POST /api/svn/snapshots` | 每侧接受可选正整数 Revision 或 `HEAD`，默认 HEAD；返回 Table Excel 快照 |
 | `POST /api/diff/workbooks/compare` | 单工作簿请求，直接返回 `m2.diff.v1` |
 | `POST /api/diff/batches` | 创建 `m2.batch.v1` 任务 |
 | `GET /api/diff/batches` | 查询历史任务摘要，支持游标、筛选和 ETag/304 |
@@ -233,7 +237,18 @@ sheetName 精确匹配
 
 ## 7. 数据契约
 
-### 7.1 `m2.diff.v1`
+### 7.1 `m2.svn-branch-log.v1` 与快照 Revision
+
+分支 LOG 契约位于 `docs/contracts/m2.svn-branch-log.v1.md`。每页默认 30 条，
+只返回当前分支创建后的 `revision/author/date/message`；游标绑定规范化分支 URL，
+损坏或跨分支复用返回 `SVN_INVALID_CURSOR`。
+
+`POST /api/svn/snapshots` 的 `source/target` 均接受
+`{"endpoint_id":"...","revision":"HEAD"}` 或正整数 Revision；省略 Revision
+等价于 HEAD。HEAD 先解析一次，显式历史 Revision 不读取 HEAD，响应继续返回
+`resolved_revision`。只有 HEAD 侧发现的 TABLE 路径写回端点注册表。
+
+### 7.2 `m2.diff.v1`
 
 定义在 `app/schemas/diff.py`，示例在 `docs/contracts/m2.diff.v1.example.json`。Pydantic 模型拒绝未知字段，规范序列化为 UTF-8、两空格缩进、结尾换行，结果 SHA-256 基于该字节序列。
 
@@ -252,7 +267,7 @@ errors[]
 
 `source_display_name`、`target_display_name` 是字段展示元数据；字段身份仍是 `name`。
 
-### 7.2 `m2.batch.v1`
+### 7.3 `m2.batch.v1`
 
 定义在 `app/schemas/batch.py`，完整说明、示例与验收分别位于：
 
@@ -317,6 +332,7 @@ errors[]
 
 | 需求类型 | 首要文件 | 必须验证 |
 |---|---|---|
+| 端点 Revision/分支 LOG | `svn_provider.py`、SVN schema/service/API、`compare.js` | 分支 URL、分页游标、stop-on-copy、过期请求、同端点合法性 |
 | 纯布局/样式 | 结果模板与对应 CSS | Replay 桌面视口、契约页面测试 |
 | 工作簿/Sheet/网格交互 | `compare_results.js` | Replay 代表工作簿、键盘/滚动/筛选、Node 语法 |
 | 批量状态和自动刷新 | `compare_results_batch.js` | queued/running/terminal、摘要延迟、失败与重试 |
@@ -350,6 +366,8 @@ py -3 -m pytest -q
 按风险选择重点用例：
 
 - `tests/contract/test_compare_preview.py`：模板、资源和结果页界面契约；
+- `tests/contract/test_svn_api.py`、`tests/unit/test_svn_provider.py`：分支 LOG、游标、CLI 边界与快照请求；
+- `tests/contract/test_snapshot_service.py`：HEAD/历史 Revision 冻结、同分支合法性和 TABLE 路径回退；
 - `tests/contract/test_diff_web_mapping.py`：mapper 映射；
 - `tests/contract/test_diff_json_contract.py`：`m2.diff.v1`；
 - `tests/contract/test_batch_diff_api.py`：`m2.batch.v1`、`m2.batch-list.v1`、`m2.batch-management.v1` API 与恢复/清理；

@@ -195,10 +195,11 @@ class SVNWorkbookDatasetResolver:
         record: Mapping[str, Any],
         endpoint: EndpointSpec,
     ) -> str:
+        configured = None
         for logical, path in dict(record.get("physical_path_filters") or {}).items():
             if str(logical).strip().upper() == "TABLE" and path:
                 try:
-                    return normalize_relative_path(str(path))
+                    configured = normalize_relative_path(str(path))
                 except SVNProviderError as exc:
                     raise WorkbookCompareError(
                         "DIFF_DATASET_CONFIG_INVALID",
@@ -232,6 +233,18 @@ class SVNWorkbookDatasetResolver:
                 "冻结 Revision 下不存在该工作簿",
                 status_code=404,
             )
+        if configured:
+            configured_folded = configured.casefold()
+            configured_matches = sorted(
+                (
+                    path
+                    for path in directories
+                    if path.casefold() == configured_folded
+                ),
+                key=lambda path: path.casefold(),
+            )
+            if configured_matches:
+                return configured_matches[0]
         return sorted(
             candidates,
             key=lambda path: (path.count("/"), path.casefold()),

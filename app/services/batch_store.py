@@ -528,6 +528,7 @@ class BatchStore:
 
     def get_task(self, task_id: str) -> BatchTaskPayload:
         with self._connect() as connection:
+            connection.execute("BEGIN")
             task = self._task_row(connection, task_id)
             items = list(
                 connection.execute(
