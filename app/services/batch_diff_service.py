@@ -236,11 +236,24 @@ class DefaultBatchWorkbookRunner:
         gate = self.execution_gate.acquire() if self.execution_gate else nullcontext()
         with gate:
             with self.dataset_resolver.resolve(payload) as dataset:
-                result = self.diff_service.compare_local(
-                    dataset.source_directory,
-                    dataset.target_directory,
-                    workbook_name,
-                )
+                if (
+                    getattr(self.diff_service, "supports_preparsed_manifests", False)
+                    and dataset.source_manifest is not None
+                    and dataset.target_manifest is not None
+                ):
+                    result = self.diff_service.compare_local(
+                        dataset.source_directory,
+                        dataset.target_directory,
+                        workbook_name,
+                        source_manifest=dataset.source_manifest,
+                        target_manifest=dataset.target_manifest,
+                    )
+                else:
+                    result = self.diff_service.compare_local(
+                        dataset.source_directory,
+                        dataset.target_directory,
+                        workbook_name,
+                    )
                 return serialize_diff_json(result)
 
 

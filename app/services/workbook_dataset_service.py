@@ -47,6 +47,16 @@ class _DirectoryFactKey:
 class WorkbookDataset:
     source_directory: Path
     target_directory: Path
+    source_manifest: WorkbookManifest | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    target_manifest: WorkbookManifest | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     _cleanup: Callable[[], None] | None = field(
         default=None,
         repr=False,
@@ -734,5 +744,15 @@ class SVNWorkbookDatasetResolver:
         return WorkbookDataset(
             source_directory=source_directory,
             target_directory=target_directory,
+            source_manifest=(
+                source_manifest
+                if source_manifest is not None and target_manifest is not None
+                else None
+            ),
+            target_manifest=(
+                target_manifest
+                if source_manifest is not None and target_manifest is not None
+                else None
+            ),
             _cleanup=temporary.cleanup,
         )

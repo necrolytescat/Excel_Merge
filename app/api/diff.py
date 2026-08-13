@@ -42,11 +42,24 @@ def compare_workbook(
     workbook_name = PurePosixPath(payload.workbook_path).name
     try:
         with resolver.resolve(payload) as dataset:
-            result = service.compare_local(
-                dataset.source_directory,
-                dataset.target_directory,
-                workbook_name,
-            )
+            if (
+                getattr(service, "supports_preparsed_manifests", False)
+                and dataset.source_manifest is not None
+                and dataset.target_manifest is not None
+            ):
+                result = service.compare_local(
+                    dataset.source_directory,
+                    dataset.target_directory,
+                    workbook_name,
+                    source_manifest=dataset.source_manifest,
+                    target_manifest=dataset.target_manifest,
+                )
+            else:
+                result = service.compare_local(
+                    dataset.source_directory,
+                    dataset.target_directory,
+                    workbook_name,
+                )
             content = serialize_diff_json(result)
     except WorkbookCompareError:
         raise

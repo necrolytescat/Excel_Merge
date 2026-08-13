@@ -133,12 +133,14 @@ class TimedWorkbookDiffService(WorkbookDiffService):
         source_directory: Path,
         target_directory: Path,
         workbook_name: str,
+        **kwargs,
     ):
         with self.performance.phase("diff.total"):
             return super().compare_local(
                 source_directory,
                 target_directory,
                 workbook_name,
+                **kwargs,
             )
 
 

@@ -587,3 +587,42 @@ def test_endpoint_registry_is_read_dynamically_for_each_request():
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "DIFF_ENDPOINT_NOT_FOUND"
     assert provider.read_calls == []
+
+
+def test_real_svn_api_reuses_resolver_manifests_in_diff(monkeypatch):
+    fixture = _atlas_fixture()
+    service = WorkbookDiffService(
+        DatasetLayout.from_config(CONFIG["dataset_layout"])
+    )
+    app, client, _ = _create_client(fixture, service=service)
+    resolver = app.state.workbook_dataset_resolver
+    resolver_calls = 0
+    diff_calls = 0
+    original_resolver_manifest = resolver._manifest
+    original_diff_manifest = service._manifest
+
+    def count_resolver_manifest(raw):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        return original_resolver_manifest(raw)
+
+    def count_diff_manifest(raw):
+        nonlocal diff_calls
+        diff_calls += 1
+        return original_diff_manifest(raw)
+
+    monkeypatch.setattr(resolver, "_manifest", count_resolver_manifest)
+    monkeypatch.setattr(service, "_manifest", count_diff_manifest)
+
+    response = client.post(
+        "/api/diff/workbooks/compare",
+        json=_request_payload(),
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["schema_version"] == "m2.diff.v1"
+    assert result["direction"] == {"source": "left", "target": "right"}
+    assert result["summary"]["modified_rows"] == 273
+    assert resolver_calls == 2
+    assert diff_calls == 0

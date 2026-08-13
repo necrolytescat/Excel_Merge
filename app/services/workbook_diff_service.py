@@ -73,6 +73,8 @@ def _empty_summary(*, error_count: int = 0) -> WorkbookSummaryPayload:
 
 
 class WorkbookDiffService:
+    supports_preparsed_manifests = True
+
     def __init__(self, layout: DatasetLayout):
         self.layout = layout
 
@@ -307,6 +309,9 @@ class WorkbookDiffService:
         source_directory: Path,
         target_directory: Path,
         workbook_name: str,
+        *,
+        source_manifest: WorkbookManifest | None = None,
+        target_manifest: WorkbookManifest | None = None,
     ) -> DiffResultPayload:
         if Path(workbook_name).name != workbook_name:
             raise ValueError("workbook_name 必须是文件名，不能包含路径")
@@ -346,17 +351,23 @@ class WorkbookDiffService:
             )
 
         manifests: dict[str, WorkbookManifest] = {}
-        for side, raw in (("source", source_raw), ("target", target_raw)):
-            try:
-                manifests[side] = self._manifest(raw)
-            except M2ProcessingError as error:
-                root_errors.append(
-                    self._error(
-                        error,
-                        side=side,
-                        workbook_name=workbook_name,
+        if source_manifest is not None and target_manifest is not None:
+            manifests = {
+                "source": source_manifest,
+                "target": target_manifest,
+            }
+        else:
+            for side, raw in (("source", source_raw), ("target", target_raw)):
+                try:
+                    manifests[side] = self._manifest(raw)
+                except M2ProcessingError as error:
+                    root_errors.append(
+                        self._error(
+                            error,
+                            side=side,
+                            workbook_name=workbook_name,
+                        )
                     )
-                )
         if root_errors:
             return self._failed_result(
                 workbook_name=workbook_name,
