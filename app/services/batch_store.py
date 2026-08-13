@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 import gzip
 import hashlib
@@ -98,7 +99,7 @@ class BatchStore:
                 return
             self.state_directory.mkdir(parents=True, exist_ok=True)
             self.results_directory.mkdir(parents=True, exist_ok=True)
-            with self._connect_raw() as connection:
+            with closing(self._connect_raw()) as connection, connection:
                 connection.executescript(
                     """
                     PRAGMA journal_mode = WAL;
@@ -213,9 +214,15 @@ class BatchStore:
         connection.execute("PRAGMA busy_timeout = 30000")
         return connection
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self):
         self.initialize()
-        return self._connect_raw()
+        connection = self._connect_raw()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     @staticmethod
     def _begin(connection: sqlite3.Connection) -> None:
