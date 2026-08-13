@@ -26,6 +26,25 @@ class BranchCopyBoundary:
 
 
 @dataclass(frozen=True)
+class FrozenTreeChange:
+    relative_path: str
+    action: str
+    kind: str
+
+
+@dataclass(frozen=True)
+class FrozenTreeDiff:
+    repository_uuid: str
+    source_canonical_url: str
+    source_revision: int
+    source_root: str
+    target_canonical_url: str
+    target_revision: int
+    target_root: str
+    changes: tuple[FrozenTreeChange, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
 class BranchChangedPath:
     repository_path: str
     branch_relative_path: str
@@ -76,6 +95,14 @@ class SVNHistoryProvider(Protocol):
         self,
         identity: BranchIdentity,
     ) -> BranchCopyBoundary: ...
+
+    def summarize_frozen_tree_diff(
+        self,
+        source: BranchIdentity,
+        source_root: str,
+        target: BranchIdentity,
+        target_root: str,
+    ) -> FrozenTreeDiff: ...
 
 
 def require_utc_instant(value: datetime) -> datetime:

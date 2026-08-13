@@ -287,6 +287,9 @@ errors[]
 
 同一规范 SVN URL 的两个冻结 Revision 还可在单次快照中增量复用文件 HASH。服务仍完整枚举两侧目录树，仅当同路径文件的 `svn list --xml` 最后修改 Revision 完全相同时，才把 source HASH 复用于 target；修改和新增文件仍从 target Revision 读取，删除文件由 target 完整目录事实自然排除。路径大小写歧义、最后修改 Revision 缺失、TABLE 布局变化或任何查询异常都会回退原完整双侧重建。该优化不跨 URL、不跨进程，也不改变快照字段或候选语义；冷态主要减少 SVN 内容读取量，已有 source Revision 内容缓存时才会显著缩短墙钟时间。
 
+同一仓库的不同冻结 URL 还可使用只读 svn diff --summarize --xml --notice-ancestry --ignore-properties 取得两侧固定 Revision 的完整 TABLE 树差异。只有 repository UUID/root、规范 URL、冻结 Revision、TABLE 物理布局、配置指纹、两侧完整目录树和差异路径全部闭环且无大小写歧义时，未变化文件才继承 source 已有 HASH；A/M/D/R 文件和目录变化覆盖的子树一律从 target 重读。copyfrom 和 copy boundary 仅用于历史校验，不能单独证明任意两个冻结 Revision 内容相同。
+命令不支持、stderr 警告、认证或权限过滤、历史截断、XML/路径异常、未知状态、证据缺项、缓存损坏或服务重启都会安全回退完整双侧读取。该优化仍沿用 pair-level TTL/LRU/single-flight，不增加磁盘缓存，不改变公共快照、m2.diff.v1、m2.batch.v1 或 source/target 语义。
+
 `m2.batch-management.v1` 定义在 `docs/contracts/m2.batch-management.v1.md`。结构化事件独立于批量任务 JSON，默认保留 90 天；终态任务可从历史任务页手动删除。删除仅影响该任务正式结果，不级联重试任务，不触碰原始日志、全局 SVN 缓存或 Replay 夹具。
 
 ## 8. Replay 与当前夹具

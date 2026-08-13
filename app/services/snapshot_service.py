@@ -17,7 +17,13 @@ import time
 from typing import Any, Callable, Mapping
 
 from core.models import EndpointSpec, TreeEntry
-from core.svn_history import canonicalize_svn_url
+from core.svn_history import (
+    BranchIdentity,
+    FrozenTreeDiff,
+    canonicalize_svn_url,
+    normalize_repository_path,
+    repository_path_from_urls,
+)
 from core.svn_provider import SVNProvider, SVNProviderError, normalize_relative_path, validate_endpoint
 from app.schemas.svn import (
     EndpointRecordPayload,
@@ -47,6 +53,11 @@ class _SnapshotBuildFlight:
     event: threading.Event
     result: SnapshotResponsePayload | None = None
     error: BaseException | None = None
+
+
+class _CrossBranchEvidenceError(RuntimeError):
+    def __init__(self, reason: str):
+        self.reason = reason
 
 
 class SnapshotService:
@@ -93,6 +104,11 @@ class SnapshotService:
             "incremental_pairs": 0,
             "incremental_reused_files": 0,
             "incremental_fallbacks": 0,
+            "cross_branch_pairs": 0,
+            "cross_branch_reused_files": 0,
+            "cross_branch_fallbacks": 0,
+            "cross_branch_evidence_calls": 0,
+            "cross_branch_evidence_seconds": 0.0,
         }
 
     @staticmethod
@@ -261,7 +277,7 @@ class SnapshotService:
             self._snapshot_reuse_counters["evicted"] += 1
         return True
 
-    def snapshot_reuse_metrics(self) -> dict[str, int]:
+    def snapshot_reuse_metrics(self) -> dict[str, int | float]:
         """Return redacted process-local counters for tests and diagnostics."""
         with self._cache_lock:
             self._prune_snapshot_fact_cache_locked(self._monotonic_clock())
@@ -538,6 +554,9 @@ class SnapshotService:
         repository_uuid: str | None = None,
         reusable_files: Mapping[str, SnapshotFilePayload] | None = None,
         reusable_content_revision: int | None = None,
+        reusable_content_url: str | None = None,
+        reusable_content_repository_uuid: str | None = None,
+        require_matching_entry_revision: bool = True,
     ) -> SnapshotEndpointPayload:
         url = self._validate_url(record)
         endpoint = validate_endpoint(
@@ -568,17 +587,25 @@ class SnapshotService:
                 or reused.error is not None
                 or not reused.content_hash
                 or not entry.revision
-                or str(reused.revision) != str(entry.revision)
+                or (
+                    require_matching_entry_revision
+                    and str(reused.revision) != str(entry.revision)
+                )
             ):
                 pending.append(entry)
                 continue
             source_key = (
-                repository_uuid or url,
-                url.rstrip("/"),
+                reusable_content_repository_uuid or repository_uuid or url,
+                (reusable_content_url or url).rstrip("/"),
                 path,
                 str(reusable_content_revision or reused.revision),
             )
-            target_key = (*source_key[:3], str(revision))
+            target_key = (
+                repository_uuid or url,
+                url.rstrip("/"),
+                path,
+                str(revision),
+            )
             with self._cache_lock:
                 raw = self._content_cache.get(source_key)
                 if raw is not None:
@@ -590,7 +617,7 @@ class SnapshotService:
                 SnapshotFilePayload(
                     path=path,
                     logical_scope=self._scope_for_path(path, physical),
-                    size=entry.size,
+                    size=entry.size if entry.size is not None else reused.size,
                     revision=entry.revision,
                     author=entry.author,
                     date=entry.date,
@@ -753,6 +780,272 @@ class SnapshotService:
             self._snapshot_reuse_counters["incremental_reused_files"] += reused_count
         return source, target
 
+    @staticmethod
+    def _frozen_identity_matches(
+        identity: BranchIdentity,
+        url: str,
+        revision: int,
+    ) -> bool:
+        try:
+            expected_path = repository_path_from_urls(
+                identity.repository_root,
+                identity.canonical_url,
+            )
+            identity_path = normalize_repository_path(
+                identity.repository_relative_path
+            )
+        except ValueError:
+            return False
+        return (
+            identity.canonical_url == canonicalize_svn_url(url)
+            and identity.bound_revision == revision
+            and bool(identity.repository_uuid)
+            and identity_path == expected_path
+        )
+
+    @staticmethod
+    def _require_unambiguous_table_root(
+        entries: list[TreeEntry],
+        table_path: str,
+    ) -> None:
+        table = normalize_relative_path(table_path)
+        table_parts = table.split("/")
+        variants: set[str] = set()
+        for entry in entries:
+            path = normalize_relative_path(entry.path)
+            parts = path.split("/")
+            if (
+                len(parts) >= len(table_parts)
+                and [part.casefold() for part in parts[: len(table_parts)]]
+                == [part.casefold() for part in table_parts]
+            ):
+                variants.add("/".join(parts[: len(table_parts)]))
+        if variants != {table}:
+            raise _CrossBranchEvidenceError("path_ambiguity")
+
+    @staticmethod
+    def _excel_entries_by_relative_path(
+        entries: list[TreeEntry],
+        table_path: str,
+    ) -> dict[str, TreeEntry]:
+        table = normalize_relative_path(table_path)
+        result: dict[str, TreeEntry] = {}
+        folded: set[str] = set()
+        for entry in entries:
+            if (
+                entry.kind != "file"
+                or not entry.path.casefold().endswith(EXCEL_EXTENSIONS)
+                or not SnapshotService._file_belongs_to_table(entry.path, table)
+            ):
+                continue
+            path = normalize_relative_path(entry.path)
+            relative = path[len(table) + 1 :]
+            relative_folded = relative.casefold()
+            if not relative or relative_folded in folded:
+                raise _CrossBranchEvidenceError("path_ambiguity")
+            folded.add(relative_folded)
+            result[relative] = entry
+        return result
+
+    @staticmethod
+    def _changed_by_evidence(path: str, evidence: FrozenTreeDiff) -> bool:
+        normalized = normalize_relative_path(path)
+        folded = normalized.casefold()
+        for change in evidence.changes:
+            changed = normalize_relative_path(change.relative_path)
+            changed_folded = changed.casefold()
+            if change.kind == "dir":
+                if not changed or folded == changed_folded or folded.startswith(changed_folded + "/"):
+                    return True
+            elif changed and folded == changed_folded:
+                return True
+        return False
+
+    def _cross_branch_reusable_files(
+        self,
+        *,
+        source: SnapshotEndpointPayload,
+        source_entries: list[TreeEntry],
+        target_entries: list[TreeEntry],
+        evidence: FrozenTreeDiff,
+    ) -> dict[str, SnapshotFilePayload]:
+        changed_paths: set[str] = set()
+        for change in evidence.changes:
+            path = normalize_relative_path(change.relative_path)
+            folded = path.casefold()
+            if (
+                change.action not in {"A", "M", "D", "R"}
+                or change.kind not in {"file", "dir"}
+                or (change.kind == "file" and not path)
+                or folded in changed_paths
+            ):
+                raise _CrossBranchEvidenceError("path_ambiguity")
+            changed_paths.add(folded)
+        self._require_unambiguous_table_root(source_entries, evidence.source_root)
+        self._require_unambiguous_table_root(target_entries, evidence.target_root)
+        source_table = source.physical_path_filters["TABLE"]
+        target_table = evidence.target_root
+        source_tree = self._excel_entries_by_relative_path(source_entries, source_table)
+        target_tree = self._excel_entries_by_relative_path(target_entries, target_table)
+        source_files = self._reusable_files_by_path(source)
+        if source_files is None or source.stats.failed_count != 0:
+            raise _CrossBranchEvidenceError("source_snapshot_incomplete")
+        source_by_relative = {
+            path[len(normalize_relative_path(source_table)) + 1 :]: item
+            for path, item in source_files.items()
+        }
+
+        for path in set(source_tree) ^ set(target_tree):
+            if not self._changed_by_evidence(path, evidence):
+                raise _CrossBranchEvidenceError("tree_diff_incomplete")
+
+        reusable: dict[str, SnapshotFilePayload] = {}
+        for relative in sorted(set(source_tree) & set(target_tree), key=str.casefold):
+            changed = self._changed_by_evidence(relative, evidence)
+            source_entry = source_tree[relative]
+            target_entry = target_tree[relative]
+            if (
+                not changed
+                and source_entry.size is not None
+                and target_entry.size is not None
+                and source_entry.size != target_entry.size
+            ):
+                raise _CrossBranchEvidenceError("tree_diff_inconsistent")
+            if changed:
+                continue
+            source_file = source_by_relative.get(relative)
+            if (
+                source_file is None
+                or source_file.error is not None
+                or not source_file.content_hash
+            ):
+                raise _CrossBranchEvidenceError("source_snapshot_incomplete")
+            reusable[normalize_relative_path(target_entry.path)] = source_file
+        return reusable
+
+    def _cross_branch_incremental_pair(
+        self,
+        source_record: Mapping[str, Any],
+        source_revision: int,
+        target_record: Mapping[str, Any],
+        target_revision: int,
+        *,
+        source_content_identity: str | None = None,
+        target_content_identity: str | None = None,
+    ) -> tuple[SnapshotEndpointPayload, SnapshotEndpointPayload] | None:
+        resolve_identity = getattr(self.provider, "resolve_branch_identity", None)
+        summarize = getattr(self.provider, "summarize_frozen_tree_diff", None)
+        if resolve_identity is None or summarize is None:
+            return None
+        try:
+            source_url = canonicalize_svn_url(self._validate_url(source_record))
+            target_url = canonicalize_svn_url(self._validate_url(target_record))
+            if source_url == target_url:
+                return None
+            source_identity = resolve_identity(
+                EndpointSpec(url=source_url, revision=source_revision)
+            )
+            target_identity = resolve_identity(
+                EndpointSpec(url=target_url, revision=target_revision)
+            )
+            if (
+                not self._frozen_identity_matches(
+                    source_identity, source_url, source_revision
+                )
+                or not self._frozen_identity_matches(
+                    target_identity, target_url, target_revision
+                )
+                or source_identity.repository_uuid != target_identity.repository_uuid
+                or canonicalize_svn_url(source_identity.repository_root)
+                != canonicalize_svn_url(target_identity.repository_root)
+            ):
+                raise _CrossBranchEvidenceError("repository_identity")
+            source_entries = self.provider.list_tree(
+                EndpointSpec(url=source_url, revision=source_revision)
+            )
+            target_entries = self.provider.list_tree(
+                EndpointSpec(url=target_url, revision=target_revision)
+            )
+            source_physical = self.resolve_scope_paths(
+                source_record, source_revision, entries=source_entries
+            )
+            target_physical = self.resolve_scope_paths(
+                target_record, target_revision, entries=target_entries
+            )
+            if source_physical != target_physical:
+                raise _CrossBranchEvidenceError("table_layout")
+            source = self._snapshot_endpoint_from_entries(
+                source_record,
+                source_revision,
+                source_entries,
+                repository_uuid=source_content_identity or source_url,
+            )
+            evidence_started = time.perf_counter()
+            try:
+                evidence = summarize(
+                    source_identity,
+                    source_physical["TABLE"],
+                    target_identity,
+                    target_physical["TABLE"],
+                )
+            finally:
+                evidence_seconds = time.perf_counter() - evidence_started
+                with self._cache_lock:
+                    self._snapshot_reuse_counters["cross_branch_evidence_calls"] += 1
+                    self._snapshot_reuse_counters[
+                        "cross_branch_evidence_seconds"
+                    ] += evidence_seconds
+            if (
+                evidence.repository_uuid != source_identity.repository_uuid
+                or canonicalize_svn_url(evidence.source_canonical_url)
+                != source_identity.canonical_url
+                or canonicalize_svn_url(evidence.target_canonical_url)
+                != target_identity.canonical_url
+                or evidence.source_revision != source_revision
+                or evidence.target_revision != target_revision
+                or normalize_relative_path(evidence.source_root)
+                != normalize_relative_path(source_physical["TABLE"])
+                or normalize_relative_path(evidence.target_root)
+                != normalize_relative_path(target_physical["TABLE"])
+            ):
+                raise _CrossBranchEvidenceError("evidence_identity")
+            reusable = self._cross_branch_reusable_files(
+                source=source,
+                source_entries=source_entries,
+                target_entries=target_entries,
+                evidence=evidence,
+            )
+            target = self._snapshot_endpoint_from_entries(
+                target_record,
+                target_revision,
+                target_entries,
+                repository_uuid=target_content_identity or target_url,
+                reusable_files=reusable,
+                reusable_content_revision=source_revision,
+                reusable_content_url=source_url,
+                reusable_content_repository_uuid=(
+                    source_content_identity or source_url
+                ),
+                require_matching_entry_revision=False,
+            )
+        except Exception as exc:
+            reason = (
+                exc.reason
+                if isinstance(exc, _CrossBranchEvidenceError)
+                else "provider_error"
+            )
+            with self._cache_lock:
+                self._snapshot_reuse_counters["cross_branch_fallbacks"] += 1
+                key = f"cross_branch_fallback.{reason}"
+                self._snapshot_reuse_counters[key] = (
+                    self._snapshot_reuse_counters.get(key, 0) + 1
+                )
+            return None
+        with self._cache_lock:
+            self._snapshot_reuse_counters["cross_branch_pairs"] += 1
+            self._snapshot_reuse_counters["cross_branch_reused_files"] += len(reusable)
+        return source, target
+
     def _snapshot_endpoint(self, record: Mapping[str, Any]) -> SnapshotEndpointPayload:
         resolved_revision, repository_uuid = self._resolve_head(record)
         if not isinstance(resolved_revision, int):
@@ -824,13 +1117,23 @@ class SnapshotService:
             return flight.result.model_copy(deep=True)
 
         try:
-            incremental = self._same_branch_incremental_pair(
+            same_branch = self._same_branch_incremental_pair(
                 source_record,
                 source_revision,
                 target_record,
                 target_revision,
             )
-            source, target = incremental or self._snapshot_pair_at_revisions(
+            cross_branch = None
+            if same_branch is None:
+                cross_branch = self._cross_branch_incremental_pair(
+                    source_record,
+                    source_revision,
+                    target_record,
+                    target_revision,
+                    source_content_identity=source_repository_uuid,
+                    target_content_identity=target_repository_uuid,
+                )
+            source, target = same_branch or cross_branch or self._snapshot_pair_at_revisions(
                 source_record,
                 source_revision,
                 target_record,

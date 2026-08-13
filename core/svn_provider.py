@@ -33,6 +33,8 @@ from .svn_history import (
     BranchCommit,
     BranchCopyBoundary,
     BranchIdentity,
+    FrozenTreeChange,
+    FrozenTreeDiff,
     append_url_path,
     branch_relative_path,
     canonicalize_svn_url,
@@ -45,6 +47,15 @@ from .svn_history import (
 
 
 DEFAULT_ALLOWED_SCHEMES = ("http", "https", "svn", "svn+ssh", "file")
+
+_SUMMARY_ACTIONS = {
+    "added": "A",
+    "deleted": "D",
+    "modified": "M",
+    "replaced": "R",
+    "normal": "M",
+    "none": "M",
+}
 
 
 class SVNProviderError(RuntimeError):
@@ -76,6 +87,16 @@ class SVNProvider(Protocol):
         upper_revision: int | str,
         limit: int,
     ) -> list[CommitInfo]: ...
+
+    def resolve_branch_identity(self, endpoint: EndpointSpec) -> BranchIdentity: ...
+
+    def summarize_frozen_tree_diff(
+        self,
+        source: BranchIdentity,
+        source_root: str,
+        target: BranchIdentity,
+        target_root: str,
+    ) -> FrozenTreeDiff: ...
 
     def read_bytes(self, endpoint: EndpointSpec, path: str) -> bytes: ...
 
@@ -392,14 +413,131 @@ class CLISVNProvider:
     def _target(url: str, revision: Revision) -> str:
         return f"{url.rstrip('/')}@{revision}"
 
-    def _run_xml(self, args: list[str], *, fallback: str = "SVN_NOT_REACHABLE") -> ET.Element:
+    def _run_xml(
+        self,
+        args: list[str],
+        *,
+        fallback: str = "SVN_NOT_REACHABLE",
+        reject_stderr: bool = False,
+    ) -> ET.Element:
         rc, out, stderr = svn_client._run(*args, timeout=self.timeout)
         if rc != 0:
+            raise self._error_from_text(stderr, fallback)
+        if reject_stderr and stderr.strip():
             raise self._error_from_text(stderr, fallback)
         try:
             return ET.fromstring(out)
         except ET.ParseError as exc:
             raise SVNProviderError("SVN_DECODE_ERROR", "SVN XML 响应解析失败", detail=str(exc)) from exc
+
+    @staticmethod
+    def _relative_url_path(root_url: str, path_url: str) -> str | None:
+        root = urllib.parse.urlsplit(canonicalize_svn_url(root_url))
+        path = urllib.parse.urlsplit(canonicalize_svn_url(path_url))
+        if (
+            root.scheme != path.scheme
+            or root.netloc.casefold() != path.netloc.casefold()
+            or root.query != path.query
+        ):
+            return None
+        root_path = urllib.parse.unquote(root.path).rstrip("/")
+        path_value = urllib.parse.unquote(path.path).rstrip("/")
+        if path_value == root_path:
+            return ""
+        prefix = root_path + "/"
+        if not path_value.startswith(prefix):
+            return None
+        return normalize_relative_path(path_value[len(prefix) :])
+
+    def summarize_frozen_tree_diff(
+        self,
+        source: BranchIdentity,
+        source_root: str,
+        target: BranchIdentity,
+        target_root: str,
+    ) -> FrozenTreeDiff:
+        if (
+            not source.repository_uuid
+            or source.repository_uuid != target.repository_uuid
+            or canonicalize_svn_url(source.repository_root)
+            != canonicalize_svn_url(target.repository_root)
+        ):
+            raise SVNProviderError(
+                "SVN_TREE_DIFF_REPOSITORY_MISMATCH",
+                "冻结端点不属于同一 SVN 仓库",
+            )
+        source_path = normalize_relative_path(source_root)
+        target_path = normalize_relative_path(target_root)
+        source_url = append_url_path(source.canonical_url, source_path)
+        target_url = append_url_path(target.canonical_url, target_path)
+        root = self._run_xml(
+            [
+                "diff",
+                "--summarize",
+                "--xml",
+                "--notice-ancestry",
+                "--ignore-properties",
+                "--depth",
+                "infinity",
+                "--old",
+                f"{source_url}@{source.bound_revision}",
+                "--new",
+                f"{target_url}@{target.bound_revision}",
+            ],
+            fallback="SVN_TREE_DIFF_UNAVAILABLE",
+            reject_stderr=True,
+        )
+        if root.tag != "diff":
+            raise SVNProviderError(
+                "SVN_TREE_DIFF_INVALID",
+                "SVN 树差异响应不完整",
+            )
+        paths_nodes = root.findall("./paths")
+        if len(paths_nodes) != 1:
+            raise SVNProviderError(
+                "SVN_TREE_DIFF_INVALID",
+                "SVN 树差异响应缺少路径集合",
+            )
+        changes: list[FrozenTreeChange] = []
+        for node in paths_nodes[0].findall("path"):
+            item = (node.get("item") or "").strip().lower()
+            action = _SUMMARY_ACTIONS.get(item)
+            kind = (node.get("kind") or "").strip().lower()
+            raw_url = (node.text or "").strip()
+            if action is None or kind not in {"file", "dir"} or not raw_url:
+                raise SVNProviderError(
+                    "SVN_TREE_DIFF_INVALID",
+                    "SVN 树差异包含不支持的路径状态",
+                )
+            preferred_roots = (
+                (target_url, source_url) if action != "D" else (source_url, target_url)
+            )
+            relative = next(
+                (
+                    value
+                    for root_url in preferred_roots
+                    if (value := self._relative_url_path(root_url, raw_url)) is not None
+                ),
+                None,
+            )
+            if relative is None:
+                raise SVNProviderError(
+                    "SVN_TREE_DIFF_INVALID",
+                    "SVN 树差异路径不属于冻结 TABLE",
+                )
+            changes.append(
+                FrozenTreeChange(relative_path=relative, action=action, kind=kind)
+            )
+        return FrozenTreeDiff(
+            repository_uuid=source.repository_uuid,
+            source_canonical_url=source.canonical_url,
+            source_revision=source.bound_revision,
+            source_root=source_path,
+            target_canonical_url=target.canonical_url,
+            target_revision=target.bound_revision,
+            target_root=target_path,
+            changes=tuple(changes),
+        )
 
     @staticmethod
     def _positive_revision(value: str | int, *, code: str) -> int:
