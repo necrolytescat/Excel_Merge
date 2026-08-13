@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from typing import Any, Protocol
 
 from app.schemas.workbook_compare import WorkbookCompareRequestPayload
+from app.services.directory_fact_cache import DirectoryFactCache
 from core.m2_errors import M2ProcessingError
 from core.models import EndpointSpec
 from core.svn_provider import (
@@ -18,12 +19,26 @@ from core.svn_provider import (
     normalize_relative_path,
     validate_endpoint,
 )
+from core.svn_history import canonicalize_svn_url
 from core.workbook_manifest_parser import WorkbookManifest, parse_workbook_manifest
 
 
 logger = logging.getLogger(__name__)
 EXCEL_EXTENSIONS = (".xlsx", ".xlsm", ".xls")
 _MISSING_PATH_CODES = {"SVN_NOT_FOUND", "SVN_PATH_NOT_FOUND"}
+_DIRECTORY_FACT_CACHE_SIZE = 256
+
+
+@dataclass(frozen=True)
+class _DirectoryFactKey:
+    kind: str
+    endpoint_id: str
+    canonical_url: str
+    revision: int | str
+    physical_paths: tuple[tuple[str, str], ...]
+    table_directory_name: str
+    csv_directory_name: str
+    table_directory: str = ""
 
 
 @dataclass
@@ -138,6 +153,9 @@ class SVNWorkbookDatasetResolver:
         self.provider = provider
         self.endpoint_registry = endpoint_registry
         self.allowed_schemes = allowed_schemes
+        self._directory_facts = DirectoryFactCache[_DirectoryFactKey](
+            _DIRECTORY_FACT_CACHE_SIZE
+        )
         try:
             workbook_source = dict(dataset_layout["workbook_source"])
             csv_export = dict(dataset_layout["csv_export"])
@@ -188,6 +206,36 @@ class SVNWorkbookDatasetResolver:
             "DIFF_DATASET_READ_FAILED",
             "无法读取冻结 Revision 数据集",
             status_code=500,
+        )
+
+    def _directory_fact_key(
+        self,
+        kind: str,
+        record: Mapping[str, Any],
+        endpoint: EndpointSpec,
+        *,
+        table_directory: str = "",
+    ) -> _DirectoryFactKey:
+        physical_paths = tuple(
+            sorted(
+                (
+                    str(logical).strip().upper(),
+                    str(path).strip(),
+                )
+                for logical, path in dict(
+                    record.get("physical_path_filters") or {}
+                ).items()
+            )
+        )
+        return _DirectoryFactKey(
+            kind=kind,
+            endpoint_id=str(record.get("id", "")),
+            canonical_url=canonicalize_svn_url(endpoint.url),
+            revision=endpoint.revision,
+            physical_paths=physical_paths,
+            table_directory_name=self.table_directory_name,
+            csv_directory_name=self.csv_directory_name,
+            table_directory=table_directory,
         )
 
     def _table_directory(
@@ -250,6 +298,31 @@ class SVNWorkbookDatasetResolver:
             key=lambda path: (path.count("/"), path.casefold()),
         )[0]
 
+    def _cached_table_directory(
+        self,
+        record: Mapping[str, Any],
+        endpoint: EndpointSpec,
+    ) -> str:
+        def discover() -> str | None:
+            try:
+                return self._table_directory(record, endpoint)
+            except WorkbookCompareError as exc:
+                if exc.code == "DIFF_WORKBOOK_NOT_FOUND":
+                    return None
+                raise
+
+        result = self._directory_facts.get_or_load(
+            self._directory_fact_key("table", record, endpoint),
+            discover,
+        )
+        if result is None:
+            raise WorkbookCompareError(
+                "DIFF_WORKBOOK_NOT_FOUND",
+                "冻结 Revision 下不存在该工作簿",
+                status_code=404,
+            )
+        return result
+
     def _csv_directory(
         self,
         endpoint: EndpointSpec,
@@ -260,7 +333,7 @@ class SVNWorkbookDatasetResolver:
             children = self.provider.list_children(endpoint, parent)
         except SVNProviderError as exc:
             if exc.code in _MISSING_PATH_CODES:
-                return None
+                raise
             raise self._provider_failure(exc) from exc
         candidates = [
             normalize_relative_path(entry.path)
@@ -276,6 +349,27 @@ class SVNWorkbookDatasetResolver:
                 status_code=500,
             )
         return candidates[0] if candidates else None
+
+    def _cached_csv_directory(
+        self,
+        record: Mapping[str, Any],
+        endpoint: EndpointSpec,
+        table_directory: str,
+    ) -> str | None:
+        try:
+            return self._directory_facts.get_or_load(
+                self._directory_fact_key(
+                    "csv",
+                    record,
+                    endpoint,
+                    table_directory=table_directory,
+                ),
+                lambda: self._csv_directory(endpoint, table_directory),
+            )
+        except SVNProviderError as exc:
+            if exc.code in _MISSING_PATH_CODES:
+                return None
+            raise
 
     @staticmethod
     def _join(*parts: str) -> str:
@@ -398,8 +492,8 @@ class SVNWorkbookDatasetResolver:
         target_record = self._record(payload.target.endpoint_id)
         source_endpoint = self._endpoint(source_record, payload.source.revision)
         target_endpoint = self._endpoint(target_record, payload.target.revision)
-        source_table = self._table_directory(source_record, source_endpoint)
-        target_table = self._table_directory(target_record, target_endpoint)
+        source_table = self._cached_table_directory(source_record, source_endpoint)
+        target_table = self._cached_table_directory(target_record, target_endpoint)
         source_raw = self._read_workbook(
             source_endpoint,
             source_table,
@@ -430,12 +524,20 @@ class SVNWorkbookDatasetResolver:
         if source_manifest is not None and target_manifest is not None:
             source_csv = self._read_csv_files(
                 source_endpoint,
-                self._csv_directory(source_endpoint, source_table),
+                self._cached_csv_directory(
+                    source_record,
+                    source_endpoint,
+                    source_table,
+                ),
                 source_manifest,
             )
             target_csv = self._read_csv_files(
                 target_endpoint,
-                self._csv_directory(target_endpoint, target_table),
+                self._cached_csv_directory(
+                    target_record,
+                    target_endpoint,
+                    target_table,
+                ),
                 target_manifest,
             )
 
