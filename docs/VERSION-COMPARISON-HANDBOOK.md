@@ -144,7 +144,7 @@ Demo 不是正式数据源，也不是主要验收入口。共享模板或渲染
 
 | 文件 | 职责 |
 |---|---|
-| `app/services/snapshot_service.py` | 端点校验、HEAD/历史 Revision 冻结、Table 清单、文件哈希与候选 |
+| `app/services/snapshot_service.py` | 端点校验、HEAD/历史 Revision 冻结、Table 清单、文件哈希与短期可信快照复用 |
 | `app/services/workbook_dataset_service.py` | 按请求 Revision 只读物化同侧 Excel 与 TableCsv |
 | `app/services/workbook_diff_service.py` | 将两侧本地数据集编排为 `m2.diff.v1` |
 | `app/services/batch_diff_service.py` | 服务端重建候选、单机调度、失败隔离、取消和重试 |
@@ -281,6 +281,10 @@ errors[]
 
 `BatchStore` 默认写入 `var/m2-batch/batch.sqlite3`，结果写入 `var/m2-batch/results/<task>/<item>.json.gz`。启动时恢复租约和孤立文件；运行数据不进入 Git。
 
+页面快照与紧随其后的批量候选准备共享同一个 `SnapshotService`。服务会在进程内短期保存已经由服务端读取并哈希的冻结快照事实，默认 TTL 300 秒、最多 8 对。复用键覆盖左右端点顺序、规范端点记录、冻结 Revision、M1 规则和 `dataset_layout` 配置指纹；命中时再次校验完整事实 SHA-256、端点/Revision/URL、TABLE 布局、文件范围、hash/error 组合和统计。并发相同构建使用 single-flight。缺失、过期、配置变化、事实损坏或服务重启时安全回退 `create_snapshot_at_revisions()` 的完整重建，构建失败不缓存。
+
+这是内部可再生优化，不属于 `m2.batch.v1` 持久化：不接受前端 HASH 或候选，不写批量数据库，不跨服务重启恢复，也不改变取消、重试和任务恢复语义；显式重试会绕过页面短期缓存并完整重验候选。内部接入点为 `SnapshotService.register_trusted_snapshot()`、`create_snapshot_at_revisions()`、`SnapshotBatchCandidateResolver.prepare_fresh()` 和脱敏诊断 `snapshot_reuse_metrics()`。
+
 `m2.batch-management.v1` 定义在 `docs/contracts/m2.batch-management.v1.md`。结构化事件独立于批量任务 JSON，默认保留 90 天；终态任务可从历史任务页手动删除。删除仅影响该任务正式结果，不级联重试任务，不触碰原始日志、全局 SVN 缓存或 Replay 夹具。
 
 ## 8. Replay 与当前夹具
@@ -326,7 +330,9 @@ errors[]
 | 历史验证 | `docs/verify/` | 早期第三方库风险实验，仅审计时使用 |
 | AI 配置工具 | `app/tools/*ai*`、`scan_ai_field_catalog.py` | 邻接能力，不属于版本对比 Diff 主链路 |
 
-配置入口：本机运行使用被 Git 忽略的 `config/settings.json`；示例基础配置在 `config/settings.m0.example.json`。`dataset_layout` 是 Excel/CSV 结构和同侧绑定的机器可读配置。
+配置入口：本机运行使用被 Git 忽略的 `config/settings.json`；示例基础配置在 `config/settings.m0.example.json`。`dataset_layout` 是 Excel/CSV 结构和同侧绑定的机器可读配置。`snapshot_reuse.ttl_seconds` 和 `snapshot_reuse.max_entries` 控制页面冻结快照的进程内复用窗口；任一设为 0 可关闭复用并保留完整重建路径。
+
+2026-08-13 离线性能基线使用 24 个 Excel/侧、Provider `list_tree=40ms`、`read_bytes=10ms`、7 轮中位数：冷准备 85.528ms（2 次 list、48 次 read）；页面已锁定但禁用复用 44.557ms（2 次 list、0 次 read）；可信热复用 0.808ms（0 次 list、0 次 read），相对页面后的原准备阶段降低约 98.2%。三组候选均为 24 项且规范候选 JSON/指纹一致。该基线只用于比较候选准备开销，不替代真实 SVN 环境验收。
 
 ## 10. 修改入口
 
@@ -371,6 +377,7 @@ py -3 -m pytest -q
 - `tests/contract/test_diff_web_mapping.py`：mapper 映射；
 - `tests/contract/test_diff_json_contract.py`：`m2.diff.v1`；
 - `tests/contract/test_batch_diff_api.py`：`m2.batch.v1`、`m2.batch-list.v1`、`m2.batch-management.v1` API 与恢复/清理；
+- `tests/unit/test_snapshot_batch_reuse.py`：页面快照直达批量候选、single-flight、过期/重启/配置变化/损坏回退、取消和资源回收；
 - `tests/unit/test_offline_fixture.py`：夹具门禁与 Replay；
 - `tests/unit/test_table_csv_parser.py`、`test_semantic_diff.py`：语义规则；
 - `tests/unit/test_svn_workbook_dataset_resolver.py`：同侧冻结数据物化；

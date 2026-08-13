@@ -80,6 +80,14 @@ class SnapshotBatchCandidateResolver:
         source: BatchEndpointPayload,
         target: BatchEndpointPayload,
     ) -> None:
+        self._validate_endpoint_records(source, target, list(self.endpoint_registry()))
+
+    @staticmethod
+    def _validate_endpoint_records(
+        source: BatchEndpointPayload,
+        target: BatchEndpointPayload,
+        records: Sequence[Mapping[str, Any]],
+    ) -> None:
         if (
             source.endpoint_id == target.endpoint_id
             and source.revision == target.revision
@@ -91,7 +99,7 @@ class SnapshotBatchCandidateResolver:
             )
         records = {
             str(record.get("id", "")): record
-            for record in self.endpoint_registry()
+            for record in records
         }
         for endpoint in (source, target):
             record = records.get(endpoint.endpoint_id)
@@ -178,13 +186,42 @@ class SnapshotBatchCandidateResolver:
         source: BatchEndpointPayload,
         target: BatchEndpointPayload,
     ) -> list[BatchCandidatePayload]:
-        self.validate_endpoints(source, target)
-        snapshot = self.snapshot_service.create_snapshot_at_revisions(
-            list(self.endpoint_registry()),
-            source_id=source.endpoint_id,
-            source_revision=source.revision,
-            target_id=target.endpoint_id,
-            target_revision=target.revision,
+        return self._prepare(source, target, reuse=True)
+
+    def prepare_fresh(
+        self,
+        source: BatchEndpointPayload,
+        target: BatchEndpointPayload,
+    ) -> list[BatchCandidatePayload]:
+        """Retries revalidate SVN facts instead of replaying the page cache."""
+        return self._prepare(source, target, reuse=False)
+
+    def _prepare(
+        self,
+        source: BatchEndpointPayload,
+        target: BatchEndpointPayload,
+        *,
+        reuse: bool,
+    ) -> list[BatchCandidatePayload]:
+        records = list(self.endpoint_registry())
+        self._validate_endpoint_records(source, target, records)
+        snapshot_arguments = {
+            "source_id": source.endpoint_id,
+            "source_revision": source.revision,
+            "target_id": target.endpoint_id,
+            "target_revision": target.revision,
+        }
+        snapshot = (
+            self.snapshot_service.create_snapshot_at_revisions(
+                records,
+                **snapshot_arguments,
+            )
+            if reuse
+            else self.snapshot_service.create_snapshot_at_revisions(
+                records,
+                **snapshot_arguments,
+                reuse=False,
+            )
         )
         source_table = snapshot.source.physical_path_filters["TABLE"]
         target_table = snapshot.target.physical_path_filters["TABLE"]
@@ -538,7 +575,12 @@ class BatchDiffService:
             endpoint_id=task["target_endpoint_id"],
             revision=task["target_revision"],
         )
-        candidates = self.candidate_resolver.prepare(source, target)
+        fresh_preparer = getattr(self.candidate_resolver, "prepare_fresh", None)
+        candidates = (
+            fresh_preparer(source, target)
+            if task["candidate_scope"] == "retry_subset" and fresh_preparer is not None
+            else self.candidate_resolver.prepare(source, target)
+        )
         if task["candidate_scope"] == "all":
             return [(candidate, None, None) for candidate in candidates]
         by_path = {candidate.path: candidate for candidate in candidates}

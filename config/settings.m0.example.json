@@ -15,6 +15,10 @@
   "batch_diff": {
     "event_retention_days": 90
   },
+  "snapshot_reuse": {
+    "ttl_seconds": 300,
+    "max_entries": 8
+  },
   "diff_plan": {
     "database_path": "var/m4-diff-plan/diff-plan.sqlite3",
     "detail_retention_days": 30,

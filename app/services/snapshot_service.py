@@ -5,11 +5,16 @@
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import json
+import re
 import threading
-from typing import Any, Mapping
+import time
+from typing import Any, Callable, Mapping
 
 from core.models import EndpointSpec, TreeEntry
 from core.svn_provider import SVNProvider, SVNProviderError, normalize_relative_path, validate_endpoint
@@ -25,6 +30,22 @@ from app.schemas.svn import (
 LOGICAL_SCOPES = ("TABLE",)
 EXCEL_EXTENSIONS = (".xlsx", ".xlsm", ".xls")
 _SNAPSHOT_SIDE_WORKERS = 2
+_SNAPSHOT_REUSE_RULESET = "m1.table-excel-snapshot-facts.v1"
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+@dataclass
+class _TrustedSnapshotEntry:
+    snapshot: SnapshotResponsePayload
+    facts_sha256: str
+    expires_at: float
+
+
+@dataclass
+class _SnapshotBuildFlight:
+    event: threading.Event
+    result: SnapshotResponsePayload | None = None
+    error: BaseException | None = None
 
 
 class SnapshotService:
@@ -35,6 +56,10 @@ class SnapshotService:
         allowed_schemes: tuple[str, ...],
         max_workers: int = 6,
         preview_limit: int = 262144,
+        reuse_ttl_seconds: float = 300,
+        reuse_max_entries: int = 8,
+        reuse_configuration: Mapping[str, Any] | None = None,
+        monotonic_clock: Callable[[], float] = time.monotonic,
     ):
         self.provider = provider
         self.allowed_schemes = allowed_schemes
@@ -42,6 +67,205 @@ class SnapshotService:
         self.preview_limit = max(1, int(preview_limit))
         self._content_cache: dict[tuple[str, str, str, str], bytes] = {}
         self._cache_lock = threading.RLock()
+        self._reuse_ttl_seconds = max(0.0, float(reuse_ttl_seconds))
+        self._reuse_max_entries = max(0, int(reuse_max_entries))
+        self._monotonic_clock = monotonic_clock
+        self._reuse_configuration_sha256 = self._hash_json(
+            {
+                "ruleset": _SNAPSHOT_REUSE_RULESET,
+                "logical_scopes": list(LOGICAL_SCOPES),
+                "excel_extensions": list(EXCEL_EXTENSIONS),
+                "preview_limit": self.preview_limit,
+                "configuration": dict(reuse_configuration or {}),
+            }
+        )
+        self._snapshot_fact_cache: OrderedDict[str, _TrustedSnapshotEntry] = OrderedDict()
+        self._snapshot_build_flights: dict[str, _SnapshotBuildFlight] = {}
+        self._snapshot_reuse_counters = {
+            "hits": 0,
+            "misses": 0,
+            "builds": 0,
+            "waits": 0,
+            "expired": 0,
+            "invalid": 0,
+            "evicted": 0,
+        }
+
+    @staticmethod
+    def _hash_json(value: Any) -> str:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _snapshot_facts_sha256(snapshot: SnapshotResponsePayload) -> str:
+        return SnapshotService._hash_json(snapshot.model_dump(mode="json"))
+
+    def _endpoint_reuse_identity(
+        self,
+        record: Mapping[str, Any],
+        revision: int,
+    ) -> dict[str, Any]:
+        return {
+            "endpoint_id": str(record["id"]),
+            "revision": revision,
+            "region": str(record.get("region", "")),
+            "track": str(record.get("track", "")),
+            "label": str(record.get("label", "")),
+            "url": self._validate_url(record),
+            "logical_scopes": list(record.get("logical_scopes") or ()),
+            "physical_path_filters": {
+                str(key): normalize_relative_path(str(value))
+                for key, value in sorted(
+                    dict(record.get("physical_path_filters") or {}).items()
+                )
+            },
+            "enabled": bool(record.get("enabled", True)),
+        }
+
+    def _snapshot_reuse_identity(
+        self,
+        source_record: Mapping[str, Any],
+        source_revision: int,
+        target_record: Mapping[str, Any],
+        target_revision: int,
+    ) -> dict[str, Any]:
+        return {
+            "ruleset": _SNAPSHOT_REUSE_RULESET,
+            "configuration_sha256": self._reuse_configuration_sha256,
+            "source": self._endpoint_reuse_identity(source_record, source_revision),
+            "target": self._endpoint_reuse_identity(target_record, target_revision),
+        }
+
+    @staticmethod
+    def _file_belongs_to_table(path: str, table_path: str) -> bool:
+        normalized = normalize_relative_path(path).casefold()
+        table = normalize_relative_path(table_path).casefold()
+        return normalized.startswith(table + "/")
+
+    @classmethod
+    def _snapshot_matches_identity(
+        cls,
+        snapshot: SnapshotResponsePayload,
+        identity: Mapping[str, Any],
+    ) -> bool:
+        if snapshot.logical_scopes != list(LOGICAL_SCOPES):
+            return False
+        for side_name in ("source", "target"):
+            side = getattr(snapshot, side_name)
+            expected = identity[side_name]
+            if (
+                side.endpoint_id != expected["endpoint_id"]
+                or side.resolved_revision != expected["revision"]
+                or side.url != expected["url"]
+                or set(side.physical_path_filters) != set(LOGICAL_SCOPES)
+            ):
+                return False
+            table_path = side.physical_path_filters.get("TABLE")
+            if not table_path:
+                return False
+            seen_paths: set[str] = set()
+            for item in side.files:
+                normalized_path = normalize_relative_path(item.path)
+                folded_path = normalized_path.casefold()
+                if (
+                    not normalized_path
+                    or folded_path in seen_paths
+                    or item.logical_scope != "TABLE"
+                    or not folded_path.endswith(EXCEL_EXTENSIONS)
+                    or not cls._file_belongs_to_table(normalized_path, table_path)
+                ):
+                    return False
+                seen_paths.add(folded_path)
+                if item.error is None:
+                    if not item.content_hash or not _SHA256_PATTERN.fullmatch(item.content_hash):
+                        return False
+                elif item.content_hash is not None:
+                    return False
+            if side.stats.file_count != len(side.files):
+                return False
+            if side.stats.failed_count != sum(
+                item.error is not None for item in side.files
+            ):
+                return False
+            if side.stats.total_size != sum(item.size or 0 for item in side.files):
+                return False
+        return True
+
+    def _prune_snapshot_fact_cache_locked(self, now: float) -> None:
+        expired = [
+            key
+            for key, entry in self._snapshot_fact_cache.items()
+            if entry.expires_at <= now
+        ]
+        for key in expired:
+            self._snapshot_fact_cache.pop(key, None)
+        self._snapshot_reuse_counters["expired"] += len(expired)
+
+    def _load_snapshot_fact_locked(
+        self,
+        key: str,
+        identity: Mapping[str, Any],
+        now: float,
+    ) -> SnapshotResponsePayload | None:
+        self._prune_snapshot_fact_cache_locked(now)
+        entry = self._snapshot_fact_cache.get(key)
+        if entry is None:
+            return None
+        try:
+            valid = (
+                entry.facts_sha256 == self._snapshot_facts_sha256(entry.snapshot)
+                and self._snapshot_matches_identity(entry.snapshot, identity)
+            )
+        except Exception:
+            valid = False
+        if not valid:
+            self._snapshot_fact_cache.pop(key, None)
+            self._snapshot_reuse_counters["invalid"] += 1
+            return None
+        self._snapshot_fact_cache.move_to_end(key)
+        self._snapshot_reuse_counters["hits"] += 1
+        return entry.snapshot.model_copy(deep=True)
+
+    def _store_snapshot_fact_locked(
+        self,
+        key: str,
+        identity: Mapping[str, Any],
+        snapshot: SnapshotResponsePayload,
+        now: float,
+    ) -> bool:
+        self._prune_snapshot_fact_cache_locked(now)
+        try:
+            valid = self._snapshot_matches_identity(snapshot, identity)
+        except Exception:
+            valid = False
+        if self._reuse_ttl_seconds <= 0 or self._reuse_max_entries <= 0 or not valid:
+            return False
+        stored = snapshot.model_copy(deep=True)
+        self._snapshot_fact_cache[key] = _TrustedSnapshotEntry(
+            snapshot=stored,
+            facts_sha256=self._snapshot_facts_sha256(stored),
+            expires_at=now + self._reuse_ttl_seconds,
+        )
+        self._snapshot_fact_cache.move_to_end(key)
+        while len(self._snapshot_fact_cache) > self._reuse_max_entries:
+            self._snapshot_fact_cache.popitem(last=False)
+            self._snapshot_reuse_counters["evicted"] += 1
+        return True
+
+    def snapshot_reuse_metrics(self) -> dict[str, int]:
+        """Return redacted process-local counters for tests and diagnostics."""
+        with self._cache_lock:
+            self._prune_snapshot_fact_cache_locked(self._monotonic_clock())
+            return {
+                **self._snapshot_reuse_counters,
+                "entries": len(self._snapshot_fact_cache),
+                "inflight": len(self._snapshot_build_flights),
+            }
 
     @staticmethod
     def normalize_registry(records: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -395,6 +619,127 @@ class SnapshotService:
             repository_uuid=repository_uuid,
         )
 
+    def _snapshot_at_resolved_records(
+        self,
+        source_record: Mapping[str, Any],
+        source_revision: int,
+        target_record: Mapping[str, Any],
+        target_revision: int,
+        *,
+        source_repository_uuid: str | None = None,
+        target_repository_uuid: str | None = None,
+        reuse: bool = True,
+    ) -> SnapshotResponsePayload:
+        if not reuse:
+            source, target = self._snapshot_pair_at_revisions(
+                source_record,
+                source_revision,
+                target_record,
+                target_revision,
+                source_repository_uuid=source_repository_uuid,
+                target_repository_uuid=target_repository_uuid,
+            )
+            return SnapshotResponsePayload(
+                captured_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                logical_scopes=list(LOGICAL_SCOPES),
+                source=source,
+                target=target,
+            )
+        identity = self._snapshot_reuse_identity(
+            source_record,
+            source_revision,
+            target_record,
+            target_revision,
+        )
+        key = self._hash_json(identity)
+        now = self._monotonic_clock()
+        with self._cache_lock:
+            cached = self._load_snapshot_fact_locked(key, identity, now)
+            if cached is not None:
+                return cached
+            self._snapshot_reuse_counters["misses"] += 1
+            flight = self._snapshot_build_flights.get(key)
+            if flight is None:
+                flight = _SnapshotBuildFlight(event=threading.Event())
+                self._snapshot_build_flights[key] = flight
+                self._snapshot_reuse_counters["builds"] += 1
+                builder = True
+            else:
+                self._snapshot_reuse_counters["waits"] += 1
+                builder = False
+
+        if not builder:
+            flight.event.wait()
+            if flight.error is not None:
+                raise flight.error
+            if flight.result is None:
+                raise RuntimeError("snapshot single-flight completed without a result")
+            return flight.result.model_copy(deep=True)
+
+        try:
+            source, target = self._snapshot_pair_at_revisions(
+                source_record,
+                source_revision,
+                target_record,
+                target_revision,
+                source_repository_uuid=source_repository_uuid,
+                target_repository_uuid=target_repository_uuid,
+            )
+            snapshot = SnapshotResponsePayload(
+                captured_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                logical_scopes=list(LOGICAL_SCOPES),
+                source=source,
+                target=target,
+            )
+            with self._cache_lock:
+                self._store_snapshot_fact_locked(
+                    key,
+                    identity,
+                    snapshot,
+                    self._monotonic_clock(),
+                )
+                flight.result = snapshot.model_copy(deep=True)
+            return snapshot
+        except BaseException as exc:
+            with self._cache_lock:
+                flight.error = exc
+            raise
+        finally:
+            with self._cache_lock:
+                self._snapshot_build_flights.pop(key, None)
+                flight.event.set()
+
+    def register_trusted_snapshot(
+        self,
+        records: list[Mapping[str, Any]],
+        snapshot: SnapshotResponsePayload,
+    ) -> bool:
+        """Register a server-built snapshot after endpoint bindings are persisted."""
+        try:
+            normalized = self.normalize_registry([dict(record) for record in records])
+            source_revision = snapshot.source.resolved_revision
+            target_revision = snapshot.target.resolved_revision
+            if not isinstance(source_revision, int) or not isinstance(target_revision, int):
+                return False
+            source_record = self._get_record(normalized, snapshot.source.endpoint_id)
+            target_record = self._get_record(normalized, snapshot.target.endpoint_id)
+            identity = self._snapshot_reuse_identity(
+                source_record,
+                source_revision,
+                target_record,
+                target_revision,
+            )
+        except Exception:
+            return False
+        key = self._hash_json(identity)
+        with self._cache_lock:
+            return self._store_snapshot_fact_locked(
+                key,
+                identity,
+                snapshot,
+                self._monotonic_clock(),
+            )
+
     def create_snapshot(
         self,
         records: list[Mapping[str, Any]],
@@ -427,19 +772,13 @@ class SnapshotService:
                 "SVN_ENDPOINT_REVISIONS_MUST_DIFFER",
                 "同一分支的左右 Revision 必须不同",
             )
-        source, target = self._snapshot_pair_at_revisions(
+        return self._snapshot_at_resolved_records(
             source_record,
             source_resolved,
             target_record,
             target_resolved,
             source_repository_uuid=source_repository,
             target_repository_uuid=target_repository,
-        )
-        return SnapshotResponsePayload(
-            captured_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            logical_scopes=list(LOGICAL_SCOPES),
-            source=source,
-            target=target,
         )
 
     def create_snapshot_at_revisions(
@@ -450,6 +789,7 @@ class SnapshotService:
         source_revision: int,
         target_id: str,
         target_revision: int,
+        reuse: bool = True,
     ) -> SnapshotResponsePayload:
         """按请求中的两侧具体 Revision 重建权威 M1 快照。"""
         normalized = self.normalize_registry([dict(record) for record in records])
@@ -460,17 +800,12 @@ class SnapshotService:
                 "SVN_ENDPOINT_REVISIONS_MUST_DIFFER",
                 "同一分支的左右 Revision 必须不同",
             )
-        source, target = self._snapshot_pair_at_revisions(
+        return self._snapshot_at_resolved_records(
             source_record,
             source_revision,
             target_record,
             target_revision,
-        )
-        return SnapshotResponsePayload(
-            captured_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            logical_scopes=list(LOGICAL_SCOPES),
-            source=source,
-            target=target,
+            reuse=reuse,
         )
 
     @staticmethod

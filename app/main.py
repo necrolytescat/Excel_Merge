@@ -115,6 +115,11 @@ def create_app(
     allowed_schemes = tuple(svn_config.get("allowed_schemes", ("http", "https", "svn", "svn+ssh", "file")))
     preview_limit = int(svn_config.get("content_preview_max_bytes", 262144))
     max_workers = int(config.get("max_workers", 6)) if isinstance(config, dict) else 6
+    snapshot_reuse_config = (
+        config.get("snapshot_reuse", {})
+        if isinstance(config.get("snapshot_reuse", {}), dict)
+        else {}
+    )
 
     app = FastAPI(title="Excel Diff/Merge SVN 基座", version="0.1.0")
     app.state.provider = provider
@@ -125,7 +130,17 @@ def create_app(
     app.state.endpoint_catalog = svn_config.get("endpoint_catalog") or DEFAULT_ENDPOINT_CATALOG
     app.state.endpoint_registry = SnapshotService.normalize_registry(svn_config.get("endpoint_registry") or DEFAULT_ENDPOINT_REGISTRY)
     app.state.svn_service = SVNService(provider, allowed_schemes=allowed_schemes, preview_limit=preview_limit)
-    app.state.snapshot_service = SnapshotService(provider, allowed_schemes=allowed_schemes, max_workers=max_workers, preview_limit=preview_limit)
+    app.state.snapshot_service = SnapshotService(
+        provider,
+        allowed_schemes=allowed_schemes,
+        max_workers=max_workers,
+        preview_limit=preview_limit,
+        reuse_ttl_seconds=float(snapshot_reuse_config.get("ttl_seconds", 300)),
+        reuse_max_entries=int(snapshot_reuse_config.get("max_entries", 8)),
+        reuse_configuration={
+            "dataset_layout": config.get("dataset_layout"),
+        },
+    )
     diff_plan_config = config.get("diff_plan", {}) if isinstance(config, dict) else {}
     configured_diff_plan_db = os.environ.get("EXCEL_MERGE_DIFF_PLAN_DB") or str(
         diff_plan_config.get("database_path", "var/m4-diff-plan/diff-plan.sqlite3")

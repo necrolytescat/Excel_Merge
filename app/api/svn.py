@@ -147,6 +147,7 @@ def create_snapshot(
     )
     request.app.state.config_store.save_endpoint_registry(registry)
     request.app.state.endpoint_registry = registry
+    snapshot_service.register_trusted_snapshot(registry, snapshot)
     return snapshot
 
 def _project_root_url(url: str) -> str:

@@ -3,8 +3,8 @@ from app.tools import version_comparison_snapshot_parallel_acceptance as tool
 
 def test_acceptance_reports_bounded_speedup_and_no_external_writes():
     report = tool.run_acceptance(
-        files_per_side=24,
-        delay_seconds=0.01,
+        files_per_side=48,
+        delay_seconds=0.02,
         rounds=3,
     )
 
