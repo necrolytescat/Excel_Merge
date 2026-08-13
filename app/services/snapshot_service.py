@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import hashlib
 import threading
@@ -24,6 +24,7 @@ from app.schemas.svn import (
 
 LOGICAL_SCOPES = ("TABLE",)
 EXCEL_EXTENSIONS = (".xlsx", ".xlsm", ".xls")
+_SNAPSHOT_SIDE_WORKERS = 2
 
 
 class SnapshotService:
@@ -307,7 +308,10 @@ class SnapshotService:
         ]
         entries.sort(key=lambda item: item.path.casefold())
         files: list[SnapshotFilePayload] = []
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+        with ThreadPoolExecutor(
+            max_workers=self.max_workers,
+            thread_name_prefix="m1-snapshot-file",
+        ) as executor:
             futures = {
                 executor.submit(
                     self._fetch_file,
@@ -336,6 +340,47 @@ class SnapshotService:
                 failed_count=failed_count,
             ),
         )
+
+    @staticmethod
+    def _pair_results(
+        executor: ThreadPoolExecutor,
+        source_future: Future[SnapshotEndpointPayload],
+        target_future: Future[SnapshotEndpointPayload],
+    ) -> tuple[SnapshotEndpointPayload, SnapshotEndpointPayload]:
+        try:
+            source = source_future.result()
+            target = target_future.result()
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
+        return source, target
+
+    def _snapshot_pair_at_revisions(
+        self,
+        source_record: Mapping[str, Any],
+        source_revision: int,
+        target_record: Mapping[str, Any],
+        target_revision: int,
+        *,
+        source_repository_uuid: str | None = None,
+        target_repository_uuid: str | None = None,
+    ) -> tuple[SnapshotEndpointPayload, SnapshotEndpointPayload]:
+        executor = ThreadPoolExecutor(
+            max_workers=_SNAPSHOT_SIDE_WORKERS,
+            thread_name_prefix="m1-snapshot-side",
+        )
+        source_future = executor.submit(
+            self._snapshot_endpoint_at_revision,
+            source_record,
+            source_revision,
+            repository_uuid=source_repository_uuid,
+        )
+        target_future = executor.submit(
+            self._snapshot_endpoint_at_revision,
+            target_record,
+            target_revision,
+            repository_uuid=target_repository_uuid,
+        )
+        return self._pair_results(executor, source_future, target_future)
 
     def _snapshot_endpoint(self, record: Mapping[str, Any]) -> SnapshotEndpointPayload:
         resolved_revision, repository_uuid = self._resolve_head(record)
@@ -382,15 +427,13 @@ class SnapshotService:
                 "SVN_ENDPOINT_REVISIONS_MUST_DIFFER",
                 "同一分支的左右 Revision 必须不同",
             )
-        source = self._snapshot_endpoint_at_revision(
+        source, target = self._snapshot_pair_at_revisions(
             source_record,
             source_resolved,
-            repository_uuid=source_repository,
-        )
-        target = self._snapshot_endpoint_at_revision(
             target_record,
             target_resolved,
-            repository_uuid=target_repository,
+            source_repository_uuid=source_repository,
+            target_repository_uuid=target_repository,
         )
         return SnapshotResponsePayload(
             captured_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -417,8 +460,12 @@ class SnapshotService:
                 "SVN_ENDPOINT_REVISIONS_MUST_DIFFER",
                 "同一分支的左右 Revision 必须不同",
             )
-        source = self._snapshot_endpoint_at_revision(source_record, source_revision)
-        target = self._snapshot_endpoint_at_revision(target_record, target_revision)
+        source, target = self._snapshot_pair_at_revisions(
+            source_record,
+            source_revision,
+            target_record,
+            target_revision,
+        )
         return SnapshotResponsePayload(
             captured_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             logical_scopes=list(LOGICAL_SCOPES),
