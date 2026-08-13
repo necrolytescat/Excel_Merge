@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 import logging
 from pathlib import Path, PurePosixPath
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 EXCEL_EXTENSIONS = (".xlsx", ".xlsm", ".xls")
 _MISSING_PATH_CODES = {"SVN_NOT_FOUND", "SVN_PATH_NOT_FOUND"}
 _DIRECTORY_FACT_CACHE_SIZE = 256
+_CSV_READ_WORKERS = 4
 
 
 @dataclass(frozen=True)
@@ -466,6 +468,174 @@ class SVNWorkbookDatasetResolver:
                     raise self._provider_failure(retry_exc) from retry_exc
             result[filename] = raw
         return result
+    def _csv_filenames(self, manifest: WorkbookManifest) -> tuple[str, ...]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for entry in manifest.entries:
+            filename = self.csv_filename_template.format(tbxName=entry.tbx_name)
+            if filename in seen:
+                continue
+            seen.add(filename)
+            result.append(filename)
+        return tuple(result)
+
+    def _read_csv_side(
+        self,
+        executor: ThreadPoolExecutor,
+        endpoint: EndpointSpec,
+        csv_directory: str | None,
+        filenames: tuple[str, ...],
+        exact_futures: Mapping[str, Future[bytes]],
+    ) -> dict[str, bytes]:
+        if csv_directory is None:
+            return {}
+        result: dict[str, bytes] = {}
+        exact_outcomes: dict[str, bytes | Exception] = {}
+        for filename in filenames:
+            try:
+                exact_outcomes[filename] = exact_futures[filename].result()
+            except Exception as exc:
+                exact_outcomes[filename] = exc
+
+        casefold_paths: dict[str, list[str]] | None = None
+        retry_matches: dict[str, tuple[str, ...]] = {}
+        retry_futures: dict[str, Future[bytes]] = {}
+
+        def prepare_retries() -> None:
+            nonlocal casefold_paths
+            try:
+                children = self.provider.list_children(endpoint, csv_directory)
+            except SVNProviderError as exc:
+                if exc.code in _MISSING_PATH_CODES:
+                    casefold_paths = {}
+                else:
+                    raise self._provider_failure(exc) from exc
+            else:
+                casefold_paths = {}
+                for child in children:
+                    if child.kind != "file":
+                        continue
+                    child_path = normalize_relative_path(child.path)
+                    child_name = PurePosixPath(child_path).name
+                    casefold_paths.setdefault(
+                        child_name.casefold(), []
+                    ).append(child_path)
+            paths: list[str] = []
+            for missing_filename in filenames:
+                outcome = exact_outcomes[missing_filename]
+                if not (
+                    isinstance(outcome, SVNProviderError)
+                    and outcome.code in _MISSING_PATH_CODES
+                ):
+                    continue
+                matches = tuple(
+                    sorted(
+                        set(
+                            casefold_paths.get(
+                                missing_filename.casefold(), []
+                            )
+                        ),
+                        key=str.casefold,
+                    )
+                )
+                retry_matches[missing_filename] = matches
+                if len(matches) == 1:
+                    paths.append(matches[0])
+            retry_futures.update(
+                {
+                    path: executor.submit(
+                        self.provider.read_bytes, endpoint, path
+                    )
+                    for path in dict.fromkeys(paths)
+                }
+            )
+
+        for filename in filenames:
+            outcome = exact_outcomes[filename]
+            if isinstance(outcome, Exception):
+                if not (
+                    isinstance(outcome, SVNProviderError)
+                    and outcome.code in _MISSING_PATH_CODES
+                ):
+                    if isinstance(outcome, SVNProviderError):
+                        raise self._provider_failure(outcome) from outcome
+                    raise outcome
+                if casefold_paths is None:
+                    prepare_retries()
+                matches = retry_matches[filename]
+                if len(matches) > 1:
+                    raise WorkbookCompareError(
+                        "DIFF_DATASET_CONFIG_INVALID",
+                        "冻结 Revision 的 TableCsv 文件名大小写匹配不唯一",
+                        status_code=500,
+                    )
+                if not matches:
+                    continue
+                try:
+                    outcome = retry_futures[matches[0]].result()
+                except SVNProviderError as exc:
+                    if exc.code in _MISSING_PATH_CODES:
+                        continue
+                    raise self._provider_failure(exc) from exc
+            result[filename] = outcome
+        return {
+            filename: result[filename]
+            for filename in filenames
+            if filename in result
+        }
+
+    def _read_csv_files_pair(
+        self,
+        source_endpoint: EndpointSpec,
+        source_csv_directory: str | None,
+        source_manifest: WorkbookManifest,
+        target_endpoint: EndpointSpec,
+        target_csv_directory: str | None,
+        target_manifest: WorkbookManifest,
+    ) -> tuple[dict[str, bytes], dict[str, bytes]]:
+        source_filenames = self._csv_filenames(source_manifest)
+        target_filenames = self._csv_filenames(target_manifest)
+        executor = ThreadPoolExecutor(
+            max_workers=_CSV_READ_WORKERS,
+            thread_name_prefix="m2-csv-read",
+        )
+        try:
+            source_futures = {
+                filename: executor.submit(
+                    self.provider.read_bytes,
+                    source_endpoint,
+                    self._join(source_csv_directory, filename),
+                )
+                for filename in source_filenames
+                if source_csv_directory is not None
+            }
+            target_futures = {
+                filename: executor.submit(
+                    self.provider.read_bytes,
+                    target_endpoint,
+                    self._join(target_csv_directory, filename),
+                )
+                for filename in target_filenames
+                if target_csv_directory is not None
+            }
+            source = self._read_csv_side(
+                executor,
+                source_endpoint,
+                source_csv_directory,
+                source_filenames,
+                source_futures,
+            )
+            target = self._read_csv_side(
+                executor,
+                target_endpoint,
+                target_csv_directory,
+                target_filenames,
+                target_futures,
+            )
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
+        return source, target
+
 
     @staticmethod
     def _write_side(
@@ -522,22 +692,22 @@ class SVNWorkbookDatasetResolver:
         source_csv: dict[str, bytes] = {}
         target_csv: dict[str, bytes] = {}
         if source_manifest is not None and target_manifest is not None:
-            source_csv = self._read_csv_files(
+            source_csv_directory = self._cached_csv_directory(
+                source_record,
                 source_endpoint,
-                self._cached_csv_directory(
-                    source_record,
-                    source_endpoint,
-                    source_table,
-                ),
-                source_manifest,
+                source_table,
             )
-            target_csv = self._read_csv_files(
+            target_csv_directory = self._cached_csv_directory(
+                target_record,
                 target_endpoint,
-                self._cached_csv_directory(
-                    target_record,
-                    target_endpoint,
-                    target_table,
-                ),
+                target_table,
+            )
+            source_csv, target_csv = self._read_csv_files_pair(
+                source_endpoint,
+                source_csv_directory,
+                source_manifest,
+                target_endpoint,
+                target_csv_directory,
                 target_manifest,
             )
 

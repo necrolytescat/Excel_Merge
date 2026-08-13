@@ -72,6 +72,10 @@ class TimedSVNWorkbookDatasetResolver(SVNWorkbookDatasetResolver):
         with self.performance.phase("resolver.csv_fetch"):
             return super()._read_csv_files(endpoint, csv_directory, manifest)
 
+    def _read_csv_side(self, *args, **kwargs):
+        with self.performance.phase("resolver.csv_fetch"):
+            return super()._read_csv_side(*args, **kwargs)
+
     def _write_side(
         self,
         directory: Path,
