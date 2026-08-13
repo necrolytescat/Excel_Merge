@@ -17,6 +17,7 @@ import time
 from typing import Any, Callable, Mapping
 
 from core.models import EndpointSpec, TreeEntry
+from core.svn_history import canonicalize_svn_url
 from core.svn_provider import SVNProvider, SVNProviderError, normalize_relative_path, validate_endpoint
 from app.schemas.svn import (
     EndpointRecordPayload,
@@ -89,6 +90,9 @@ class SnapshotService:
             "expired": 0,
             "invalid": 0,
             "evicted": 0,
+            "incremental_pairs": 0,
+            "incremental_reused_files": 0,
+            "incremental_fallbacks": 0,
         }
 
     @staticmethod
@@ -518,6 +522,28 @@ class SnapshotService:
             self.allowed_schemes,
         )
         all_entries = self.provider.list_tree(endpoint)
+        return self._snapshot_endpoint_from_entries(
+            record,
+            revision,
+            all_entries,
+            repository_uuid=repository_uuid,
+        )
+
+    def _snapshot_endpoint_from_entries(
+        self,
+        record: Mapping[str, Any],
+        revision: int,
+        all_entries: list[TreeEntry],
+        *,
+        repository_uuid: str | None = None,
+        reusable_files: Mapping[str, SnapshotFilePayload] | None = None,
+        reusable_content_revision: int | None = None,
+    ) -> SnapshotEndpointPayload:
+        url = self._validate_url(record)
+        endpoint = validate_endpoint(
+            EndpointSpec(url=url, revision=revision, label=str(record.get("label", ""))),
+            self.allowed_schemes,
+        )
         physical = self.resolve_scope_paths(
             record,
             revision,
@@ -532,6 +558,47 @@ class SnapshotService:
         ]
         entries.sort(key=lambda item: item.path.casefold())
         files: list[SnapshotFilePayload] = []
+        pending: list[TreeEntry] = []
+        reusable_files = reusable_files or {}
+        for entry in entries:
+            path = normalize_relative_path(entry.path)
+            reused = reusable_files.get(path)
+            if (
+                reused is None
+                or reused.error is not None
+                or not reused.content_hash
+                or not entry.revision
+                or str(reused.revision) != str(entry.revision)
+            ):
+                pending.append(entry)
+                continue
+            source_key = (
+                repository_uuid or url,
+                url.rstrip("/"),
+                path,
+                str(reusable_content_revision or reused.revision),
+            )
+            target_key = (*source_key[:3], str(revision))
+            with self._cache_lock:
+                raw = self._content_cache.get(source_key)
+                if raw is not None:
+                    self._content_cache[target_key] = raw
+            cache_key = hashlib.sha256(
+                f"{repository_uuid or url}|{url.rstrip('/')}|{path}|{revision}".encode("utf-8")
+            ).hexdigest()
+            files.append(
+                SnapshotFilePayload(
+                    path=path,
+                    logical_scope=self._scope_for_path(path, physical),
+                    size=entry.size,
+                    revision=entry.revision,
+                    author=entry.author,
+                    date=entry.date,
+                    encoding="binary",
+                    content_ref=f"memory://snapshot/{cache_key}",
+                    content_hash=reused.content_hash,
+                )
+            )
         with ThreadPoolExecutor(
             max_workers=self.max_workers,
             thread_name_prefix="m1-snapshot-file",
@@ -544,7 +611,7 @@ class SnapshotService:
                     self._scope_for_path(entry.path, physical),
                     repository_uuid or url,
                 ): entry.path
-                for entry in entries
+                for entry in pending
             }
             for future in as_completed(futures):
                 files.append(future.result())
@@ -605,6 +672,86 @@ class SnapshotService:
             repository_uuid=target_repository_uuid,
         )
         return self._pair_results(executor, source_future, target_future)
+
+    @staticmethod
+    def _reusable_files_by_path(
+        snapshot: SnapshotEndpointPayload,
+    ) -> dict[str, SnapshotFilePayload] | None:
+        result: dict[str, SnapshotFilePayload] = {}
+        folded_paths: set[str] = set()
+        for item in snapshot.files:
+            path = normalize_relative_path(item.path)
+            folded = path.casefold()
+            if not path or folded in folded_paths or not item.revision:
+                return None
+            folded_paths.add(folded)
+            result[path] = item
+        return result
+
+    def _same_branch_incremental_pair(
+        self,
+        source_record: Mapping[str, Any],
+        source_revision: int,
+        target_record: Mapping[str, Any],
+        target_revision: int,
+    ) -> tuple[SnapshotEndpointPayload, SnapshotEndpointPayload] | None:
+        try:
+            source_url = canonicalize_svn_url(self._validate_url(source_record))
+            target_url = canonicalize_svn_url(self._validate_url(target_record))
+            if source_url != target_url:
+                return None
+            source_entries = self.provider.list_tree(
+                EndpointSpec(url=source_url, revision=source_revision)
+            )
+            target_entries = self.provider.list_tree(
+                EndpointSpec(url=target_url, revision=target_revision)
+            )
+            source_folded_paths: set[str] = set()
+            for entry in source_entries:
+                if entry.kind != "file":
+                    continue
+                path = normalize_relative_path(entry.path)
+                folded = path.casefold()
+                if not path or not entry.revision or folded in source_folded_paths:
+                    return None
+                source_folded_paths.add(folded)
+            source = self._snapshot_endpoint_from_entries(
+                source_record,
+                source_revision,
+                source_entries,
+                repository_uuid=source_url,
+            )
+            reusable = self._reusable_files_by_path(source)
+            if reusable is None:
+                return None
+            target = self._snapshot_endpoint_from_entries(
+                target_record,
+                target_revision,
+                target_entries,
+                repository_uuid=target_url,
+                reusable_files=reusable,
+                reusable_content_revision=source_revision,
+            )
+            if source.physical_path_filters != target.physical_path_filters:
+                return None
+            reused_count = sum(
+                1
+                for item in target.files
+                if (base := reusable.get(normalize_relative_path(item.path))) is not None
+                and base.error is None
+                and item.error is None
+                and base.revision
+                and str(base.revision) == str(item.revision)
+                and base.content_hash == item.content_hash
+            )
+        except Exception:
+            with self._cache_lock:
+                self._snapshot_reuse_counters["incremental_fallbacks"] += 1
+            return None
+        with self._cache_lock:
+            self._snapshot_reuse_counters["incremental_pairs"] += 1
+            self._snapshot_reuse_counters["incremental_reused_files"] += reused_count
+        return source, target
 
     def _snapshot_endpoint(self, record: Mapping[str, Any]) -> SnapshotEndpointPayload:
         resolved_revision, repository_uuid = self._resolve_head(record)
@@ -677,7 +824,13 @@ class SnapshotService:
             return flight.result.model_copy(deep=True)
 
         try:
-            source, target = self._snapshot_pair_at_revisions(
+            incremental = self._same_branch_incremental_pair(
+                source_record,
+                source_revision,
+                target_record,
+                target_revision,
+            )
+            source, target = incremental or self._snapshot_pair_at_revisions(
                 source_record,
                 source_revision,
                 target_record,

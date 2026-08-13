@@ -285,6 +285,8 @@ errors[]
 
 这是内部可再生优化，不属于 `m2.batch.v1` 持久化：不接受前端 HASH 或候选，不写批量数据库，不跨服务重启恢复，也不改变取消、重试和任务恢复语义；显式重试会绕过页面短期缓存并完整重验候选。内部接入点为 `SnapshotService.register_trusted_snapshot()`、`create_snapshot_at_revisions()`、`SnapshotBatchCandidateResolver.prepare_fresh()` 和脱敏诊断 `snapshot_reuse_metrics()`。
 
+同一规范 SVN URL 的两个冻结 Revision 还可在单次快照中增量复用文件 HASH。服务仍完整枚举两侧目录树，仅当同路径文件的 `svn list --xml` 最后修改 Revision 完全相同时，才把 source HASH 复用于 target；修改和新增文件仍从 target Revision 读取，删除文件由 target 完整目录事实自然排除。路径大小写歧义、最后修改 Revision 缺失、TABLE 布局变化或任何查询异常都会回退原完整双侧重建。该优化不跨 URL、不跨进程，也不改变快照字段或候选语义；冷态主要减少 SVN 内容读取量，已有 source Revision 内容缓存时才会显著缩短墙钟时间。
+
 `m2.batch-management.v1` 定义在 `docs/contracts/m2.batch-management.v1.md`。结构化事件独立于批量任务 JSON，默认保留 90 天；终态任务可从历史任务页手动删除。删除仅影响该任务正式结果，不级联重试任务，不触碰原始日志、全局 SVN 缓存或 Replay 夹具。
 
 ## 8. Replay 与当前夹具
