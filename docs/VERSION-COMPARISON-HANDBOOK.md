@@ -281,14 +281,29 @@ errors[]
 
 `BatchStore` 默认写入 `var/m2-batch/batch.sqlite3`，结果写入 `var/m2-batch/results/<task>/<item>.json.gz`。启动时恢复租约和孤立文件；运行数据不进入 Git。
 
-页面快照与紧随其后的批量候选准备共享同一个 `SnapshotService`。服务会在进程内短期保存已经由服务端读取并哈希的冻结快照事实，默认 TTL 300 秒、最多 8 对。复用键覆盖左右端点顺序、规范端点记录、冻结 Revision、M1 规则和 `dataset_layout` 配置指纹；命中时再次校验完整事实 SHA-256、端点/Revision/URL、TABLE 布局、文件范围、hash/error 组合和统计。并发相同构建使用 single-flight。缺失、过期、配置变化、事实损坏或服务重启时安全回退 `create_snapshot_at_revisions()` 的完整重建，构建失败不缓存。
+页面快照与紧随其后的批量候选准备共享同一个 `SnapshotService`。服务仍在进程内短期保存完整冻结快照事实，默认 TTL 300 秒、最多 8 对。复用键覆盖左右端点顺序、规范端点记录、冻结 Revision、M1 规则和 `dataset_layout` 配置指纹；命中时再次校验完整事实 SHA-256、端点/Revision/URL、TABLE 布局、文件范围、hash/error 组合和统计。并发相同构建使用 single-flight，失败结果不进入该缓存。
 
-这是内部可再生优化，不属于 `m2.batch.v1` 持久化：不接受前端 HASH 或候选，不写批量数据库，不跨服务重启恢复，也不改变取消、重试和任务恢复语义；显式重试会绕过页面短期缓存并完整重验候选。内部接入点为 `SnapshotService.register_trusted_snapshot()`、`create_snapshot_at_revisions()`、`SnapshotBatchCandidateResolver.prepare_fresh()` 和脱敏诊断 `snapshot_reuse_metrics()`。
+服务另在 `.cache/snapshot/` 保存可再生文件事实和可信字节，版本索引为 `index.v1.json`。文件身份同时绑定 repository UUID、规范分支 URL、规范相对路径、文件 last-changed Revision，以及 TABLE/`dataset_layout` 配置指纹；任何字段缺失或不一致都不得命中。blob 使用 SHA-256 内容寻址，读取时复核大小和哈希；索引与 blob 原子写入，相同文件并发读取使用 single-flight，并按配置的总字节、文件事实数和冻结树数执行 LRU 治理。索引损坏会清空重建，索引版本过新会只读禁用；异常和失败内容不缓存。
 
-同一规范 SVN URL 的两个冻结 Revision 还可在单次快照中增量复用文件 HASH。服务仍完整枚举两侧目录树，仅当同路径文件的 `svn list --xml` 最后修改 Revision 完全相同时，才把 source HASH 复用于 target；修改和新增文件仍从 target Revision 读取，删除文件由 target 完整目录事实自然排除。路径大小写歧义、最后修改 Revision 缺失、TABLE 布局变化或任何查询异常都会回退原完整双侧重建。该优化不跨 URL、不跨进程，也不改变快照字段或候选语义；冷态主要减少 SVN 内容读取量，已有 source Revision 内容缓存时才会显著缩短墙钟时间。
+以上均为内部可再生优化，不属于 `m2.batch.v1` 持久化：不接受前端 HASH 或候选，不写业务 SQLite，不改变取消、任务恢复、`m2.diff.v1`、`m2.batch.v1` 或 source/target 语义。显式重试只绕过进程内整对快照缓存；重新枚举冻结目录树后，仍可在身份和树证据闭环时复用持久文件事实。内部接入点为 `SnapshotService.register_trusted_snapshot()`、`create_snapshot_at_revisions()`、`SnapshotBatchCandidateResolver.prepare_fresh()` 和脱敏诊断 `snapshot_reuse_metrics()`。
+
+同一规范 SVN URL 第一次接触时允许完整读取；此后每次仍完整枚举冻结 `svn list --xml` 树，只在 repository UUID、路径和文件 last-changed Revision 均与持久事实一致时复用 HASH/字节。完全相同 Revision 在服务重启后内容读取为 0；跨 Revision 只读取新增或 last-changed Revision 变化的文件，删除文件由目标树自然排除。路径大小写歧义、元数据缺失、配置漂移、UUID 变化、缓存损坏或查询异常均安全完整回退，不能只凭分支 URL 相同复用。
+
+Diff 物化读取 Excel 工作簿时优先复用同一冻结树中已校验的可信字节，避免快照完成后再次读取 SVN；CSV 仍沿用既有冻结 Revision 读取路径。本优化不改变解析、主键、配对或 Diff 语义，端到端收益必须同时报告快照与后续物化阶段，不能用页面快照耗时替代完整链路结论。
 
 同一仓库的不同冻结 URL 还可使用只读 svn diff --summarize --xml --notice-ancestry --ignore-properties 取得两侧固定 Revision 的完整 TABLE 树差异。只有 repository UUID/root、规范 URL、冻结 Revision、TABLE 物理布局、配置指纹、两侧完整目录树和差异路径全部闭环且无大小写歧义时，未变化文件才继承 source 已有 HASH；A/M/D/R 文件和目录变化覆盖的子树一律从 target 重读。copyfrom 和 copy boundary 仅用于历史校验，不能单独证明任意两个冻结 Revision 内容相同。
-命令不支持、stderr 警告、认证或权限过滤、历史截断、XML/路径异常、未知状态、证据缺项、缓存损坏或服务重启都会安全回退完整双侧读取。该优化仍沿用 pair-level TTL/LRU/single-flight，不增加磁盘缓存，不改变公共快照、m2.diff.v1、m2.batch.v1 或 source/target 语义。
+命令不支持、stderr 警告、认证或权限过滤、历史截断、XML/路径异常、未知状态或证据缺项都会停止跨分支继承；该目录差异证据本身不持久化。回退后仍可按各 URL 的可信持久文件事实命中，否则完整读取内容；公共快照、m2.diff.v1、m2.batch.v1 和 source/target 语义不变。
+
+固定 Mock 延迟验收使用 55 个基础文件、`list_tree=5ms`、`read_bytes=10ms`，每个场景独立运行 5 次并取墙钟中位数：
+
+| 场景 | `svn list` 次数 | 内容读取数 | 墙钟中位数 | 相对冷态 |
+|---|---:|---:|---:|---:|
+| 首次冷态 | 2 | 60 | 0.361155s | 1.00x |
+| 同进程热态 | 0 | 0 | 0.000960s | 376.2x |
+| 重启后相同 Revision | 2 | 0 | 0.049834s | 7.25x |
+| 重启后 5 个修改/新增 | 2 | 5 | 0.079872s | 4.52x |
+
+实施前已有正式日志基线为最近一次 `POST /api/svn/snapshots` 41.945s、批量准备约 0.187s；本批未发起新 SVN 请求，因此固定 Mock 数据用于可重复验收，不能伪装成真实网络环境端到端耗时。阶段日志 `snapshot.build_phase` 同时记录目录证据、持久 HASH 命中、磁盘字节命中、文件读取数、回退原因和墙钟。
 
 `m2.batch-management.v1` 定义在 `docs/contracts/m2.batch-management.v1.md`。结构化事件独立于批量任务 JSON，默认保留 90 天；终态任务可从历史任务页手动删除。删除仅影响该任务正式结果，不级联重试任务，不触碰原始日志、全局 SVN 缓存或 Replay 夹具。
 

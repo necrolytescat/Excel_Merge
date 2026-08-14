@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import re
 import threading
 import time
@@ -25,6 +26,10 @@ from core.svn_history import (
     repository_path_from_urls,
 )
 from core.svn_provider import SVNProvider, SVNProviderError, normalize_relative_path, validate_endpoint
+from app.services.snapshot_content_cache import (
+    PersistentSnapshotContentCache,
+    SnapshotFileIdentity,
+)
 from app.schemas.svn import (
     EndpointRecordPayload,
     SnapshotEndpointPayload,
@@ -39,6 +44,9 @@ EXCEL_EXTENSIONS = (".xlsx", ".xlsm", ".xls")
 _SNAPSHOT_SIDE_WORKERS = 2
 _SNAPSHOT_REUSE_RULESET = "m1.table-excel-snapshot-facts.v1"
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -71,6 +79,7 @@ class SnapshotService:
         reuse_ttl_seconds: float = 300,
         reuse_max_entries: int = 8,
         reuse_configuration: Mapping[str, Any] | None = None,
+        persistent_content_cache: PersistentSnapshotContentCache | None = None,
         monotonic_clock: Callable[[], float] = time.monotonic,
     ):
         self.provider = provider
@@ -82,6 +91,9 @@ class SnapshotService:
         self._reuse_ttl_seconds = max(0.0, float(reuse_ttl_seconds))
         self._reuse_max_entries = max(0, int(reuse_max_entries))
         self._monotonic_clock = monotonic_clock
+        self._persistent_content_cache = persistent_content_cache
+        self._repository_identity_cache: dict[tuple[str, int], str] = {}
+        self._last_phase_metrics: dict[str, int | float | str] = {}
         self._reuse_configuration_sha256 = self._hash_json(
             {
                 "ruleset": _SNAPSHOT_REUSE_RULESET,
@@ -109,6 +121,8 @@ class SnapshotService:
             "cross_branch_fallbacks": 0,
             "cross_branch_evidence_calls": 0,
             "cross_branch_evidence_seconds": 0.0,
+            "directory_evidence_calls": 0,
+            "file_reads": 0,
         }
 
     @staticmethod
@@ -120,6 +134,181 @@ class SnapshotService:
             separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
+
+    def _persistent_cache_enabled(self) -> bool:
+        cache = self._persistent_content_cache
+        return bool(cache is not None and cache.metrics()["persistent_enabled"])
+
+    def _record_counter(self, key: str, amount: int = 1) -> None:
+        with self._cache_lock:
+            self._snapshot_reuse_counters[key] = (
+                self._snapshot_reuse_counters.get(key, 0) + amount
+            )
+
+    def _list_tree(
+        self,
+        endpoint: EndpointSpec,
+        prefix: str = "",
+    ) -> list[TreeEntry]:
+        self._record_counter("directory_evidence_calls")
+        return self.provider.list_tree(endpoint, prefix)
+
+    def _read_provider_bytes(self, endpoint: EndpointSpec, path: str) -> bytes:
+        self._record_counter("file_reads")
+        reader = getattr(self.provider, "read_bytes", None)
+        if reader is not None:
+            return reader(endpoint, path)
+        content = self.provider.read_content(endpoint, path, self.preview_limit)
+        return content.text.encode("utf-8")
+
+    def _endpoint_configuration_sha256(self, table_path: str) -> str:
+        return self._hash_json(
+            {
+                "snapshot_configuration_sha256": self._reuse_configuration_sha256,
+                "table_path": normalize_relative_path(table_path),
+            }
+        )
+
+    def _persistent_repository_uuid(
+        self,
+        record: Mapping[str, Any],
+        revision: int,
+        *,
+        hint: str | None = None,
+    ) -> str | None:
+        if not self._persistent_cache_enabled():
+            return hint
+        cache = self._persistent_content_cache
+        assert cache is not None
+        try:
+            canonical_url = canonicalize_svn_url(self._validate_url(record))
+        except Exception:
+            cache.record_fallback("canonical_url")
+            return None
+        key = (canonical_url, revision)
+        if hint and "://" not in hint:
+            with self._cache_lock:
+                self._repository_identity_cache[key] = hint
+            return hint
+        with self._cache_lock:
+            cached = self._repository_identity_cache.get(key)
+        if cached:
+            return cached
+        try:
+            info = self.provider.info(
+                EndpointSpec(
+                    url=canonical_url,
+                    revision=revision,
+                    label=str(record.get("label", "")),
+                )
+            )
+            repository_uuid = str(info.repository_uuid or "").strip()
+            returned_url = canonicalize_svn_url(info.url or canonical_url)
+            if not repository_uuid or returned_url != canonical_url:
+                raise ValueError("incomplete frozen repository identity")
+        except Exception:
+            cache.record_fallback("repository_identity")
+            return None
+        with self._cache_lock:
+            self._repository_identity_cache[key] = repository_uuid
+        return repository_uuid
+
+    def _persistent_file_identity(
+        self,
+        *,
+        repository_uuid: str,
+        canonical_url: str,
+        entry: TreeEntry,
+        configuration_sha256: str,
+    ) -> SnapshotFileIdentity:
+        return SnapshotFileIdentity(
+            repository_uuid=repository_uuid,
+            canonical_url=canonical_url,
+            relative_path=normalize_relative_path(entry.path),
+            last_changed_revision=str(entry.revision),
+            configuration_sha256=configuration_sha256,
+        )
+
+    def _persistent_configuration_for_tree(
+        self,
+        *,
+        repository_uuid: str | None,
+        all_entries: list[TreeEntry],
+        excel_entries: list[TreeEntry],
+        table_path: str,
+    ) -> str | None:
+        cache = self._persistent_content_cache
+        if cache is None or not self._persistent_cache_enabled():
+            return None
+        if not repository_uuid:
+            cache.record_fallback("repository_uuid_missing")
+            return None
+        try:
+            table = normalize_relative_path(table_path)
+            table_parts = table.split("/")
+            variants: set[str] = set()
+            for entry in all_entries:
+                path = normalize_relative_path(entry.path)
+                parts = path.split("/")
+                if (
+                    len(parts) >= len(table_parts)
+                    and [part.casefold() for part in parts[: len(table_parts)]]
+                    == [part.casefold() for part in table_parts]
+                ):
+                    variants.add("/".join(parts[: len(table_parts)]))
+            if variants != {table}:
+                cache.record_fallback("path_ambiguity")
+                return None
+            seen_paths: set[str] = set()
+            for entry in excel_entries:
+                path = normalize_relative_path(entry.path)
+                folded = path.casefold()
+                revision = str(entry.revision).strip()
+                if not path or folded in seen_paths:
+                    cache.record_fallback("path_ambiguity")
+                    return None
+                if not revision.isdigit() or int(revision) <= 0:
+                    cache.record_fallback("last_changed_revision_missing")
+                    return None
+                seen_paths.add(folded)
+            return self._endpoint_configuration_sha256(table)
+        except Exception:
+            cache.record_fallback("tree_metadata_invalid")
+            return None
+
+    def read_cached_snapshot_bytes(
+        self,
+        record: Mapping[str, Any],
+        revision: int,
+        table_path: str,
+        relative_path: str,
+    ) -> bytes | None:
+        cache = self._persistent_content_cache
+        if cache is None or not self._persistent_cache_enabled():
+            return None
+        try:
+            canonical_url = canonicalize_svn_url(self._validate_url(record))
+            normalized_table = normalize_relative_path(table_path)
+            normalized_path = normalize_relative_path(relative_path)
+            if not self._file_belongs_to_table(normalized_path, normalized_table):
+                cache.record_fallback("materialization_scope")
+                return None
+            repository_uuid = self._persistent_repository_uuid(record, revision)
+            if not repository_uuid:
+                return None
+            return cache.read_tree_bytes(
+                repository_uuid=repository_uuid,
+                canonical_url=canonical_url,
+                revision=revision,
+                table_path=normalized_table,
+                configuration_sha256=self._endpoint_configuration_sha256(
+                    normalized_table
+                ),
+                relative_path=normalized_path,
+            )
+        except Exception:
+            cache.record_fallback("materialization_cache_error")
+            return None
 
     @staticmethod
     def _snapshot_facts_sha256(snapshot: SnapshotResponsePayload) -> str:
@@ -279,12 +468,27 @@ class SnapshotService:
 
     def snapshot_reuse_metrics(self) -> dict[str, int | float]:
         """Return redacted process-local counters for tests and diagnostics."""
+        persistent = (
+            self._persistent_content_cache.metrics()
+            if self._persistent_content_cache is not None
+            else {
+                "persistent_enabled": False,
+                "persistent_entries": 0,
+                "persistent_trees": 0,
+                "persistent_inflight": 0,
+            }
+        )
         with self._cache_lock:
             self._prune_snapshot_fact_cache_locked(self._monotonic_clock())
             return {
                 **self._snapshot_reuse_counters,
+                **persistent,
                 "entries": len(self._snapshot_fact_cache),
                 "inflight": len(self._snapshot_build_flights),
+                **{
+                    f"last_{key}": value
+                    for key, value in self._last_phase_metrics.items()
+                },
             }
 
     @staticmethod
@@ -398,7 +602,7 @@ class SnapshotService:
         endpoint = EndpointSpec(url=url, revision=revision, label=str(record.get("label", "")))
         return self._discover_scope_paths_from_entries(
             record,
-            self.provider.list_tree(endpoint),
+            self._list_tree(endpoint),
         )
 
     def resolve_scope_paths(
@@ -420,7 +624,7 @@ class SnapshotService:
                 revision=revision,
                 label=str(record.get("label", "")),
             )
-            entries = self.provider.list_tree(endpoint)
+            entries = self._list_tree(endpoint)
         known_paths = {
             normalize_relative_path(entry.path).casefold()
             for entry in entries
@@ -451,6 +655,8 @@ class SnapshotService:
         endpoint: EndpointSpec,
         entry: TreeEntry,
         repository_uuid: str,
+        persistent_repository_uuid: str | None = None,
+        configuration_sha256: str | None = None,
     ) -> bytes:
         key = (
             repository_uuid,
@@ -463,13 +669,26 @@ class SnapshotService:
         if cached is not None:
             return cached
 
-        reader = getattr(self.provider, "read_bytes", None)
-        if reader is not None:
-            raw = reader(endpoint, entry.path)
+        persistent = self._persistent_content_cache
+        if (
+            persistent is not None
+            and configuration_sha256
+            and persistent_repository_uuid
+        ):
+            identity = self._persistent_file_identity(
+                repository_uuid=persistent_repository_uuid,
+                canonical_url=canonicalize_svn_url(endpoint.url),
+                entry=entry,
+                configuration_sha256=configuration_sha256,
+            )
+            cached_bytes, _ = persistent.get_or_load(
+                identity,
+                expected_size=entry.size,
+                loader=lambda: self._read_provider_bytes(endpoint, entry.path),
+            )
+            raw = cached_bytes.raw
         else:
-            # 兼容尚未实现 read_bytes 的第三方 Provider；仅作为过渡。
-            content = self.provider.read_content(endpoint, entry.path, self.preview_limit)
-            raw = content.text.encode("utf-8")
+            raw = self._read_provider_bytes(endpoint, entry.path)
 
         with self._cache_lock:
             self._content_cache[key] = raw
@@ -481,9 +700,17 @@ class SnapshotService:
         entry: TreeEntry,
         logical_scope: str,
         repository_uuid: str,
+        persistent_repository_uuid: str | None = None,
+        configuration_sha256: str | None = None,
     ) -> SnapshotFilePayload:
         try:
-            raw = self._read_binary(endpoint, entry, repository_uuid)
+            raw = self._read_binary(
+                endpoint,
+                entry,
+                repository_uuid,
+                persistent_repository_uuid,
+                configuration_sha256,
+            )
             content_hash = hashlib.sha256(raw).hexdigest()
             cache_key = hashlib.sha256(
                 f"{repository_uuid}|{str(endpoint.url).rstrip('/')}|{entry.path}|{endpoint.revision}".encode("utf-8")
@@ -537,7 +764,7 @@ class SnapshotService:
             ),
             self.allowed_schemes,
         )
-        all_entries = self.provider.list_tree(endpoint)
+        all_entries = self._list_tree(endpoint)
         return self._snapshot_endpoint_from_entries(
             record,
             revision,
@@ -552,6 +779,7 @@ class SnapshotService:
         all_entries: list[TreeEntry],
         *,
         repository_uuid: str | None = None,
+        persistent_repository_uuid: str | None = None,
         reusable_files: Mapping[str, SnapshotFilePayload] | None = None,
         reusable_content_revision: int | None = None,
         reusable_content_url: str | None = None,
@@ -576,6 +804,18 @@ class SnapshotService:
             and self._scope_for_path(entry.path, physical) != "UNKNOWN"
         ]
         entries.sort(key=lambda item: item.path.casefold())
+        persistent_repository_uuid = self._persistent_repository_uuid(
+            record,
+            revision,
+            hint=persistent_repository_uuid or repository_uuid,
+        )
+        persistent_configuration_sha256 = self._persistent_configuration_for_tree(
+            repository_uuid=persistent_repository_uuid,
+            all_entries=all_entries,
+            excel_entries=entries,
+            table_path=physical["TABLE"],
+        )
+        content_repository_uuid = repository_uuid or url
         files: list[SnapshotFilePayload] = []
         pending: list[TreeEntry] = []
         reusable_files = reusable_files or {}
@@ -595,13 +835,13 @@ class SnapshotService:
                 pending.append(entry)
                 continue
             source_key = (
-                reusable_content_repository_uuid or repository_uuid or url,
+                reusable_content_repository_uuid or content_repository_uuid,
                 (reusable_content_url or url).rstrip("/"),
                 path,
                 str(reusable_content_revision or reused.revision),
             )
             target_key = (
-                repository_uuid or url,
+                content_repository_uuid,
                 url.rstrip("/"),
                 path,
                 str(revision),
@@ -611,7 +851,7 @@ class SnapshotService:
                 if raw is not None:
                     self._content_cache[target_key] = raw
             cache_key = hashlib.sha256(
-                f"{repository_uuid or url}|{url.rstrip('/')}|{path}|{revision}".encode("utf-8")
+                f"{content_repository_uuid}|{url.rstrip('/')}|{path}|{revision}".encode("utf-8")
             ).hexdigest()
             files.append(
                 SnapshotFilePayload(
@@ -636,7 +876,9 @@ class SnapshotService:
                     endpoint,
                     entry,
                     self._scope_for_path(entry.path, physical),
-                    repository_uuid or url,
+                    content_repository_uuid,
+                    persistent_repository_uuid,
+                    persistent_configuration_sha256,
                 ): entry.path
                 for entry in pending
             }
@@ -645,7 +887,7 @@ class SnapshotService:
         files.sort(key=lambda item: item.path.casefold())
         total_size = sum(item.size or 0 for item in files)
         failed_count = sum(1 for item in files if item.error is not None)
-        return SnapshotEndpointPayload(
+        snapshot = SnapshotEndpointPayload(
             endpoint_id=str(record["id"]),
             label=str(record.get("label", record["id"])),
             url=url,
@@ -658,6 +900,38 @@ class SnapshotService:
                 failed_count=failed_count,
             ),
         )
+        persistent = self._persistent_content_cache
+        if (
+            persistent is not None
+            and persistent_repository_uuid
+            and persistent_configuration_sha256
+        ):
+            files_by_path = {
+                normalize_relative_path(item.path): item
+                for item in files
+                if item.error is None and item.content_hash
+            }
+            persistent.commit_tree(
+                repository_uuid=persistent_repository_uuid,
+                canonical_url=canonicalize_svn_url(url),
+                revision=revision,
+                table_path=normalize_relative_path(physical["TABLE"]),
+                configuration_sha256=persistent_configuration_sha256,
+                files=(
+                    (
+                        normalize_relative_path(entry.path),
+                        self._persistent_file_identity(
+                            repository_uuid=persistent_repository_uuid,
+                            canonical_url=canonicalize_svn_url(url),
+                            entry=entry,
+                            configuration_sha256=persistent_configuration_sha256,
+                        ).key,
+                    )
+                    for entry in entries
+                    if normalize_relative_path(entry.path) in files_by_path
+                ),
+            )
+        return snapshot
 
     @staticmethod
     def _pair_results(
@@ -727,10 +1001,10 @@ class SnapshotService:
             target_url = canonicalize_svn_url(self._validate_url(target_record))
             if source_url != target_url:
                 return None
-            source_entries = self.provider.list_tree(
+            source_entries = self._list_tree(
                 EndpointSpec(url=source_url, revision=source_revision)
             )
-            target_entries = self.provider.list_tree(
+            target_entries = self._list_tree(
                 EndpointSpec(url=target_url, revision=target_revision)
             )
             source_folded_paths: set[str] = set()
@@ -746,7 +1020,6 @@ class SnapshotService:
                 source_record,
                 source_revision,
                 source_entries,
-                repository_uuid=source_url,
             )
             reusable = self._reusable_files_by_path(source)
             if reusable is None:
@@ -755,7 +1028,6 @@ class SnapshotService:
                 target_record,
                 target_revision,
                 target_entries,
-                repository_uuid=target_url,
                 reusable_files=reusable,
                 reusable_content_revision=source_revision,
             )
@@ -960,10 +1232,10 @@ class SnapshotService:
                 != canonicalize_svn_url(target_identity.repository_root)
             ):
                 raise _CrossBranchEvidenceError("repository_identity")
-            source_entries = self.provider.list_tree(
+            source_entries = self._list_tree(
                 EndpointSpec(url=source_url, revision=source_revision)
             )
-            target_entries = self.provider.list_tree(
+            target_entries = self._list_tree(
                 EndpointSpec(url=target_url, revision=target_revision)
             )
             source_physical = self.resolve_scope_paths(
@@ -979,6 +1251,7 @@ class SnapshotService:
                 source_revision,
                 source_entries,
                 repository_uuid=source_content_identity or source_url,
+                persistent_repository_uuid=source_identity.repository_uuid,
             )
             evidence_started = time.perf_counter()
             try:
@@ -1020,12 +1293,11 @@ class SnapshotService:
                 target_revision,
                 target_entries,
                 repository_uuid=target_content_identity or target_url,
+                persistent_repository_uuid=target_identity.repository_uuid,
                 reusable_files=reusable,
                 reusable_content_revision=source_revision,
                 reusable_content_url=source_url,
-                reusable_content_repository_uuid=(
-                    source_content_identity or source_url
-                ),
+                reusable_content_repository_uuid=source_content_identity or source_url,
                 require_matching_entry_revision=False,
             )
         except Exception as exc:
@@ -1060,6 +1332,77 @@ class SnapshotService:
         )
 
     def _snapshot_at_resolved_records(
+        self,
+        source_record: Mapping[str, Any],
+        source_revision: int,
+        target_record: Mapping[str, Any],
+        target_revision: int,
+        *,
+        source_repository_uuid: str | None = None,
+        target_repository_uuid: str | None = None,
+        reuse: bool = True,
+    ) -> SnapshotResponsePayload:
+        started = time.perf_counter()
+        before = self.snapshot_reuse_metrics()
+        outcome = "succeeded"
+        try:
+            return self._snapshot_at_resolved_records_impl(
+                source_record,
+                source_revision,
+                target_record,
+                target_revision,
+                source_repository_uuid=source_repository_uuid,
+                target_repository_uuid=target_repository_uuid,
+                reuse=reuse,
+            )
+        except BaseException:
+            outcome = "failed"
+            raise
+        finally:
+            after = self.snapshot_reuse_metrics()
+            tracked = (
+                "directory_evidence_calls",
+                "persistent_hash_hits",
+                "disk_byte_hits",
+                "disk_bytes",
+                "file_reads",
+            )
+            phase: dict[str, int | float | str] = {
+                key: int(after.get(key, 0)) - int(before.get(key, 0))
+                for key in tracked
+            }
+            fallback_reasons = {
+                key.removeprefix("persistent_fallback.")
+                for key, value in after.items()
+                if key.startswith("persistent_fallback.")
+                and isinstance(value, int)
+                and value > int(before.get(key, 0))
+            }
+            startup_fallback = after.get("persistent_startup_fallback")
+            if isinstance(startup_fallback, str) and startup_fallback:
+                fallback_reasons.add(startup_fallback)
+            phase["fallback_reasons"] = ",".join(sorted(fallback_reasons)) or "none"
+            phase["wall_seconds"] = time.perf_counter() - started
+            phase["outcome"] = outcome
+            with self._cache_lock:
+                self._last_phase_metrics = phase
+            logger.info(
+                (
+                    "快照阶段完成 outcome=%s directory_evidence=%d "
+                    "persistent_hash_hits=%d disk_byte_hits=%d "
+                    "file_reads=%d fallbacks=%s wall=%.3fs"
+                ),
+                outcome,
+                phase["directory_evidence_calls"],
+                phase["persistent_hash_hits"],
+                phase["disk_byte_hits"],
+                phase["file_reads"],
+                phase["fallback_reasons"],
+                phase["wall_seconds"],
+                extra={"event": "snapshot.build_phase"},
+            )
+
+    def _snapshot_at_resolved_records_impl(
         self,
         source_record: Mapping[str, Any],
         source_revision: int,

@@ -161,10 +161,14 @@ class SVNWorkbookDatasetResolver:
         dataset_layout: Mapping[str, Any],
         *,
         allowed_schemes: tuple[str, ...],
+        snapshot_content_reader: (
+            Callable[[Mapping[str, Any], int, str, str], bytes | None] | None
+        ) = None,
     ):
         self.provider = provider
         self.endpoint_registry = endpoint_registry
         self.allowed_schemes = allowed_schemes
+        self.snapshot_content_reader = snapshot_content_reader
         self._directory_facts = DirectoryFactCache[_DirectoryFactKey](
             _DIRECTORY_FACT_CACHE_SIZE
         )
@@ -389,11 +393,21 @@ class SVNWorkbookDatasetResolver:
 
     def _read_workbook(
         self,
+        record: Mapping[str, Any],
         endpoint: EndpointSpec,
         table_directory: str,
         workbook_path: str,
     ) -> bytes | None:
         path = self._join(table_directory, workbook_path)
+        if self.snapshot_content_reader is not None:
+            cached = self.snapshot_content_reader(
+                record,
+                int(endpoint.revision),
+                table_directory,
+                path,
+            )
+            if cached is not None:
+                return cached
         try:
             return self.provider.read_bytes(endpoint, path)
         except SVNProviderError as exc:
@@ -675,11 +689,13 @@ class SVNWorkbookDatasetResolver:
         source_table = self._cached_table_directory(source_record, source_endpoint)
         target_table = self._cached_table_directory(target_record, target_endpoint)
         source_raw = self._read_workbook(
+            source_record,
             source_endpoint,
             source_table,
             payload.workbook_path,
         )
         target_raw = self._read_workbook(
+            target_record,
             target_endpoint,
             target_table,
             payload.workbook_path,

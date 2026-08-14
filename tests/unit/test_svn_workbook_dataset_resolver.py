@@ -626,3 +626,64 @@ def test_real_svn_api_reuses_resolver_manifests_in_diff(monkeypatch):
     assert result["summary"]["modified_rows"] == 273
     assert resolver_calls == 2
     assert diff_calls == 0
+
+
+def test_diff_materialization_reuses_persisted_snapshot_workbook_bytes(tmp_path):
+    class PersistentProvider(CountingProvider):
+        def info(self, endpoint):
+            self.info_calls.append((endpoint.url, endpoint.revision))
+            return MockSVNProvider.info(self, endpoint)
+
+    provider = PersistentProvider(_atlas_fixture())
+    config = {
+        "dataset_layout": deepcopy(CONFIG["dataset_layout"]),
+        "svn": {
+            "provider": "mock",
+            "allowed_schemes": ["mock"],
+            "endpoint_registry": _endpoint_records(),
+        },
+        "snapshot_reuse": {
+            "persistent_cache": {
+                "enabled": True,
+                "directory": str(tmp_path / ".cache" / "snapshot"),
+                "max_bytes": 64 * 1024 * 1024,
+                "max_file_entries": 128,
+                "max_tree_entries": 8,
+            }
+        },
+        "batch_diff": {
+            "state_directory": str(tmp_path / "batch-state"),
+        },
+    }
+    app = create_app(
+        config=config,
+        provider=provider,
+        workbook_diff_service=RecordingDiffService(),
+    )
+    app.state.snapshot_service.create_snapshot_at_revisions(
+        app.state.endpoint_registry,
+        source_id=SOURCE_ENDPOINT_ID,
+        source_revision=SOURCE_REVISION,
+        target_id=TARGET_ENDPOINT_ID,
+        target_revision=TARGET_REVISION,
+    )
+    workbook_reads = sum(
+        path.casefold().endswith((".xlsx", ".xlsm", ".xls"))
+        for _, path in provider.read_calls
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/diff/workbooks/compare",
+            json=_request_payload(),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["schema_version"] == "m2.diff.v1"
+    assert sum(
+        path.casefold().endswith((".xlsx", ".xlsm", ".xls"))
+        for _, path in provider.read_calls
+    ) == workbook_reads
+    assert app.state.snapshot_service.snapshot_reuse_metrics()[
+        "disk_byte_hits"
+    ] >= 2

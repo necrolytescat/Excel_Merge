@@ -17,7 +17,14 @@
   },
   "snapshot_reuse": {
     "ttl_seconds": 300,
-    "max_entries": 8
+    "max_entries": 8,
+    "persistent_cache": {
+      "enabled": true,
+      "directory": ".cache/snapshot",
+      "max_bytes": 2147483648,
+      "max_file_entries": 20000,
+      "max_tree_entries": 256
+    }
   },
   "diff_plan": {
     "database_path": "var/m4-diff-plan/diff-plan.sqlite3",

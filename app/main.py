@@ -42,6 +42,7 @@ from app.services.workbook_dataset_service import (
 )
 from app.services.workbook_diff_service import DatasetLayout, WorkbookDiffService
 from app.services.svn_service import SVNService
+from app.services.snapshot_content_cache import PersistentSnapshotContentCache
 from app.services.snapshot_service import SnapshotService
 from app.services.config_service import ConfigStore
 from app.services.batch_diff_service import (
@@ -127,9 +128,46 @@ def create_app(
         if isinstance(config.get("snapshot_reuse", {}), dict)
         else {}
     )
+    persistent_cache_config = (
+        snapshot_reuse_config.get("persistent_cache", {})
+        if isinstance(snapshot_reuse_config.get("persistent_cache", {}), dict)
+        else {}
+    )
+    configured_snapshot_cache = (
+        os.environ.get("EXCEL_MERGE_SNAPSHOT_CACHE_DIR")
+        or str(persistent_cache_config.get("directory", ".cache/snapshot")).strip()
+    )
+    snapshot_cache_directory = (
+        Path(configured_snapshot_cache) if configured_snapshot_cache else None
+    )
+    if (
+        snapshot_cache_directory is not None
+        and not snapshot_cache_directory.is_absolute()
+    ):
+        snapshot_cache_directory = PROJECT_ROOT / snapshot_cache_directory
+    configured_persistent_enabled = persistent_cache_config.get("enabled")
+    persistent_cache_enabled = (
+        provider_name == "cli"
+        if configured_persistent_enabled is None
+        else bool(configured_persistent_enabled)
+    )
+    snapshot_content_cache = PersistentSnapshotContentCache(
+        snapshot_cache_directory,
+        enabled=persistent_cache_enabled,
+        max_bytes=int(
+            persistent_cache_config.get("max_bytes", 2 * 1024 * 1024 * 1024)
+        ),
+        max_file_entries=int(
+            persistent_cache_config.get("max_file_entries", 20_000)
+        ),
+        max_tree_entries=int(
+            persistent_cache_config.get("max_tree_entries", 256)
+        ),
+    )
 
     app = FastAPI(title="Excel Diff/Merge SVN 基座", version="0.1.0")
     app.state.provider = provider
+    app.state.snapshot_content_cache = snapshot_content_cache
     app.state.provider_name = provider_name
     app.state.configured_provider = provider_name
     app.state.provider_locked = bool(configured_provider)
@@ -149,6 +187,7 @@ def create_app(
         reuse_configuration={
             "dataset_layout": config.get("dataset_layout"),
         },
+        persistent_content_cache=snapshot_content_cache,
     )
     diff_plan_config = config.get("diff_plan", {}) if isinstance(config, dict) else {}
     configured_diff_plan_db = os.environ.get("EXCEL_MERGE_DIFF_PLAN_DB") or str(
@@ -230,6 +269,7 @@ def create_app(
             lambda: getattr(app.state, "endpoint_registry", []),
             dataset_layout,
             allowed_schemes=allowed_schemes,
+            snapshot_content_reader=app.state.snapshot_service.read_cached_snapshot_bytes,
         )
     else:
         app.state.workbook_dataset_resolver = UnavailableWorkbookDatasetResolver()
