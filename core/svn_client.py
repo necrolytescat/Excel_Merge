@@ -230,11 +230,19 @@ class SVNClient:
         return os.path.join(self.cache_dir, f"rev_{rev}__{h}.bin")
 
     def _cat_cached(self, url: str, rev: object, peg: object) -> Optional[bytes]:
+        return self._cat_cached_with_source(url, rev, peg)[0]
+
+    def _cat_cached_with_source(
+        self,
+        url: str,
+        rev: object,
+        peg: object,
+    ) -> Tuple[Optional[bytes], str]:
         key = (url, rev)
         with self._lock:
             if key in self._mem:
                 self._cache_counters["memory_hits"] += 1
-                return self._mem[key]
+                return self._mem[key], "memory_cache"
         if self.cache_dir:
             p = self._cache_path(url, rev)
             if os.path.exists(p):
@@ -243,7 +251,7 @@ class SVNClient:
                 with self._lock:
                     self._mem[key] = data
                     self._cache_counters["disk_hits"] += 1
-                return data
+                return data, "disk_cache"
         with self._lock:
             self._cache_counters["misses"] += 1
         data = self._cat(url, rev, peg)
@@ -256,7 +264,7 @@ class SVNClient:
                     self._cache_counters["writes"] += 1
             with self._lock:
                 self._mem[key] = data
-        return data
+        return data, "svn_cat" if data is not None else "missing"
 
     def _cat(self, url: str, rev: object, peg: object) -> Optional[bytes]:
         target = f"{url}@{peg}" if peg is not None else url

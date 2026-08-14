@@ -867,14 +867,26 @@ class CLISVNProvider:
         commits.sort(key=lambda item: int(item.revision), reverse=True)
         return commits[:page_limit]
 
-    def read_bytes(self, endpoint: EndpointSpec, path: str) -> bytes:
+    def read_bytes_with_source(
+        self,
+        endpoint: EndpointSpec,
+        path: str,
+    ) -> tuple[bytes, str]:
         endpoint = self._validate(endpoint)
         clean_path = normalize_relative_path(path)
         target = endpoint.url.rstrip("/") + "/" + urllib.parse.quote(clean_path, safe="/~:@-_.")
-        raw = self.client._cat_cached(target, endpoint.revision, endpoint.revision)
+        raw, source = self.client._cat_cached_with_source(
+            target,
+            endpoint.revision,
+            endpoint.revision,
+        )
         if raw is None:
             raise SVNProviderError("SVN_PATH_NOT_FOUND", f"无法读取 SVN 文件：{clean_path}")
-        return raw
+        return raw, source
+
+    def read_bytes(self, endpoint: EndpointSpec, path: str) -> bytes:
+        return self.read_bytes_with_source(endpoint, path)[0]
+
     def read_content(self, endpoint: EndpointSpec, path: str, preview_limit: int = 262144) -> ContentPreview:
         endpoint = self._validate(endpoint)
         clean_path = normalize_relative_path(path)

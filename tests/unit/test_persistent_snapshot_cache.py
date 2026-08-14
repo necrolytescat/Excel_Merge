@@ -126,6 +126,7 @@ def service(
         allowed_schemes=("mock",),
         max_workers=8,
         persistent_content_cache=persistent,
+        phase_timing_enabled=True,
         reuse_configuration={
             "dataset_layout": {"fixture_version": configuration_version}
         },

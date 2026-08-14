@@ -1,6 +1,7 @@
 """Persistent, reproducible content facts for frozen SVN snapshots."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
@@ -12,6 +13,7 @@ import time
 from typing import Callable, Iterable
 from uuid import uuid4
 
+from app.services.snapshot_phase_timing import SnapshotPhaseTiming
 
 INDEX_SCHEMA_VERSION = 1
 INDEX_FILENAME = "index.v1.json"
@@ -157,16 +159,84 @@ class PersistentSnapshotContentCache:
             self._startup_fallback = "index_corrupt"
             self._counters["persistent_corruptions"] += 1
 
+    @contextmanager
+    def _locked(
+        self,
+        timing: SnapshotPhaseTiming | None,
+        side: str | None,
+        stage: str,
+    ):
+        if timing is None:
+            with self._lock:
+                yield
+            return
+        with timing.phase(f"{stage}.lock_wait", side=side):
+            self._lock.acquire()
+        try:
+            with timing.phase(f"{stage}.lock_held", side=side):
+                yield
+        finally:
+            self._lock.release()
+
     @staticmethod
-    def _atomic_write(path: Path, raw: bytes) -> None:
+    def _sha256(
+        raw: bytes,
+        *,
+        timing: SnapshotPhaseTiming | None,
+        side: str | None,
+        kind: str,
+    ) -> str:
+        if timing is None:
+            return hashlib.sha256(raw).hexdigest()
+        with timing.phase(f"sha256.{kind}", side=side) as observation:
+            result = hashlib.sha256(raw).hexdigest()
+            observation.result(bytes_count=len(raw), items=1)
+            return result
+
+    def _atomic_write(
+        self,
+        path: Path,
+        raw: bytes,
+        *,
+        artifact: str,
+        timing: SnapshotPhaseTiming | None,
+        side: str | None,
+    ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.parent / f".{path.name}.{uuid4().hex}.tmp"
         try:
-            with temporary.open("xb") as stream:
-                stream.write(raw)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
+            if timing is None:
+                stream = temporary.open("xb")
+            else:
+                with timing.phase(f"{artifact}.temp_open", side=side):
+                    stream = temporary.open("xb")
+            with stream:
+                if timing is None:
+                    stream.write(raw)
+                else:
+                    with timing.phase(
+                        f"{artifact}.temp_write", side=side
+                    ) as observation:
+                        stream.write(raw)
+                        observation.result(bytes_count=len(raw))
+                if timing is None:
+                    stream.flush()
+                else:
+                    with timing.phase(f"{artifact}.flush", side=side) as observation:
+                        stream.flush()
+                        observation.result(bytes_count=len(raw))
+                if timing is None:
+                    os.fsync(stream.fileno())
+                else:
+                    with timing.phase(f"{artifact}.fsync", side=side) as observation:
+                        os.fsync(stream.fileno())
+                        observation.result(bytes_count=len(raw))
+            if timing is None:
+                os.replace(temporary, path)
+            else:
+                with timing.phase(f"{artifact}.replace", side=side) as observation:
+                    os.replace(temporary, path)
+                    observation.result(bytes_count=len(raw))
         finally:
             try:
                 temporary.unlink()
@@ -207,6 +277,8 @@ class PersistentSnapshotContentCache:
         self,
         identity: SnapshotFileIdentity,
         expected_size: int | None,
+        timing: SnapshotPhaseTiming | None,
+        side: str | None,
     ) -> CachedSnapshotBytes | None:
         record_and_path = self._valid_fact_record(
             identity,
@@ -217,16 +289,41 @@ class PersistentSnapshotContentCache:
             self._counters["persistent_misses"] += 1
             return None
         record, path = record_and_path
-        try:
-            raw = path.read_bytes()
-        except OSError:
-            raw = b""
-            valid = False
+        if timing is None:
+            try:
+                raw = path.read_bytes()
+            except OSError:
+                raw = b""
+                valid = False
+            else:
+                valid = (
+                    len(raw) == record["size_bytes"]
+                    and self._sha256(
+                        raw,
+                        timing=None,
+                        side=side,
+                        kind="persistent_validation",
+                    ) == record["content_sha256"]
+                )
         else:
-            valid = (
-                len(raw) == record["size_bytes"]
-                and hashlib.sha256(raw).hexdigest() == record["content_sha256"]
-            )
+            with timing.phase("blob.read", side=side) as observation:
+                try:
+                    raw = path.read_bytes()
+                except OSError:
+                    raw = b""
+                    valid = False
+                    observation.result(source="missing")
+                else:
+                    observation.result(bytes_count=len(raw), source="disk")
+                    valid = (
+                        len(raw) == record["size_bytes"]
+                        and self._sha256(
+                            raw,
+                            timing=timing,
+                            side=side,
+                            kind="persistent_validation",
+                        ) == record["content_sha256"]
+                    )
         if not valid:
             self._facts.pop(identity.key, None)
             self._drop_fact_references_locked(identity.key)
@@ -257,19 +354,47 @@ class PersistentSnapshotContentCache:
         self,
         identity: SnapshotFileIdentity,
         raw: bytes,
+        timing: SnapshotPhaseTiming | None,
+        side: str | None,
     ) -> CachedSnapshotBytes:
-        content_sha256 = hashlib.sha256(raw).hexdigest()
+        content_sha256 = self._sha256(
+            raw,
+            timing=timing,
+            side=side,
+            kind="persistent_store",
+        )
         blob_path = self._blob_path(content_sha256)
-        try:
-            existing = blob_path.read_bytes()
-        except OSError:
-            existing = None
+        if timing is None:
+            try:
+                existing = blob_path.read_bytes()
+            except OSError:
+                existing = None
+        else:
+            with timing.phase("blob.existing_read", side=side) as observation:
+                try:
+                    existing = blob_path.read_bytes()
+                except OSError:
+                    existing = None
+                    observation.result(source="missing")
+                else:
+                    observation.result(bytes_count=len(existing), source="disk")
         if (
             existing is None
             or len(existing) != len(raw)
-            or hashlib.sha256(existing).hexdigest() != content_sha256
+            or self._sha256(
+                existing,
+                timing=timing,
+                side=side,
+                kind="blob_existing_validation",
+            ) != content_sha256
         ):
-            self._atomic_write(blob_path, raw)
+            self._atomic_write(
+                blob_path,
+                raw,
+                artifact="blob",
+                timing=timing,
+                side=side,
+            )
         now = self._wall_clock_ns()
         self._facts[identity.key] = {
             "identity": identity.payload(),
@@ -291,18 +416,43 @@ class PersistentSnapshotContentCache:
         *,
         expected_size: int | None,
         loader: Callable[[], bytes],
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
     ) -> tuple[CachedSnapshotBytes, bool]:
         """Return trusted bytes and whether they came from the persistent cache."""
         if not self.enabled or self._read_only:
             raw = loader()
             return CachedSnapshotBytes(
                 fact_key=identity.key,
-                content_sha256=hashlib.sha256(raw).hexdigest(),
+                content_sha256=self._sha256(
+                    raw,
+                    timing=timing,
+                    side=side,
+                    kind="uncached_content",
+                ),
                 size_bytes=len(raw),
                 raw=raw,
             ), False
-        with self._lock:
-            cached = self._lookup_locked(identity, expected_size)
+        with self._locked(timing, side, "persistent.lookup"):
+            if timing is None:
+                cached = self._lookup_locked(
+                    identity,
+                    expected_size,
+                    timing,
+                    side,
+                )
+            else:
+                with timing.phase("persistent.lookup", side=side) as observation:
+                    cached = self._lookup_locked(
+                        identity,
+                        expected_size,
+                        timing,
+                        side,
+                    )
+                    observation.result(
+                        bytes_count=cached.size_bytes if cached else 0,
+                        source="hit" if cached else "miss",
+                    )
             if cached is not None:
                 return cached, True
             flight = self._flights.get(identity.key)
@@ -314,7 +464,11 @@ class PersistentSnapshotContentCache:
                 self._counters["persistent_waits"] += 1
                 builder = False
         if not builder:
-            flight.event.wait()
+            if timing is None:
+                flight.event.wait()
+            else:
+                with timing.phase("persistent.singleflight_wait", side=side):
+                    flight.event.wait()
             if flight.error is not None:
                 raise flight.error
             if flight.result is None:
@@ -324,14 +478,24 @@ class PersistentSnapshotContentCache:
             raw = loader()
             result = CachedSnapshotBytes(
                 fact_key=identity.key,
-                content_sha256=hashlib.sha256(raw).hexdigest(),
+                content_sha256=self._sha256(
+                    raw,
+                    timing=timing,
+                    side=side,
+                    kind="loaded_content",
+                ),
                 size_bytes=len(raw),
                 raw=raw,
             )
             try:
-                with self._lock:
+                with self._locked(timing, side, "blob"):
                     if not self._read_only:
-                        result = self._store_bytes_locked(identity, raw)
+                        result = self._store_bytes_locked(
+                            identity,
+                            raw,
+                            timing,
+                            side,
+                        )
             except OSError:
                 with self._lock:
                     self._counters["persistent_write_failures"] += 1
@@ -375,6 +539,8 @@ class PersistentSnapshotContentCache:
         table_path: str,
         configuration_sha256: str,
         files: Iterable[tuple[str, str]],
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
     ) -> bool:
         """Atomically publish one complete frozen tree after snapshot construction."""
         if not self.enabled or self._read_only:
@@ -387,13 +553,22 @@ class PersistentSnapshotContentCache:
             table_path=table_path,
             configuration_sha256=configuration_sha256,
         )
-        with self._lock:
+        with self._locked(timing, side, "index"):
             try:
-                file_map = {
-                    path: fact_key
-                    for path, fact_key in files
-                    if fact_key in self._facts
-                }
+                if timing is None:
+                    file_map = {
+                        path: fact_key
+                        for path, fact_key in files
+                        if fact_key in self._facts
+                    }
+                else:
+                    with timing.phase("index.tree_build", side=side) as observation:
+                        file_map = {
+                            path: fact_key
+                            for path, fact_key in files
+                            if fact_key in self._facts
+                        }
+                        observation.result(items=len(file_map))
                 self._trees[tree_key] = {
                     "identity": {
                         "repository_uuid": repository_uuid,
@@ -405,8 +580,12 @@ class PersistentSnapshotContentCache:
                     "files": file_map,
                     "last_access_ns": now,
                 }
-                self._prune_locked()
-                self._persist_index_locked()
+                if timing is None:
+                    self._prune_locked()
+                else:
+                    with timing.phase("index.prune", side=side):
+                        self._prune_locked()
+                self._persist_index_locked(timing=timing, side=side)
             except Exception:
                 self._counters["persistent_write_failures"] += 1
                 return False
@@ -449,24 +628,43 @@ class PersistentSnapshotContentCache:
                 identity = SnapshotFileIdentity(**identity_payload)
             except TypeError:
                 return None
-            cached = self._lookup_locked(identity, None)
+            cached = self._lookup_locked(identity, None, None, None)
             if cached is None or cached.fact_key != fact_key:
                 return None
             tree["last_access_ns"] = self._wall_clock_ns()
             return cached.raw
 
-    def _persist_index_locked(self) -> None:
-        raw = json.dumps(
-            {
-                "schema_version": INDEX_SCHEMA_VERSION,
-                "facts": self._facts,
-                "trees": self._trees,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        self._atomic_write(self._index_path, raw)
+    def _persist_index_locked(
+        self,
+        *,
+        timing: SnapshotPhaseTiming | None,
+        side: str | None,
+    ) -> None:
+        def serialize() -> bytes:
+            return json.dumps(
+                {
+                    "schema_version": INDEX_SCHEMA_VERSION,
+                    "facts": self._facts,
+                    "trees": self._trees,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+
+        if timing is None:
+            raw = serialize()
+        else:
+            with timing.phase("index.serialize", side=side) as observation:
+                raw = serialize()
+                observation.result(bytes_count=len(raw), items=1)
+        self._atomic_write(
+            self._index_path,
+            raw,
+            artifact="index",
+            timing=timing,
+            side=side,
+        )
 
     def _prune_locked(self) -> None:
         if self.max_tree_entries and len(self._trees) > self.max_tree_entries:
@@ -543,10 +741,18 @@ class PersistentSnapshotContentCache:
                     except OSError:
                         pass
 
-    def record_fallback(self, reason: str) -> None:
+    def record_fallback(
+        self,
+        reason: str,
+        *,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
+    ) -> None:
         key = f"persistent_fallback.{reason}"
         with self._lock:
             self._counters[key] = self._counters.get(key, 0) + 1
+        if timing is not None:
+            timing.increment(key, side=side)
 
     def metrics(self) -> dict[str, int | str | bool | None]:
         with self._lock:

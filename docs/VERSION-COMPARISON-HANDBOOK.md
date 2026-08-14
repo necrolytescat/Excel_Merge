@@ -303,7 +303,17 @@ Diff 物化读取 Excel 工作簿时优先复用同一冻结树中已校验的�
 | 重启后相同 Revision | 2 | 0 | 0.049834s | 7.25x |
 | 重启后 5 个修改/新增 | 2 | 5 | 0.079872s | 4.52x |
 
-实施前已有正式日志基线为最近一次 `POST /api/svn/snapshots` 41.945s、批量准备约 0.187s；本批未发起新 SVN 请求，因此固定 Mock 数据用于可重复验收，不能伪装成真实网络环境端到端耗时。阶段日志 `snapshot.build_phase` 同时记录目录证据、持久 HASH 命中、磁盘字节命中、文件读取数、回退原因和墙钟。
+实施前已有正式日志基线为最近一次 `POST /api/svn/snapshots` 41.945s、批量准备约 0.187s；固定 Mock 数据只用于可重复验收，不能伪装成真实网络环境端到端耗时。
+
+锁定版本快照的当前内部计时事件为 `snapshot.phase_timing`，schema 为 `m2.snapshot-phase-timing.v1`，开关跟随 `operations.logging.enabled`。每个请求使用独立 `request_context_id`；实际构建者生成 `build_context_id`，并发等待者保留自己的 request context 并引用同一 build context。原始 JSONL 的 `internal_metrics` 记录请求墙钟/CPU、两侧耗时与重叠、endpoint info、递归 list、持久 lookup、Provider 读取来源与分位数、SHA-256、blob/index 原子 I/O、排序和响应构建。公开 `GET /api/operations/logs` 在模型校验前移除 `internal_metrics`，不扩展公开契约。
+
+metrics 只允许 endpoint id、冻结 Revision、repository UUID、计数、字节和耗时，不记录凭据、完整 URL、工作簿内容或物理缓存路径。阶段墙钟包含嵌套和并行，不能直接相加；以时间区间并集的 `critical_path_accounted_seconds`、`unattributed_wall_seconds` 和 source/target `overlap_seconds` 解释请求总墙钟。
+
+固定 Mock 四场景计时验收至少运行 10 轮：
+
+```powershell
+py -3 -m app.tools.version_comparison_snapshot_phase_timing_acceptance --rounds 10
+```
 
 `m2.batch-management.v1` 定义在 `docs/contracts/m2.batch-management.v1.md`。结构化事件独立于批量任务 JSON，默认保留 90 天；终态任务可从历史任务页手动删除。删除仅影响该任务正式结果，不级联重试任务，不触碰原始日志、全局 SVN 缓存或 Replay 夹具。
 

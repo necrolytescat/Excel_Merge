@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from contextlib import nullcontext
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ import re
 import threading
 import time
 from typing import Any, Callable, Mapping
+from uuid import uuid4
 
 from core.models import EndpointSpec, TreeEntry
 from core.svn_history import (
@@ -30,6 +32,7 @@ from app.services.snapshot_content_cache import (
     PersistentSnapshotContentCache,
     SnapshotFileIdentity,
 )
+from app.services.snapshot_phase_timing import SnapshotPhaseTiming
 from app.schemas.svn import (
     EndpointRecordPayload,
     SnapshotEndpointPayload,
@@ -59,6 +62,7 @@ class _TrustedSnapshotEntry:
 @dataclass
 class _SnapshotBuildFlight:
     event: threading.Event
+    build_context_id: str
     result: SnapshotResponsePayload | None = None
     error: BaseException | None = None
 
@@ -81,6 +85,8 @@ class SnapshotService:
         reuse_configuration: Mapping[str, Any] | None = None,
         persistent_content_cache: PersistentSnapshotContentCache | None = None,
         monotonic_clock: Callable[[], float] = time.monotonic,
+        phase_timing_enabled: bool = False,
+        phase_timing_sink: Callable[[dict[str, Any]], None] | None = None,
     ):
         self.provider = provider
         self.allowed_schemes = allowed_schemes
@@ -92,6 +98,8 @@ class SnapshotService:
         self._reuse_max_entries = max(0, int(reuse_max_entries))
         self._monotonic_clock = monotonic_clock
         self._persistent_content_cache = persistent_content_cache
+        self._phase_timing_enabled = bool(phase_timing_enabled)
+        self._phase_timing_sink = phase_timing_sink
         self._repository_identity_cache: dict[tuple[str, int], str] = {}
         self._last_phase_metrics: dict[str, int | float | str] = {}
         self._reuse_configuration_sha256 = self._hash_json(
@@ -135,6 +143,119 @@ class SnapshotService:
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
+    @staticmethod
+    def _hash_content(
+        raw: bytes,
+        *,
+        timing: SnapshotPhaseTiming | None,
+        side: str | None,
+        kind: str,
+    ) -> str:
+        if timing is None or side is None:
+            return hashlib.sha256(raw).hexdigest()
+        with timing.phase(
+            f"sha256.{kind}",
+            side=side,
+        ) as observation:
+            result = hashlib.sha256(raw).hexdigest()
+            observation.result(bytes_count=len(raw), items=1)
+            return result
+
+    def _new_phase_timing(
+        self,
+        *,
+        request_context_id: str | None,
+        source_endpoint_id: str,
+        source_revision: int | str,
+        target_endpoint_id: str,
+        target_revision: int | str,
+    ) -> SnapshotPhaseTiming | None:
+        if not self._phase_timing_enabled:
+            return None
+        return SnapshotPhaseTiming(
+            request_context_id=request_context_id,
+            source_endpoint_id=source_endpoint_id,
+            source_revision=source_revision,
+            target_endpoint_id=target_endpoint_id,
+            target_revision=target_revision,
+        )
+
+    def _finish_phase_timing(
+        self,
+        timing: SnapshotPhaseTiming | None,
+        *,
+        outcome: str,
+    ) -> None:
+        if timing is None:
+            return
+        try:
+            metrics = timing.finish(outcome=outcome)
+        except Exception:
+            logger.warning(
+                "快照分阶段计时收尾失败",
+                exc_info=True,
+                extra={"event": "snapshot.phase_timing_failed"},
+            )
+            return
+        summary = metrics["summary"]
+        lookup = summary["persistent_lookup"]
+        provider_read = summary["provider_read"]
+        fallback_reasons = {
+            key.removeprefix("persistent_fallback.")
+            for key, value in metrics["counters"].items()
+            if key.startswith("persistent_fallback.") and value
+        }
+        persistent = self._persistent_content_cache
+        if persistent is not None:
+            startup_fallback = persistent.metrics().get(
+                "persistent_startup_fallback"
+            )
+            if isinstance(startup_fallback, str) and startup_fallback:
+                fallback_reasons.add(startup_fallback)
+        phase: dict[str, int | float | str] = {
+            "directory_evidence_calls": int(summary["list_tree"]["calls"]),
+            "persistent_hash_hits": int(
+                lookup.get("sources", {}).get("hit", 0)
+            ),
+            "disk_byte_hits": int(lookup.get("sources", {}).get("hit", 0)),
+            "disk_bytes": int(lookup.get("bytes", 0)),
+            "file_reads": int(provider_read["calls"]),
+            "fallback_reasons": ",".join(sorted(fallback_reasons)) or "none",
+            "wall_seconds": float(metrics["request"]["wall_seconds"]),
+            "outcome": outcome,
+        }
+        with self._cache_lock:
+            # Compatibility diagnostics now store one complete context, never a
+            # process-global before/after delta.
+            self._last_phase_metrics = phase
+        logger.info(
+            (
+                "快照分阶段计时完成 outcome=%s source=%s@%s target=%s@%s "
+                "wall=%.3fs provider_reads=%d"
+            ),
+            outcome,
+            metrics["endpoints"]["source"]["endpoint_id"],
+            metrics["endpoints"]["source"]["resolved_revision"],
+            metrics["endpoints"]["target"]["endpoint_id"],
+            metrics["endpoints"]["target"]["resolved_revision"],
+            metrics["request"]["wall_seconds"],
+            provider_read["calls"],
+            extra={
+                "event": "snapshot.phase_timing",
+                "request_id": timing.request_context_id,
+                "internal_metrics": metrics,
+            },
+        )
+        if self._phase_timing_sink is not None:
+            try:
+                self._phase_timing_sink(metrics)
+            except Exception:
+                logger.warning(
+                    "快照分阶段计时 sink 写入失败",
+                    exc_info=True,
+                    extra={"event": "snapshot.phase_timing_sink_failed"},
+                )
+
     def _persistent_cache_enabled(self) -> bool:
         cache = self._persistent_content_cache
         return bool(cache is not None and cache.metrics()["persistent_enabled"])
@@ -149,17 +270,61 @@ class SnapshotService:
         self,
         endpoint: EndpointSpec,
         prefix: str = "",
+        *,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
     ) -> list[TreeEntry]:
         self._record_counter("directory_evidence_calls")
-        return self.provider.list_tree(endpoint, prefix)
+        if timing is None or side is None:
+            return self.provider.list_tree(endpoint, prefix)
+        with timing.side_scope(side):
+            with timing.phase("svn.list_tree", side=side) as observation:
+                entries = self.provider.list_tree(endpoint, prefix)
+                observation.result(items=len(entries))
+                return entries
 
-    def _read_provider_bytes(self, endpoint: EndpointSpec, path: str) -> bytes:
+    def _read_provider_bytes(
+        self,
+        endpoint: EndpointSpec,
+        path: str,
+        *,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
+    ) -> bytes:
         self._record_counter("file_reads")
-        reader = getattr(self.provider, "read_bytes", None)
-        if reader is not None:
-            return reader(endpoint, path)
-        content = self.provider.read_content(endpoint, path, self.preview_limit)
-        return content.text.encode("utf-8")
+        if timing is None or side is None:
+            reader = getattr(self.provider, "read_bytes", None)
+            if reader is not None:
+                return reader(endpoint, path)
+            content = self.provider.read_content(endpoint, path, self.preview_limit)
+            return content.text.encode("utf-8")
+        timing.provider_enter(side)
+        try:
+            with timing.phase("provider.read", side=side) as observation:
+                reader_with_source = getattr(
+                    self.provider,
+                    "read_bytes_with_source",
+                    None,
+                )
+                if reader_with_source is not None:
+                    raw, source = reader_with_source(endpoint, path)
+                else:
+                    reader = getattr(self.provider, "read_bytes", None)
+                    if reader is not None:
+                        raw = reader(endpoint, path)
+                        source = "provider"
+                    else:
+                        content = self.provider.read_content(
+                            endpoint,
+                            path,
+                            self.preview_limit,
+                        )
+                        raw = content.text.encode("utf-8")
+                        source = "provider_preview"
+                observation.result(bytes_count=len(raw), source=source)
+                return raw
+        finally:
+            timing.provider_exit(side)
 
     def _endpoint_configuration_sha256(self, table_path: str) -> str:
         return self._hash_json(
@@ -175,6 +340,8 @@ class SnapshotService:
         revision: int,
         *,
         hint: str | None = None,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
     ) -> str | None:
         if not self._persistent_cache_enabled():
             return hint
@@ -183,32 +350,50 @@ class SnapshotService:
         try:
             canonical_url = canonicalize_svn_url(self._validate_url(record))
         except Exception:
-            cache.record_fallback("canonical_url")
+            cache.record_fallback("canonical_url", timing=timing, side=side)
             return None
         key = (canonical_url, revision)
         if hint and "://" not in hint:
             with self._cache_lock:
                 self._repository_identity_cache[key] = hint
+            if timing is not None and side is not None:
+                timing.set_endpoint(side, repository_uuid=hint)
             return hint
         with self._cache_lock:
             cached = self._repository_identity_cache.get(key)
         if cached:
+            if timing is not None and side is not None:
+                timing.set_endpoint(side, repository_uuid=cached)
             return cached
         try:
-            info = self.provider.info(
-                EndpointSpec(
-                    url=canonical_url,
-                    revision=revision,
-                    label=str(record.get("label", "")),
-                )
+            endpoint = EndpointSpec(
+                url=canonical_url,
+                revision=revision,
+                label=str(record.get("label", "")),
             )
+            if timing is None or side is None:
+                info = self.provider.info(endpoint)
+            else:
+                with timing.phase("endpoint.info", side=side) as observation:
+                    info = self.provider.info(endpoint)
+                    observation.result(items=1, source="persistent_identity")
             repository_uuid = str(info.repository_uuid or "").strip()
             returned_url = canonicalize_svn_url(info.url or canonical_url)
             if not repository_uuid or returned_url != canonical_url:
                 raise ValueError("incomplete frozen repository identity")
         except Exception:
-            cache.record_fallback("repository_identity")
+            cache.record_fallback(
+                "repository_identity",
+                timing=timing,
+                side=side,
+            )
             return None
+        if timing is not None and side is not None:
+            timing.set_endpoint(
+                side,
+                resolved_revision=revision,
+                repository_uuid=repository_uuid,
+                )
         with self._cache_lock:
             self._repository_identity_cache[key] = repository_uuid
         return repository_uuid
@@ -236,12 +421,14 @@ class SnapshotService:
         all_entries: list[TreeEntry],
         excel_entries: list[TreeEntry],
         table_path: str,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
     ) -> str | None:
         cache = self._persistent_content_cache
         if cache is None or not self._persistent_cache_enabled():
             return None
         if not repository_uuid:
-            cache.record_fallback("repository_uuid_missing")
+            cache.record_fallback("repository_uuid_missing", timing=timing, side=side)
             return None
         try:
             table = normalize_relative_path(table_path)
@@ -257,7 +444,7 @@ class SnapshotService:
                 ):
                     variants.add("/".join(parts[: len(table_parts)]))
             if variants != {table}:
-                cache.record_fallback("path_ambiguity")
+                cache.record_fallback("path_ambiguity", timing=timing, side=side)
                 return None
             seen_paths: set[str] = set()
             for entry in excel_entries:
@@ -265,15 +452,15 @@ class SnapshotService:
                 folded = path.casefold()
                 revision = str(entry.revision).strip()
                 if not path or folded in seen_paths:
-                    cache.record_fallback("path_ambiguity")
+                    cache.record_fallback("path_ambiguity", timing=timing, side=side)
                     return None
                 if not revision.isdigit() or int(revision) <= 0:
-                    cache.record_fallback("last_changed_revision_missing")
+                    cache.record_fallback("last_changed_revision_missing", timing=timing, side=side)
                     return None
                 seen_paths.add(folded)
             return self._endpoint_configuration_sha256(table)
         except Exception:
-            cache.record_fallback("tree_metadata_invalid")
+            cache.record_fallback("tree_metadata_invalid", timing=timing, side=side)
             return None
 
     def read_cached_snapshot_bytes(
@@ -540,16 +727,37 @@ class SnapshotService:
         validate_endpoint(EndpointSpec(url=url, revision="HEAD"), self.allowed_schemes)
         return url
 
-    def _resolve_head(self, record: Mapping[str, Any]) -> tuple[int | str, str]:
+    def _resolve_head(
+        self,
+        record: Mapping[str, Any],
+        *,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
+    ) -> tuple[int | str, str]:
         url = self._validate_url(record)
-        info = self.provider.info(
-            EndpointSpec(url=url, revision="HEAD", label=str(record.get("label", "")))
+        endpoint = EndpointSpec(
+            url=url,
+            revision="HEAD",
+            label=str(record.get("label", "")),
         )
+        if timing is None or side is None:
+            info = self.provider.info(endpoint)
+        else:
+            with timing.side_scope(side):
+                with timing.phase("endpoint.info", side=side) as observation:
+                    info = self.provider.info(endpoint)
+                    observation.result(items=1, source="head")
         revision = str(info.revision or info.last_changed_revision).strip()
         if not revision:
             raise SVNProviderError("SVN_INVALID_REVISION", f"端点没有返回 HEAD Revision：{record['id']}")
         resolved = int(revision) if revision.isdigit() else revision
         repository_uuid = info.repository_uuid or info.repository_root or url
+        if timing is not None and side is not None and isinstance(resolved, int):
+            timing.set_endpoint(
+                side,
+                resolved_revision=resolved,
+                repository_uuid=repository_uuid,
+            )
         return resolved, repository_uuid
 
     def freeze_head(self, record: Mapping[str, Any]) -> int | str:
@@ -657,6 +865,9 @@ class SnapshotService:
         repository_uuid: str,
         persistent_repository_uuid: str | None = None,
         configuration_sha256: str | None = None,
+        *,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
     ) -> bytes:
         key = (
             repository_uuid,
@@ -664,8 +875,17 @@ class SnapshotService:
             normalize_relative_path(entry.path),
             str(endpoint.revision),
         )
-        with self._cache_lock:
-            cached = self._content_cache.get(key)
+        if timing is None or side is None:
+            with self._cache_lock:
+                cached = self._content_cache.get(key)
+        else:
+            with timing.phase("content.memory_lookup", side=side) as observation:
+                with self._cache_lock:
+                    cached = self._content_cache.get(key)
+                observation.result(
+                    bytes_count=len(cached) if cached is not None else 0,
+                    source="hit" if cached is not None else "miss",
+                )
         if cached is not None:
             return cached
 
@@ -684,11 +904,23 @@ class SnapshotService:
             cached_bytes, _ = persistent.get_or_load(
                 identity,
                 expected_size=entry.size,
-                loader=lambda: self._read_provider_bytes(endpoint, entry.path),
+                loader=lambda: self._read_provider_bytes(
+                    endpoint,
+                    entry.path,
+                    timing=timing,
+                    side=side,
+                ),
+                timing=timing,
+                side=side,
             )
             raw = cached_bytes.raw
         else:
-            raw = self._read_provider_bytes(endpoint, entry.path)
+            raw = self._read_provider_bytes(
+                endpoint,
+                entry.path,
+                timing=timing,
+                side=side,
+            )
 
         with self._cache_lock:
             self._content_cache[key] = raw
@@ -702,6 +934,39 @@ class SnapshotService:
         repository_uuid: str,
         persistent_repository_uuid: str | None = None,
         configuration_sha256: str | None = None,
+        *,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
+    ) -> SnapshotFilePayload:
+        worker_scope = (
+            timing.file_worker_scope(side)
+            if timing is not None and side is not None
+            else nullcontext()
+        )
+        with worker_scope:
+            return self._fetch_file_impl(
+                endpoint,
+                entry,
+                logical_scope,
+                repository_uuid,
+                persistent_repository_uuid,
+                configuration_sha256,
+                timing=timing,
+                side=side,
+            )
+
+
+    def _fetch_file_impl(
+        self,
+        endpoint: EndpointSpec,
+        entry: TreeEntry,
+        logical_scope: str,
+        repository_uuid: str,
+        persistent_repository_uuid: str | None = None,
+        configuration_sha256: str | None = None,
+        *,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
     ) -> SnapshotFilePayload:
         try:
             raw = self._read_binary(
@@ -710,8 +975,15 @@ class SnapshotService:
                 repository_uuid,
                 persistent_repository_uuid,
                 configuration_sha256,
+                timing=timing,
+                side=side,
             )
-            content_hash = hashlib.sha256(raw).hexdigest()
+            content_hash = self._hash_content(
+                raw,
+                timing=timing,
+                side=side,
+                kind="snapshot_content",
+            )
             cache_key = hashlib.sha256(
                 f"{repository_uuid}|{str(endpoint.url).rstrip('/')}|{entry.path}|{endpoint.revision}".encode("utf-8")
             ).hexdigest()
@@ -753,6 +1025,32 @@ class SnapshotService:
         revision: int,
         *,
         repository_uuid: str | None = None,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
+    ) -> SnapshotEndpointPayload:
+        if timing is not None and side is not None:
+            timing.set_endpoint(
+                side,
+                resolved_revision=revision,
+                repository_uuid=repository_uuid,
+            )
+        return self._snapshot_endpoint_at_revision_impl(
+            record,
+            revision,
+            repository_uuid=repository_uuid,
+            timing=timing,
+            side=side,
+        )
+
+
+    def _snapshot_endpoint_at_revision_impl(
+        self,
+        record: Mapping[str, Any],
+        revision: int,
+        *,
+        repository_uuid: str | None = None,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
     ) -> SnapshotEndpointPayload:
         """读取指定 Revision，不调用 info() 或重新解析 HEAD。"""
         url = self._validate_url(record)
@@ -764,12 +1062,14 @@ class SnapshotService:
             ),
             self.allowed_schemes,
         )
-        all_entries = self._list_tree(endpoint)
+        all_entries = self._list_tree(endpoint, timing=timing, side=side)
         return self._snapshot_endpoint_from_entries(
             record,
             revision,
             all_entries,
             repository_uuid=repository_uuid,
+            timing=timing,
+            side=side,
         )
 
     def _snapshot_endpoint_from_entries(
@@ -785,7 +1085,53 @@ class SnapshotService:
         reusable_content_url: str | None = None,
         reusable_content_repository_uuid: str | None = None,
         require_matching_entry_revision: bool = True,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
     ) -> SnapshotEndpointPayload:
+        scope = (
+            timing.side_scope(side)
+            if timing is not None and side is not None
+            else nullcontext()
+        )
+        with scope:
+            return self._snapshot_endpoint_from_entries_impl(
+                record,
+                revision,
+                all_entries,
+                repository_uuid=repository_uuid,
+                persistent_repository_uuid=persistent_repository_uuid,
+                reusable_files=reusable_files,
+                reusable_content_revision=reusable_content_revision,
+                reusable_content_url=reusable_content_url,
+                reusable_content_repository_uuid=reusable_content_repository_uuid,
+                require_matching_entry_revision=require_matching_entry_revision,
+                timing=timing,
+                side=side,
+            )
+
+
+    def _snapshot_endpoint_from_entries_impl(
+        self,
+        record: Mapping[str, Any],
+        revision: int,
+        all_entries: list[TreeEntry],
+        *,
+        repository_uuid: str | None = None,
+        persistent_repository_uuid: str | None = None,
+        reusable_files: Mapping[str, SnapshotFilePayload] | None = None,
+        reusable_content_revision: int | None = None,
+        reusable_content_url: str | None = None,
+        reusable_content_repository_uuid: str | None = None,
+        require_matching_entry_revision: bool = True,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
+    ) -> SnapshotEndpointPayload:
+        if timing is not None and side is not None:
+            timing.set_endpoint(
+                side,
+                resolved_revision=revision,
+                repository_uuid=persistent_repository_uuid or repository_uuid,
+            )
         url = self._validate_url(record)
         endpoint = validate_endpoint(
             EndpointSpec(url=url, revision=revision, label=str(record.get("label", ""))),
@@ -803,17 +1149,26 @@ class SnapshotService:
             and entry.path.casefold().endswith(EXCEL_EXTENSIONS)
             and self._scope_for_path(entry.path, physical) != "UNKNOWN"
         ]
-        entries.sort(key=lambda item: item.path.casefold())
+        if timing is not None and side is not None:
+            with timing.phase("sort.entries", side=side) as observation:
+                entries.sort(key=lambda item: item.path.casefold())
+                observation.result(items=len(entries))
+        else:
+            entries.sort(key=lambda item: item.path.casefold())
         persistent_repository_uuid = self._persistent_repository_uuid(
             record,
             revision,
             hint=persistent_repository_uuid or repository_uuid,
+            timing=timing,
+            side=side,
         )
         persistent_configuration_sha256 = self._persistent_configuration_for_tree(
             repository_uuid=persistent_repository_uuid,
             all_entries=all_entries,
             excel_entries=entries,
             table_path=physical["TABLE"],
+            timing=timing,
+            side=side,
         )
         content_repository_uuid = repository_uuid or url
         files: list[SnapshotFilePayload] = []
@@ -879,27 +1234,45 @@ class SnapshotService:
                     content_repository_uuid,
                     persistent_repository_uuid,
                     persistent_configuration_sha256,
+                    timing=timing,
+                    side=side,
                 ): entry.path
                 for entry in pending
             }
             for future in as_completed(futures):
                 files.append(future.result())
-        files.sort(key=lambda item: item.path.casefold())
-        total_size = sum(item.size or 0 for item in files)
-        failed_count = sum(1 for item in files if item.error is not None)
-        snapshot = SnapshotEndpointPayload(
-            endpoint_id=str(record["id"]),
-            label=str(record.get("label", record["id"])),
-            url=url,
-            resolved_revision=revision,
-            physical_path_filters=physical,
-            files=files,
-            stats=SnapshotStatsPayload(
-                file_count=len(files),
-                total_size=total_size,
-                failed_count=failed_count,
-            ),
+        if timing is not None and side is not None:
+            with timing.phase("sort.files", side=side) as observation:
+                files.sort(key=lambda item: item.path.casefold())
+                observation.result(items=len(files))
+        else:
+            files.sort(key=lambda item: item.path.casefold())
+        response_scope = (
+            timing.phase("response.endpoint", side=side)
+            if timing is not None and side is not None
+            else nullcontext()
         )
+        with response_scope as observation:
+            total_size = sum(item.size or 0 for item in files)
+            failed_count = sum(1 for item in files if item.error is not None)
+            snapshot = SnapshotEndpointPayload(
+                endpoint_id=str(record["id"]),
+                label=str(record.get("label", record["id"])),
+                url=url,
+                resolved_revision=revision,
+                physical_path_filters=physical,
+                files=files,
+                stats=SnapshotStatsPayload(
+                    file_count=len(files),
+                    total_size=total_size,
+                    failed_count=failed_count,
+                ),
+            )
+            if observation is not None:
+                observation.result(
+                    bytes_count=total_size,
+                    items=len(files),
+                )
         persistent = self._persistent_content_cache
         if (
             persistent is not None
@@ -930,6 +1303,8 @@ class SnapshotService:
                     for entry in entries
                     if normalize_relative_path(entry.path) in files_by_path
                 ),
+                timing=timing,
+                side=side,
             )
         return snapshot
 
@@ -938,12 +1313,26 @@ class SnapshotService:
         executor: ThreadPoolExecutor,
         source_future: Future[SnapshotEndpointPayload],
         target_future: Future[SnapshotEndpointPayload],
+        *,
+        timing: SnapshotPhaseTiming | None = None,
     ) -> tuple[SnapshotEndpointPayload, SnapshotEndpointPayload]:
+        wait_scope = (
+            timing.phase("pairing.future_wait")
+            if timing is not None
+            else nullcontext()
+        )
         try:
-            source = source_future.result()
-            target = target_future.result()
+            with wait_scope:
+                source = source_future.result()
+                target = target_future.result()
         finally:
-            executor.shutdown(wait=True, cancel_futures=True)
+            shutdown_scope = (
+                timing.phase("pairing.executor_shutdown")
+                if timing is not None
+                else nullcontext()
+            )
+            with shutdown_scope:
+                executor.shutdown(wait=True, cancel_futures=True)
         return source, target
 
     def _snapshot_pair_at_revisions(
@@ -955,6 +1344,7 @@ class SnapshotService:
         *,
         source_repository_uuid: str | None = None,
         target_repository_uuid: str | None = None,
+        timing: SnapshotPhaseTiming | None = None,
     ) -> tuple[SnapshotEndpointPayload, SnapshotEndpointPayload]:
         executor = ThreadPoolExecutor(
             max_workers=_SNAPSHOT_SIDE_WORKERS,
@@ -965,14 +1355,23 @@ class SnapshotService:
             source_record,
             source_revision,
             repository_uuid=source_repository_uuid,
+            timing=timing,
+            side="source",
         )
         target_future = executor.submit(
             self._snapshot_endpoint_at_revision,
             target_record,
             target_revision,
             repository_uuid=target_repository_uuid,
+            timing=timing,
+            side="target",
         )
-        return self._pair_results(executor, source_future, target_future)
+        return self._pair_results(
+            executor,
+            source_future,
+            target_future,
+            timing=timing,
+        )
 
     @staticmethod
     def _reusable_files_by_path(
@@ -995,6 +1394,8 @@ class SnapshotService:
         source_revision: int,
         target_record: Mapping[str, Any],
         target_revision: int,
+        *,
+        timing: SnapshotPhaseTiming | None = None,
     ) -> tuple[SnapshotEndpointPayload, SnapshotEndpointPayload] | None:
         try:
             source_url = canonicalize_svn_url(self._validate_url(source_record))
@@ -1002,10 +1403,14 @@ class SnapshotService:
             if source_url != target_url:
                 return None
             source_entries = self._list_tree(
-                EndpointSpec(url=source_url, revision=source_revision)
+                EndpointSpec(url=source_url, revision=source_revision),
+                timing=timing,
+                side="source",
             )
             target_entries = self._list_tree(
-                EndpointSpec(url=target_url, revision=target_revision)
+                EndpointSpec(url=target_url, revision=target_revision),
+                timing=timing,
+                side="target",
             )
             source_folded_paths: set[str] = set()
             for entry in source_entries:
@@ -1020,6 +1425,8 @@ class SnapshotService:
                 source_record,
                 source_revision,
                 source_entries,
+                timing=timing,
+                side="source",
             )
             reusable = self._reusable_files_by_path(source)
             if reusable is None:
@@ -1030,6 +1437,8 @@ class SnapshotService:
                 target_entries,
                 reusable_files=reusable,
                 reusable_content_revision=source_revision,
+                timing=timing,
+                side="target",
             )
             if source.physical_path_filters != target.physical_path_filters:
                 return None
@@ -1204,6 +1613,7 @@ class SnapshotService:
         *,
         source_content_identity: str | None = None,
         target_content_identity: str | None = None,
+        timing: SnapshotPhaseTiming | None = None,
     ) -> tuple[SnapshotEndpointPayload, SnapshotEndpointPayload] | None:
         resolve_identity = getattr(self.provider, "resolve_branch_identity", None)
         summarize = getattr(self.provider, "summarize_frozen_tree_diff", None)
@@ -1233,10 +1643,14 @@ class SnapshotService:
             ):
                 raise _CrossBranchEvidenceError("repository_identity")
             source_entries = self._list_tree(
-                EndpointSpec(url=source_url, revision=source_revision)
+                EndpointSpec(url=source_url, revision=source_revision),
+                timing=timing,
+                side="source",
             )
             target_entries = self._list_tree(
-                EndpointSpec(url=target_url, revision=target_revision)
+                EndpointSpec(url=target_url, revision=target_revision),
+                timing=timing,
+                side="target",
             )
             source_physical = self.resolve_scope_paths(
                 source_record, source_revision, entries=source_entries
@@ -1252,6 +1666,8 @@ class SnapshotService:
                 source_entries,
                 repository_uuid=source_content_identity or source_url,
                 persistent_repository_uuid=source_identity.repository_uuid,
+                timing=timing,
+                side="source",
             )
             evidence_started = time.perf_counter()
             try:
@@ -1299,6 +1715,8 @@ class SnapshotService:
                 reusable_content_url=source_url,
                 reusable_content_repository_uuid=source_content_identity or source_url,
                 require_matching_entry_revision=False,
+                timing=timing,
+                side="target",
             )
         except Exception as exc:
             reason = (
@@ -1341,66 +1759,92 @@ class SnapshotService:
         source_repository_uuid: str | None = None,
         target_repository_uuid: str | None = None,
         reuse: bool = True,
+        timing: SnapshotPhaseTiming | None = None,
     ) -> SnapshotResponsePayload:
-        started = time.perf_counter()
-        before = self.snapshot_reuse_metrics()
-        outcome = "succeeded"
-        try:
-            return self._snapshot_at_resolved_records_impl(
-                source_record,
-                source_revision,
-                target_record,
-                target_revision,
-                source_repository_uuid=source_repository_uuid,
-                target_repository_uuid=target_repository_uuid,
-                reuse=reuse,
+        return self._snapshot_at_resolved_records_impl(
+            source_record,
+            source_revision,
+            target_record,
+            target_revision,
+            source_repository_uuid=source_repository_uuid,
+            target_repository_uuid=target_repository_uuid,
+            reuse=reuse,
+            timing=timing,
+        )
+
+    @staticmethod
+    def _build_snapshot_response(
+        source: SnapshotEndpointPayload,
+        target: SnapshotEndpointPayload,
+        *,
+        timing: SnapshotPhaseTiming | None,
+    ) -> SnapshotResponsePayload:
+        scope = (
+            timing.phase("response.snapshot")
+            if timing is not None
+            else nullcontext()
+        )
+        with scope as observation:
+            snapshot = SnapshotResponsePayload(
+                captured_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                logical_scopes=list(LOGICAL_SCOPES),
+                source=source,
+                target=target,
             )
-        except BaseException:
-            outcome = "failed"
-            raise
-        finally:
-            after = self.snapshot_reuse_metrics()
-            tracked = (
-                "directory_evidence_calls",
-                "persistent_hash_hits",
-                "disk_byte_hits",
-                "disk_bytes",
-                "file_reads",
-            )
-            phase: dict[str, int | float | str] = {
-                key: int(after.get(key, 0)) - int(before.get(key, 0))
-                for key in tracked
-            }
-            fallback_reasons = {
-                key.removeprefix("persistent_fallback.")
-                for key, value in after.items()
-                if key.startswith("persistent_fallback.")
-                and isinstance(value, int)
-                and value > int(before.get(key, 0))
-            }
-            startup_fallback = after.get("persistent_startup_fallback")
-            if isinstance(startup_fallback, str) and startup_fallback:
-                fallback_reasons.add(startup_fallback)
-            phase["fallback_reasons"] = ",".join(sorted(fallback_reasons)) or "none"
-            phase["wall_seconds"] = time.perf_counter() - started
-            phase["outcome"] = outcome
+            if observation is not None:
+                observation.result(
+                    bytes_count=(
+                        source.stats.total_size
+                        + target.stats.total_size
+                    ),
+                    items=source.stats.file_count + target.stats.file_count,
+                )
+            return snapshot
+
+
+    def _snapshot_reuse_lookup(
+        self,
+        key: str,
+        identity: Mapping[str, Any],
+        now: float,
+        *,
+        timing: SnapshotPhaseTiming | None,
+    ) -> tuple[
+        SnapshotResponsePayload | None,
+        _SnapshotBuildFlight | None,
+        bool,
+    ]:
+        scope = (
+            timing.phase("reuse.snapshot_lookup")
+            if timing is not None
+            else nullcontext()
+        )
+        with scope as observation:
             with self._cache_lock:
-                self._last_phase_metrics = phase
-            logger.info(
-                (
-                    "快照阶段完成 outcome=%s directory_evidence=%d "
-                    "persistent_hash_hits=%d disk_byte_hits=%d "
-                    "file_reads=%d fallbacks=%s wall=%.3fs"
-                ),
-                outcome,
-                phase["directory_evidence_calls"],
-                phase["persistent_hash_hits"],
-                phase["disk_byte_hits"],
-                phase["file_reads"],
-                phase["fallback_reasons"],
-                phase["wall_seconds"],
-                extra={"event": "snapshot.build_phase"},
-            )
+                cached = self._load_snapshot_fact_locked(key, identity, now)
+                if cached is not None:
+                    flight = None
+                    builder = False
+                    status = "process_hot"
+                else:
+                    self._snapshot_reuse_counters["misses"] += 1
+                    flight = self._snapshot_build_flights.get(key)
+                    if flight is None:
+                        flight = _SnapshotBuildFlight(
+                            event=threading.Event(),
+                            build_context_id=str(uuid4()),
+                        )
+                        self._snapshot_build_flights[key] = flight
+                        self._snapshot_reuse_counters["builds"] += 1
+                        builder = True
+                        status = "builder"
+                    else:
+                        self._snapshot_reuse_counters["waits"] += 1
+                        builder = False
+                        status = "singleflight_waiter"
+            if observation is not None:
+                observation.result(source=status)
+            return cached, flight, builder
 
     def _snapshot_at_resolved_records_impl(
         self,
@@ -1412,8 +1856,12 @@ class SnapshotService:
         source_repository_uuid: str | None = None,
         target_repository_uuid: str | None = None,
         reuse: bool = True,
+        timing: SnapshotPhaseTiming | None = None,
     ) -> SnapshotResponsePayload:
         if not reuse:
+            build_context_id = str(uuid4())
+            if timing is not None:
+                timing.set_build_context(build_context_id, "reuse_disabled")
             source, target = self._snapshot_pair_at_revisions(
                 source_record,
                 source_revision,
@@ -1421,43 +1869,65 @@ class SnapshotService:
                 target_revision,
                 source_repository_uuid=source_repository_uuid,
                 target_repository_uuid=target_repository_uuid,
+                timing=timing,
             )
-            return SnapshotResponsePayload(
-                captured_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                logical_scopes=list(LOGICAL_SCOPES),
-                source=source,
-                target=target,
+            return self._build_snapshot_response(
+                source,
+                target,
+                timing=timing,
             )
-        identity = self._snapshot_reuse_identity(
-            source_record,
-            source_revision,
-            target_record,
-            target_revision,
+        identity_scope = (
+            timing.phase("reuse.identity")
+            if timing is not None
+            else nullcontext()
         )
-        key = self._hash_json(identity)
+        with identity_scope as observation:
+            identity = self._snapshot_reuse_identity(
+                source_record,
+                source_revision,
+                target_record,
+                target_revision,
+            )
+            key = self._hash_json(identity)
+            if observation is not None:
+                observation.result(items=1)
         now = self._monotonic_clock()
-        with self._cache_lock:
-            cached = self._load_snapshot_fact_locked(key, identity, now)
-            if cached is not None:
-                return cached
-            self._snapshot_reuse_counters["misses"] += 1
-            flight = self._snapshot_build_flights.get(key)
-            if flight is None:
-                flight = _SnapshotBuildFlight(event=threading.Event())
-                self._snapshot_build_flights[key] = flight
-                self._snapshot_reuse_counters["builds"] += 1
-                builder = True
-            else:
-                self._snapshot_reuse_counters["waits"] += 1
-                builder = False
-
+        cached, flight, builder = self._snapshot_reuse_lookup(
+            key,
+            identity,
+            now,
+            timing=timing,
+        )
+        if cached is not None:
+            if timing is not None:
+                timing.set_build_context(None, "process_hot")
+            return cached
+        if flight is None:
+            raise RuntimeError("snapshot reuse lookup returned no build flight")
+        if timing is not None:
+            timing.set_build_context(
+                flight.build_context_id,
+                "builder" if builder else "singleflight_waiter",
+            )
         if not builder:
-            flight.event.wait()
+            wait_scope = (
+                timing.phase("reuse.singleflight_wait")
+                if timing is not None
+                else nullcontext()
+            )
+            with wait_scope:
+                flight.event.wait()
             if flight.error is not None:
                 raise flight.error
             if flight.result is None:
                 raise RuntimeError("snapshot single-flight completed without a result")
-            return flight.result.model_copy(deep=True)
+            copy_scope = (
+                timing.phase("response.singleflight_copy")
+                if timing is not None
+                else nullcontext()
+            )
+            with copy_scope:
+                return flight.result.model_copy(deep=True)
 
         try:
             same_branch = self._same_branch_incremental_pair(
@@ -1465,6 +1935,7 @@ class SnapshotService:
                 source_revision,
                 target_record,
                 target_revision,
+                timing=timing,
             )
             cross_branch = None
             if same_branch is None:
@@ -1475,20 +1946,31 @@ class SnapshotService:
                     target_revision,
                     source_content_identity=source_repository_uuid,
                     target_content_identity=target_repository_uuid,
+                    timing=timing,
                 )
-            source, target = same_branch or cross_branch or self._snapshot_pair_at_revisions(
-                source_record,
-                source_revision,
-                target_record,
-                target_revision,
-                source_repository_uuid=source_repository_uuid,
-                target_repository_uuid=target_repository_uuid,
-            )
-            snapshot = SnapshotResponsePayload(
-                captured_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                logical_scopes=list(LOGICAL_SCOPES),
-                source=source,
-                target=target,
+            if same_branch is not None:
+                source, target = same_branch
+                reuse_mode = "same_branch_incremental"
+            elif cross_branch is not None:
+                source, target = cross_branch
+                reuse_mode = "cross_branch_incremental"
+            else:
+                source, target = self._snapshot_pair_at_revisions(
+                    source_record,
+                    source_revision,
+                    target_record,
+                    target_revision,
+                    source_repository_uuid=source_repository_uuid,
+                    target_repository_uuid=target_repository_uuid,
+                    timing=timing,
+                )
+                reuse_mode = "full_build"
+            if timing is not None:
+                timing.set_build_context(flight.build_context_id, reuse_mode)
+            snapshot = self._build_snapshot_response(
+                source,
+                target,
+                timing=timing,
             )
             with self._cache_lock:
                 self._store_snapshot_fact_locked(
@@ -1547,17 +2029,62 @@ class SnapshotService:
         target_id: str,
         source_revision: int | str = "HEAD",
         target_revision: int | str = "HEAD",
+        request_context_id: str | None = None,
+    ) -> SnapshotResponsePayload:
+        timing = self._new_phase_timing(
+            request_context_id=request_context_id,
+            source_endpoint_id=source_id,
+            source_revision=source_revision,
+            target_endpoint_id=target_id,
+            target_revision=target_revision,
+        )
+        outcome = "failed"
+        try:
+            result = self._create_snapshot_impl(
+                records,
+                source_id=source_id,
+                target_id=target_id,
+                source_revision=source_revision,
+                target_revision=target_revision,
+                timing=timing,
+            )
+            outcome = "succeeded"
+            return result
+        finally:
+            self._finish_phase_timing(
+                timing,
+                outcome=outcome,
+            )
+
+
+    def _create_snapshot_impl(
+        self,
+        records: list[Mapping[str, Any]],
+        *,
+        source_id: str,
+        target_id: str,
+        source_revision: int | str = "HEAD",
+        target_revision: int | str = "HEAD",
+        timing: SnapshotPhaseTiming | None = None,
     ) -> SnapshotResponsePayload:
         normalized = self.normalize_registry([dict(record) for record in records])
         source_record = self._get_record(normalized, source_id)
         target_record = self._get_record(normalized, target_id)
         source_resolved, source_repository = (
-            self._resolve_head(source_record)
+            self._resolve_head(
+                source_record,
+                timing=timing,
+                side="source",
+            )
             if source_revision == "HEAD"
             else (int(source_revision), None)
         )
         target_resolved, target_repository = (
-            self._resolve_head(target_record)
+            self._resolve_head(
+                target_record,
+                timing=timing,
+                side="target",
+            )
             if target_revision == "HEAD"
             else (int(target_revision), None)
         )
@@ -1566,6 +2093,14 @@ class SnapshotService:
                 "SVN_INVALID_REVISION",
                 "端点没有返回有效 HEAD Revision",
             )
+        if timing is not None:
+            timing.set_endpoint(
+                "source",
+                resolved_revision=source_resolved,
+                repository_uuid=source_repository,
+            )
+            timing.set_endpoint("target", resolved_revision=target_resolved)
+
         if source_id == target_id and source_resolved == target_resolved:
             raise SVNProviderError(
                 "SVN_ENDPOINT_REVISIONS_MUST_DIFFER",
@@ -1578,6 +2113,7 @@ class SnapshotService:
             target_resolved,
             source_repository_uuid=source_repository,
             target_repository_uuid=target_repository,
+            timing=timing,
         )
 
     def create_snapshot_at_revisions(
@@ -1589,11 +2125,54 @@ class SnapshotService:
         target_id: str,
         target_revision: int,
         reuse: bool = True,
+        request_context_id: str | None = None,
+    ) -> SnapshotResponsePayload:
+        timing = self._new_phase_timing(
+            request_context_id=request_context_id,
+            source_endpoint_id=source_id,
+            source_revision=source_revision,
+            target_endpoint_id=target_id,
+            target_revision=target_revision,
+        )
+        outcome = "failed"
+        try:
+            result = self._create_snapshot_at_revisions_impl(
+                records,
+                source_id=source_id,
+                source_revision=source_revision,
+                target_id=target_id,
+                target_revision=target_revision,
+                reuse=reuse,
+                timing=timing,
+            )
+            outcome = "succeeded"
+            return result
+        finally:
+            self._finish_phase_timing(
+                timing,
+                outcome=outcome,
+            )
+
+
+    def _create_snapshot_at_revisions_impl(
+        self,
+        records: list[Mapping[str, Any]],
+        *,
+        source_id: str,
+        source_revision: int,
+        target_id: str,
+        target_revision: int,
+        reuse: bool = True,
+        timing: SnapshotPhaseTiming | None = None,
     ) -> SnapshotResponsePayload:
         """按请求中的两侧具体 Revision 重建权威 M1 快照。"""
         normalized = self.normalize_registry([dict(record) for record in records])
         source_record = self._get_record(normalized, source_id)
         target_record = self._get_record(normalized, target_id)
+        if timing is not None:
+            timing.set_endpoint("source", resolved_revision=source_revision)
+            timing.set_endpoint("target", resolved_revision=target_revision)
+
         if source_id == target_id and source_revision == target_revision:
             raise SVNProviderError(
                 "SVN_ENDPOINT_REVISIONS_MUST_DIFFER",
@@ -1605,6 +2184,7 @@ class SnapshotService:
             target_record,
             target_revision,
             reuse=reuse,
+            timing=timing,
         )
 
     @staticmethod

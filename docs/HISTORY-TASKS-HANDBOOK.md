@@ -210,6 +210,9 @@ excel-merge-YYYYMMDD-p<PID>-NNN.jsonl
 - event_id、created_at、level、logger、event、message
 - request_id、task_id、process_id
 
+原始进程 JSONL 允许事件携带经过递归限深、限量和脱敏的 `internal_metrics`，用于快照性能排障等内部诊断。`OperationalLogService` 在公开日志模型校验前必须移除该字段；`GET /api/operations/logs`、前端日志视图和 `m2.operations-log-list.v1` 均不得暴露或新增该字段。
+
+
 脱敏发生在写入前和查询时，至少覆盖：
 
 - password/token/secret/authorization/credential 等键值。

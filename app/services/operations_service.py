@@ -33,6 +33,28 @@ _URI_CREDENTIALS = re.compile(r"(?P<scheme>https?://)[^/@\s]+@", re.IGNORECASE)
 _SECRET_VALUE = re.compile(
     r"(?i)\b(password|passwd|token|secret|authorization|credential)\b\s*[:=]\s*([^\s,;]+)"
 )
+_INTERNAL_METRIC_KEY = re.compile(r"^[a-z0-9_.-]{1,64}$")
+_SENSITIVE_INTERNAL_METRIC_KEYS = {
+    "authorization",
+    "canonical_url",
+    "credential",
+    "directory",
+    "file_path",
+    "password",
+    "passwd",
+    "path",
+    "secret",
+    "token",
+    "url",
+}
+_SECRET_INTERNAL_METRIC_KEY_PARTS = {
+    "authorization",
+    "credential",
+    "password",
+    "passwd",
+    "secret",
+    "token",
+}
 
 
 def utc_now() -> datetime:
@@ -59,6 +81,41 @@ def sanitize_log_text(value: Any, *, limit: int = 1024) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     return (text or "日志内容已隐藏")[:limit]
 
+
+def sanitize_internal_metrics(
+    value: Any,
+    *,
+    depth: int = 0,
+) -> dict[str, Any] | list[Any] | str | int | float | bool | None:
+    """Bound and redact metrics stored only in the process JSONL file."""
+    if depth > 8:
+        return "[truncated]"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return sanitize_log_text(value, limit=256)
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for raw_key, item in list(value.items())[:256]:
+            key = str(raw_key).strip().lower()
+            if not _INTERNAL_METRIC_KEY.fullmatch(key):
+                continue
+            key_parts = set(re.split(r"[._-]+", key))
+            if (
+                key in _SENSITIVE_INTERNAL_METRIC_KEYS
+                or bool(key_parts & _SECRET_INTERNAL_METRIC_KEY_PARTS)
+                or key.endswith(("_url", "_path", "_directory"))
+            ):
+                result[key] = "[redacted]"
+                continue
+            result[key] = sanitize_internal_metrics(item, depth=depth + 1)
+        return result
+    if isinstance(value, (list, tuple)):
+        return [
+            sanitize_internal_metrics(item, depth=depth + 1)
+            for item in list(value)[:256]
+        ]
+    return sanitize_log_text(value, limit=256)
 
 class OperationsError(RuntimeError):
     def __init__(self, code: str, message: str, *, status_code: int = 400):
@@ -154,6 +211,12 @@ class ProcessDailySizeJsonHandler(logging.Handler):
                 "task_id": str(task_id) if task_id else None,
                 "process_id": self.process_id,
             }
+            internal_metrics = getattr(record, "internal_metrics", None)
+            if isinstance(internal_metrics, dict):
+                payload["internal_metrics"] = sanitize_internal_metrics(
+                    internal_metrics
+                )
+
             if not re.fullmatch(r"[a-z0-9._-]+", payload["event"]):
                 payload["event"] = "application.log"
             line = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
@@ -265,6 +328,8 @@ class OperationalLogService:
                     for line in handle:
                         try:
                             raw = json.loads(line)
+                            # Internal diagnostics never extend the public log contract.
+                            raw.pop("internal_metrics", None)
                             raw["message"] = sanitize_log_text(raw.get("message"))
                             entries.append(OperationsLogEntryPayload.model_validate(raw))
                         except (ValueError, TypeError, json.JSONDecodeError):

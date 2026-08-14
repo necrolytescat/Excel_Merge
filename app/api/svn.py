@@ -161,6 +161,7 @@ def create_snapshot(
         target_id=payload.target.endpoint_id,
         source_revision=payload.source.revision,
         target_revision=payload.target.revision,
+        request_context_id=str(request.state.request_id),
     )
     registry = snapshot_service.bind_snapshot_scopes(
         records,

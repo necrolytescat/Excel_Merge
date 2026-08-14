@@ -117,6 +117,11 @@ def create_app(
     svn_config = config.get("svn", {}) if isinstance(config, dict) else {}
     web_config = config.get("web", {}) if isinstance(config, dict) else {}
     operations_config = config.get("operations", {}) if isinstance(config, dict) else {}
+    logging_config = (
+        operations_config.get("logging", {})
+        if isinstance(operations_config.get("logging", {}), dict)
+        else {}
+    )
     provider = provider or provider_from_config(config)
     provider_name = str(svn_config.get("provider", "mock")).lower()
     credential_source = str(svn_config.get("credential_source", "svn_cli_cache"))
@@ -188,6 +193,7 @@ def create_app(
             "dataset_layout": config.get("dataset_layout"),
         },
         persistent_content_cache=snapshot_content_cache,
+        phase_timing_enabled=bool(logging_config.get("enabled", True)),
     )
     diff_plan_config = config.get("diff_plan", {}) if isinstance(config, dict) else {}
     configured_diff_plan_db = os.environ.get("EXCEL_MERGE_DIFF_PLAN_DB") or str(
@@ -214,11 +220,6 @@ def create_app(
     )
     app.state.offline_fixture_service = (
         OfflineFixtureService() if bool(web_config.get("dev_mode", False)) else None
-    )
-    logging_config = (
-        operations_config.get("logging", {})
-        if isinstance(operations_config.get("logging", {}), dict)
-        else {}
     )
     configured_log_dir = os.environ.get("EXCEL_MERGE_LOG_DIR") or str(
         logging_config.get("directory", "var/logs")
