@@ -65,6 +65,7 @@ from app.services.operations_service import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "settings.json"
+DEFAULT_CONFIG_TEMPLATE_PATH = PROJECT_ROOT / "config" / "settings.m0.example.json"
 DEFAULT_ENDPOINT_REGISTRY: list[dict[str, Any]] = []
 TASK_PATH_PATTERN = re.compile(
     r"/api/diff/batches/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})(?:/|$)",
@@ -85,6 +86,12 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
     return data if isinstance(data, dict) else {}
+
+
+def initialize_default_config() -> dict[str, Any]:
+    store = ConfigStore(DEFAULT_CONFIG_PATH)
+    store.initialize_from(DEFAULT_CONFIG_TEMPLATE_PATH)
+    return store.read()
 
 
 def create_app(
@@ -124,6 +131,8 @@ def create_app(
     app = FastAPI(title="Excel Diff/Merge SVN 基座", version="0.1.0")
     app.state.provider = provider
     app.state.provider_name = provider_name
+    app.state.configured_provider = provider_name
+    app.state.provider_locked = bool(configured_provider)
     app.state.credential_source = credential_source
     app.state.default_url = str(svn_config.get("server_url", ""))
     app.state.config_store = ConfigStore(DEFAULT_CONFIG_PATH)
@@ -447,7 +456,19 @@ def create_app(
 
     @app.get("/", include_in_schema=False)
     def index(request: Request):
-        return templates.TemplateResponse("index.html", {"request": request, "provider": provider_name, "credential_source": credential_source, "default_url": str(getattr(request.app.state, "default_url", "")), "endpoint_catalog": getattr(request.app.state, "endpoint_catalog", DEFAULT_ENDPOINT_CATALOG), "active_page": "settings"})
+        return templates.TemplateResponse(
+            "index.html",
+            {
+                "request": request,
+                "provider": provider_name,
+                "configured_provider": str(getattr(request.app.state, "configured_provider", provider_name)),
+                "provider_locked": bool(getattr(request.app.state, "provider_locked", False)),
+                "credential_source": credential_source,
+                "default_url": str(getattr(request.app.state, "default_url", "")),
+                "endpoint_catalog": getattr(request.app.state, "endpoint_catalog", DEFAULT_ENDPOINT_CATALOG),
+                "active_page": "settings",
+            },
+        )
 
     @app.get("/compare", include_in_schema=False)
     def compare_preview(request: Request):
@@ -731,7 +752,7 @@ def create_app(
     return app
 
 
-app = create_app()
+app = create_app(config=initialize_default_config())
 
 
 if __name__ == "__main__":

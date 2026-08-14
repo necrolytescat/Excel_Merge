@@ -2,6 +2,8 @@
   const $ = (selector) => document.querySelector(selector);
   const urlInput = $("#svn-url");
   const errorBox = $("#error-box");
+  const providerToggle = $("#provider-mode-toggle");
+  const providerState = $("#provider-config-state");
 
   function endpoint() {
     return {
@@ -30,6 +32,72 @@
     if (!response.ok) throw body;
     return body;
   }
+  function applyProviderConfig(config) {
+    const activeProvider = String(config.provider || window.M0_CONFIG.activeProvider || "mock").toLowerCase();
+    const configuredProvider = String(config.configured_provider || window.M0_CONFIG.configuredProvider || activeProvider).toLowerCase();
+    const restartRequired = config.restart_required === undefined
+      ? activeProvider !== configuredProvider
+      : Boolean(config.restart_required);
+    const providerLocked = config.provider_locked === undefined
+      ? Boolean(window.M0_CONFIG.providerLocked)
+      : Boolean(config.provider_locked);
+
+    window.M0_CONFIG.activeProvider = activeProvider;
+    window.M0_CONFIG.configuredProvider = configuredProvider;
+    window.M0_CONFIG.providerLocked = providerLocked;
+    providerToggle.checked = configuredProvider === "cli";
+    providerToggle.disabled = providerLocked;
+    $("#provider-mode-label").textContent = configuredProvider.toUpperCase() + " 模式";
+    $("#provider-mode-description").textContent = configuredProvider === "mock"
+      ? "使用内置示例仓库，不访问真实 SVN。"
+      : "使用当前 Windows 用户的 SVN CLI 认证缓存。";
+
+    const probeButton = $("#endpoint-form button[type=\"submit\"]");
+    if (probeButton) probeButton.disabled = restartRequired;
+    if (providerLocked) {
+      providerState.textContent = "运行模式由环境变量 EXCEL_MERGE_SVN_PROVIDER 锁定。";
+      providerState.className = "provider-config-state warning";
+    } else if (restartRequired) {
+      providerState.textContent = "已保存为 " + configuredProvider.toUpperCase() + " 模式。当前进程仍在使用 " + activeProvider.toUpperCase() + "，请重启服务。";
+      providerState.className = "provider-config-state warning";
+    } else {
+      providerState.textContent = "";
+      providerState.className = "provider-config-state";
+    }
+    return restartRequired;
+  }
+
+  async function saveProviderMode() {
+    const previousProvider = window.M0_CONFIG.configuredProvider || window.M0_CONFIG.activeProvider || "mock";
+    const targetProvider = providerToggle.checked ? "cli" : "mock";
+    providerToggle.disabled = true;
+    providerState.textContent = "正在保存运行模式...";
+    providerState.className = "provider-config-state";
+    try {
+      const body = await request("/api/svn/provider", {
+        method: "POST",
+        body: JSON.stringify({ provider: targetProvider }),
+      });
+      const restartRequired = applyProviderConfig(body);
+      if (!restartRequired) {
+        await Promise.all([autoProbe(), loadBranchCandidates()]);
+      }
+    } catch (error) {
+      const payload = error && error.error ? error.error : error;
+      providerToggle.checked = previousProvider === "cli";
+      providerState.textContent = (payload?.code || "REQUEST_FAILED") + "：" + (payload?.message || "运行模式保存失败");
+      providerState.className = "provider-config-state error";
+    } finally {
+      providerToggle.disabled = Boolean(window.M0_CONFIG.providerLocked);
+    }
+  }
+
+  function renderHealth(health) {
+    $("#provider-badge").textContent = "Provider: " + health.provider + (health.provider === "mock" ? " · Mock 数据" : " · 正式 CLI");
+    $("#health-state").textContent = health.provider === "mock" ? "Mock 就绪" : (health.svn_cli_available ? "CLI 就绪" : "CLI 不可用");
+    $("#health-state").className = "status-dot " + (health.provider === "mock" || health.svn_cli_available ? "status-ok" : "status-error");
+  }
+
 
   function setInfo(info) {
     Object.entries(info).forEach(([key, value]) => {
@@ -48,9 +116,12 @@
         body: JSON.stringify({ server_url: urlInput.value.trim() }),
       });
       window.M0_CONFIG.defaultUrl = body.server_url;
+      const restartRequired = applyProviderConfig(body);
       $("#config-state").textContent = "地址已保存到项目配置";
       $("#config-state").className = "config-state success";
-      await loadBranchCandidates();
+      if (!restartRequired) {
+        await loadBranchCandidates();
+      }
     } catch (error) {
       showError(error);
     } finally {
@@ -135,14 +206,12 @@
     const region = button ? button.dataset.regionSave : "";
     const state = region ? $("#endpoint-config-state-" + region) : null;
     if (button) button.disabled = true;
-    button.disabled = true;
     try {
       await request("/api/svn/endpoint-catalog", {
         method: "POST",
         body: JSON.stringify(endpointCatalog()),
       });
       if (state) { state.textContent = "端点目录配置已保存"; state.className = "config-state success"; }
-      state.className = "config-state success";
     } catch (error) {
       if (state) state.textContent = "";
       showError(error);
@@ -171,6 +240,7 @@
   }
 
   $("#save-config").addEventListener("click", saveConfig);
+  providerToggle.addEventListener("change", saveProviderMode);
   document.querySelectorAll("[data-region-save]").forEach((button) => { button.addEventListener("click", () => saveEndpointCatalog(button)); });
 
   $("#endpoint-form").addEventListener("submit", async (event) => {
@@ -181,12 +251,23 @@
     finally { if (button) button.disabled = false; }
   });
 
-  request("/api/health").then((health) => {
-    $("#provider-badge").textContent = "Provider: " + health.provider + (health.provider === "mock" ? " · Mock 数据" : " · 正式 CLI");
-    $("#health-state").textContent = health.provider === "mock" ? "Mock 就绪" : (health.svn_cli_available ? "CLI 就绪" : "CLI 不可用");
-    $("#health-state").className = "status-dot " + (health.provider === "mock" || health.svn_cli_available ? "status-ok" : "status-error");
-    return Promise.all([autoProbe(), loadBranchCandidates()]);
-  }).catch(showError);
+  async function initialize() {
+    try {
+      const [health, config] = await Promise.all([
+        request("/api/health"),
+        request("/api/svn/config"),
+      ]);
+      renderHealth(health);
+      const restartRequired = applyProviderConfig(config);
+      if (!restartRequired) {
+        await Promise.all([autoProbe(), loadBranchCandidates()]);
+      }
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  void initialize();
 })();
 
 

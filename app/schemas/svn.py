@@ -17,10 +17,17 @@ class SVNConfigUpdatePayload(BaseModel):
     server_url: str = Field(..., min_length=1, max_length=2048)
 
 
+class SVNProviderUpdatePayload(BaseModel):
+    provider: Literal["mock", "cli"]
+
+
 class SVNConfigPayload(BaseModel):
     provider: str
+    configured_provider: Literal["mock", "cli"]
     server_url: str
     credential_source: str
+    restart_required: bool = False
+    provider_locked: bool = False
 
 class EndpointRegionConfig(BaseModel):
     display_name: str

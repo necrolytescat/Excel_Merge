@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Config Atlas · 系统配置</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.1.4">
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v=0.1.5">
 </head>
 <body>
   <div class="app-shell">
@@ -29,6 +29,20 @@
             </div>
             <span id="health-state" class="status-dot status-unknown">检查中</span>
           </div>
+          <div class="provider-mode">
+            <div class="provider-mode-copy">
+              <span>运行模式</span>
+              <strong id="provider-mode-label">{{ configured_provider|upper }} 模式</strong>
+              <small id="provider-mode-description">正在读取运行模式状态</small>
+            </div>
+            <label class="provider-switch" for="provider-mode-toggle">
+              <span>MOCK</span>
+              <input id="provider-mode-toggle" type="checkbox" role="switch" aria-describedby="provider-mode-description provider-config-state" {% if configured_provider == 'cli' %}checked{% endif %} {% if provider_locked %}disabled{% endif %}>
+              <span class="provider-switch-track" aria-hidden="true"><span></span></span>
+              <span>CLI</span>
+            </label>
+          </div>
+          <div id="provider-config-state" class="provider-config-state" role="status" aria-live="polite"></div>
           <form id="endpoint-form" class="form-grid">
             <label class="wide">
               SVN 服务 / 仓库地址
@@ -185,9 +199,15 @@
   </div>
 
   <script>
-    window.M0_CONFIG = { defaultUrl: {{ default_url|tojson }}, credentialSource: {{ credential_source|tojson }} };
+    window.M0_CONFIG = {
+      defaultUrl: {{ default_url|tojson }},
+      credentialSource: {{ credential_source|tojson }},
+      activeProvider: {{ provider|tojson }},
+      configuredProvider: {{ configured_provider|tojson }},
+      providerLocked: {{ provider_locked|tojson }}
+    };
   </script>
-  <script src="{{ url_for('static', path='app.js') }}?v=0.1.4"></script>
+  <script src="{{ url_for('static', path='app.js') }}?v=0.1.5"></script>
 </body>
 </html>
 

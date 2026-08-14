@@ -2,11 +2,13 @@
 
 ## 目标
 
-本阶段建立本地 Web 页面、SVN 基础配置持久化和只读连接验证能力。正式运行配置已切换为 CLI Provider，Mock Provider 仅用于离线测试和无 SVN 环境演示。
+本阶段建立本地 Web 页面、SVN 基础配置持久化和只读连接验证能力。首次运行默认使用 Mock Provider，用户可在页面保存 CLI 模式，并在重启后连接真实 SVN。
 
 ## 已实现
 
 - FastAPI + Uvicorn 本地 Web 服务；
+- 缺少本机 settings.json 时，从可提交模板自动初始化完整配置；
+- 基础连接页提供 MOCK/CLI 切换并显示重启生效状态；
 - SVN CLI 可用性检测；
 - SVN 地址和 Revision 输入；
 - 页面“保存地址”写回项目配置；
@@ -21,23 +23,24 @@
 
 ## 当前正式配置
 
-实际项目配置位于 config/settings.json：
+实际本机配置位于 config/settings.json，该文件不提交 Git：
 
-- provider：cli；
-- server_url：当前 KR/DEV 地址；
+- 首次初始化 provider：mock；
+- provider：可在页面切换为 mock 或 cli；
+- server_url：由当前用户在页面保存；
 - credential_source：svn_cli_cache；
 - timeout_seconds：30。
-
-Mock 配置示例仍保留在 config/settings.m0.example.json，供离线测试使用。
+完整默认模板保留在 config/settings.m0.example.json，供首次启动自动初始化。
 
 ## 页面验收
 
-1. 页面显示正式 CLI 状态。
-2. 用户可以输入 SVN 地址并点击“保存地址”。
-3. 刷新页面后地址仍保留，并自动执行只读连接探测。
-4. 测试连接后显示仓库根地址、UUID、Revision 和最近变更信息。
-5. 连接失败返回稳定错误码和中文提示，不显示 traceback 或凭据。
-6. 页面不要求用户输入 SVN 密码。
+1. 页面同时显示当前运行模式和已保存模式。
+2. 用户可通过开关保存 MOCK 或 CLI 模式。
+3. 已保存模式与当前进程不一致时，页面明确提示重启且不执行错误模式的自动探测。
+4. 用户可以输入 SVN 地址并点击“保存地址”。
+5. 刷新页面后地址仍保留，并在模式一致时自动执行只读连接探测。
+6. 测试连接显示仓库信息；失败返回稳定错误码和中文提示。
+7. 页面不要求用户输入 SVN 密码，也不保存凭据。
 
 ## 暂不纳入 M0.1
 

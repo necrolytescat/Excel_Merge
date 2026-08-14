@@ -13,6 +13,7 @@ from app.schemas.svn import (
     LogPayload,
     SVNConfigPayload,
     SVNConfigUpdatePayload,
+    SVNProviderUpdatePayload,
     EndpointCatalogPayload,
     BranchCandidatesPayload,
     BranchLogPagePayload,
@@ -39,10 +40,17 @@ def _endpoint(url: str, revision: int | str, path_filter: str) -> EndpointPayloa
 
 @router.get("/config", response_model=SVNConfigPayload)
 def get_config(request: Request) -> SVNConfigPayload:
+    active_provider = str(getattr(request.app.state, "provider_name", "mock"))
+    configured_provider = str(
+        getattr(request.app.state, "configured_provider", active_provider)
+    )
     return SVNConfigPayload(
-        provider=str(getattr(request.app.state, "provider_name", "unknown")),
+        provider=active_provider,
+        configured_provider=configured_provider,
         server_url=str(getattr(request.app.state, "default_url", "")),
         credential_source=str(getattr(request.app.state, "credential_source", "svn_cli_cache")),
+        restart_required=configured_provider != active_provider,
+        provider_locked=bool(getattr(request.app.state, "provider_locked", False)),
     )
 
 
@@ -56,6 +64,21 @@ def save_config(
     service.endpoint(EndpointPayload(url=payload.server_url, revision="HEAD"))
     request.app.state.config_store.save_server_url(payload.server_url)
     request.app.state.default_url = payload.server_url
+    return get_config(request)
+
+
+@router.post("/provider", response_model=SVNConfigPayload)
+def save_provider(
+    payload: SVNProviderUpdatePayload,
+    request: Request,
+) -> SVNConfigPayload:
+    if bool(getattr(request.app.state, "provider_locked", False)):
+        raise SVNProviderError(
+            "SVN_PROVIDER_LOCKED",
+            "运行模式由环境变量 EXCEL_MERGE_SVN_PROVIDER 控制，无法在页面中修改",
+        )
+    request.app.state.config_store.save_provider(payload.provider)
+    request.app.state.configured_provider = payload.provider
     return get_config(request)
 
 

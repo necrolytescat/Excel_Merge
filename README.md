@@ -25,21 +25,21 @@ py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 
-Copy-Item config\settings.m0.example.json config\settings.json
 .\.venv\Scripts\python.exe -m app.main
 ```
 
 打开 <http://127.0.0.1:5566>。健康检查地址为 <http://127.0.0.1:5566/api/health>，版本对比入口为 <http://127.0.0.1:5566/compare>。
 
-示例配置默认使用 `mock` Provider，适合先确认依赖和页面能正常运行。
+首次启动会自动从 `config/settings.m0.example.json` 生成已忽略的本机 `config/settings.json`，默认使用 `mock` Provider，无需手工复制或修改配置文件。
 
 ## 连接真实 SVN
 
 1. 确认 `svn --version` 可以正常执行。
 2. 使用 SVN CLI 或 TortoiseSVN，在当前 Windows 用户下完成一次只读认证。
-3. 编辑 `config/settings.json`，将 `svn.provider` 改为 `cli`。
-4. 启动服务，在“系统配置”页填写 SVN 仓库地址并配置可用端点。
-5. 进入“版本对比”，选择左右端点并启动只读比对。
+3. 启动服务，在“系统配置”的“运行模式”开关中选择 `CLI`。
+4. 页面提示保存成功后重启服务，使所有依赖 Provider 的后台服务统一切换到 CLI。
+5. 在“系统配置”页填写 SVN 仓库地址并配置可用端点。
+6. 进入“版本对比”，选择左右端点并启动只读比对。
 
 `config/settings.json` 包含本机地址和端点注册信息，已被 `.gitignore` 忽略。不要在其中保存密码、Token，也不要把真实配置强制提交到 Git。认证由当前 Windows 用户的 SVN 认证缓存提供。
 
@@ -93,4 +93,4 @@ node --check app/static/offline_replay.js
 - `SVN_AUTH_FAILED`：当前 Windows 用户还没有可用的 SVN 认证缓存，先通过 SVN CLI 或 TortoiseSVN 完成一次只读访问。
 - 页面能打开但没有可选端点：`config/settings.json` 中还没有有效的 `svn.endpoint_registry`，请先在系统配置页保存端点。
 - `/compare/replay` 返回 404：`web.dev_mode` 未设为 `true`，或修改配置后没有重启服务。
-- 修改配置后行为未变化：配置在进程启动时读取，需要重启服务。
+- 切换 MOCK/CLI 后行为未变化：Provider 在进程启动时注入各项服务，按页面提示重启服务后生效。
