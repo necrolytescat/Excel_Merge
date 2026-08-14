@@ -186,6 +186,15 @@ def create_app(
         provider,
         allowed_schemes=allowed_schemes,
         max_workers=max_workers,
+        content_read_workers=int(
+            snapshot_reuse_config.get("content_read_workers", 12)
+        ),
+        bulk_export_enabled=bool(
+            snapshot_reuse_config.get("bulk_export_enabled", True)
+        ),
+        bulk_export_min_files=int(
+            snapshot_reuse_config.get("bulk_export_min_files", 8)
+        ),
         preview_limit=preview_limit,
         reuse_ttl_seconds=float(snapshot_reuse_config.get("ttl_seconds", 300)),
         reuse_max_entries=int(snapshot_reuse_config.get("max_entries", 8)),

@@ -440,6 +440,7 @@ class SnapshotPhaseTiming:
                     "endpoint_info": named("endpoint.info"),
                     "list_tree": named("svn.list_tree"),
                     "persistent_lookup": named("persistent.lookup"),
+                    "provider_export": named("provider.export"),
                     "provider_read": {
                         **named("provider.read"),
                         "peak_concurrency": self._provider_peak,

@@ -79,6 +79,9 @@ class SnapshotService:
         *,
         allowed_schemes: tuple[str, ...],
         max_workers: int = 6,
+        content_read_workers: int | None = None,
+        bulk_export_enabled: bool = True,
+        bulk_export_min_files: int = 8,
         preview_limit: int = 262144,
         reuse_ttl_seconds: float = 300,
         reuse_max_entries: int = 8,
@@ -91,6 +94,12 @@ class SnapshotService:
         self.provider = provider
         self.allowed_schemes = allowed_schemes
         self.max_workers = max(1, int(max_workers))
+        configured_content_workers = (
+            content_read_workers if content_read_workers is not None else max_workers
+        )
+        self.content_read_workers = max(1, int(configured_content_workers))
+        self.bulk_export_enabled = bool(bulk_export_enabled)
+        self.bulk_export_min_files = max(1, int(bulk_export_min_files))
         self.preview_limit = max(1, int(preview_limit))
         self._content_cache: dict[tuple[str, str, str, str], bytes] = {}
         self._cache_lock = threading.RLock()
@@ -131,6 +140,11 @@ class SnapshotService:
             "cross_branch_evidence_seconds": 0.0,
             "directory_evidence_calls": 0,
             "file_reads": 0,
+            "bulk_export_calls": 0,
+            "bulk_export_files": 0,
+            "bulk_export_bytes": 0,
+            "bulk_export_fallbacks": 0,
+            "bulk_export_missing_files": 0,
         }
 
     @staticmethod
@@ -290,8 +304,17 @@ class SnapshotService:
         *,
         timing: SnapshotPhaseTiming | None = None,
         side: str | None = None,
+        prefetched_raw: bytes | None = None,
     ) -> bytes:
         self._record_counter("file_reads")
+        if prefetched_raw is not None:
+            if timing is not None and side is not None:
+                with timing.phase("provider.read", side=side) as observation:
+                    observation.result(
+                        bytes_count=len(prefetched_raw),
+                        source="svn_export",
+                    )
+            return prefetched_raw
         if timing is None or side is None:
             reader = getattr(self.provider, "read_bytes", None)
             if reader is not None:
@@ -325,6 +348,104 @@ class SnapshotService:
                 return raw
         finally:
             timing.provider_exit(side)
+
+    def _bulk_export_prefetch(
+        self,
+        endpoint: EndpointSpec,
+        entries: list[TreeEntry],
+        table_path: str,
+        content_repository_uuid: str,
+        persistent_repository_uuid: str | None,
+        configuration_sha256: str | None,
+        *,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
+    ) -> dict[str, bytes]:
+        exporter = getattr(self.provider, "export_files", None)
+        if not self.bulk_export_enabled or exporter is None or not entries:
+            return {}
+
+        persistent = self._persistent_content_cache
+        canonical_url = canonicalize_svn_url(endpoint.url)
+        missing: list[TreeEntry] = []
+        for entry in entries:
+            path = normalize_relative_path(entry.path)
+            memory_key = (
+                content_repository_uuid,
+                str(endpoint.url).rstrip("/"),
+                path,
+                str(endpoint.revision),
+            )
+            with self._cache_lock:
+                memory_hit = memory_key in self._content_cache
+            if memory_hit:
+                continue
+            if (
+                persistent is not None
+                and configuration_sha256
+                and persistent_repository_uuid
+            ):
+                identity = self._persistent_file_identity(
+                    repository_uuid=persistent_repository_uuid,
+                    canonical_url=canonical_url,
+                    entry=entry,
+                    configuration_sha256=configuration_sha256,
+                )
+                if persistent.may_have(
+                    identity,
+                    expected_size=entry.size,
+                    timing=timing,
+                    side=side,
+                ):
+                    continue
+            missing.append(entry)
+
+        if len(missing) < self.bulk_export_min_files:
+            return {}
+        requested_paths = [normalize_relative_path(entry.path) for entry in missing]
+        requested_set = set(requested_paths)
+        self._record_counter("bulk_export_calls")
+        if timing is not None and side is not None:
+            timing.increment("bulk_export.calls", side=side)
+            timing.provider_enter(side)
+        try:
+            if timing is None or side is None:
+                exported = exporter(endpoint, table_path, requested_paths)
+            else:
+                with timing.phase("provider.export", side=side) as observation:
+                    exported = exporter(endpoint, table_path, requested_paths)
+                    observation.result(
+                        bytes_count=exported.exported_bytes,
+                        items=exported.exported_file_count,
+                        source="svn_export",
+                    )
+        except Exception:
+            self._record_counter("bulk_export_fallbacks")
+            if timing is not None and side is not None:
+                timing.increment("bulk_export.fallbacks", side=side)
+            return {}
+        finally:
+            if timing is not None and side is not None:
+                timing.provider_exit(side)
+
+        files = {
+            normalize_relative_path(path): raw
+            for path, raw in exported.files.items()
+            if normalize_relative_path(path) in requested_set
+            and isinstance(raw, bytes)
+        }
+        missing_count = len(requested_set - set(files))
+        self._record_counter("bulk_export_files", exported.exported_file_count)
+        self._record_counter("bulk_export_bytes", exported.exported_bytes)
+        if missing_count:
+            self._record_counter("bulk_export_missing_files", missing_count)
+            if timing is not None and side is not None:
+                timing.increment(
+                    "bulk_export.missing_files",
+                    side=side,
+                    amount=missing_count,
+                )
+        return files
 
     def _endpoint_configuration_sha256(self, table_path: str) -> str:
         return self._hash_json(
@@ -868,11 +989,13 @@ class SnapshotService:
         *,
         timing: SnapshotPhaseTiming | None = None,
         side: str | None = None,
+        prefetched_files: Mapping[str, bytes] | None = None,
     ) -> bytes:
+        normalized_path = normalize_relative_path(entry.path)
         key = (
             repository_uuid,
             str(endpoint.url).rstrip("/"),
-            normalize_relative_path(entry.path),
+            normalized_path,
             str(endpoint.revision),
         )
         if timing is None or side is None:
@@ -909,6 +1032,7 @@ class SnapshotService:
                     entry.path,
                     timing=timing,
                     side=side,
+                    prefetched_raw=(prefetched_files or {}).get(normalized_path),
                 ),
                 timing=timing,
                 side=side,
@@ -920,6 +1044,7 @@ class SnapshotService:
                 entry.path,
                 timing=timing,
                 side=side,
+                prefetched_raw=(prefetched_files or {}).get(normalized_path),
             )
 
         with self._cache_lock:
@@ -937,6 +1062,7 @@ class SnapshotService:
         *,
         timing: SnapshotPhaseTiming | None = None,
         side: str | None = None,
+        prefetched_files: Mapping[str, bytes] | None = None,
     ) -> SnapshotFilePayload:
         worker_scope = (
             timing.file_worker_scope(side)
@@ -953,6 +1079,7 @@ class SnapshotService:
                 configuration_sha256,
                 timing=timing,
                 side=side,
+                prefetched_files=prefetched_files,
             )
 
 
@@ -967,6 +1094,7 @@ class SnapshotService:
         *,
         timing: SnapshotPhaseTiming | None = None,
         side: str | None = None,
+        prefetched_files: Mapping[str, bytes] | None = None,
     ) -> SnapshotFilePayload:
         try:
             raw = self._read_binary(
@@ -977,6 +1105,7 @@ class SnapshotService:
                 configuration_sha256,
                 timing=timing,
                 side=side,
+                prefetched_files=prefetched_files,
             )
             content_hash = self._hash_content(
                 raw,
@@ -1221,8 +1350,18 @@ class SnapshotService:
                     content_hash=reused.content_hash,
                 )
             )
+        prefetched_files = self._bulk_export_prefetch(
+            endpoint,
+            pending,
+            physical["TABLE"],
+            content_repository_uuid,
+            persistent_repository_uuid,
+            persistent_configuration_sha256,
+            timing=timing,
+            side=side,
+        )
         with ThreadPoolExecutor(
-            max_workers=self.max_workers,
+            max_workers=self.content_read_workers,
             thread_name_prefix="m1-snapshot-file",
         ) as executor:
             futures = {
@@ -1236,6 +1375,7 @@ class SnapshotService:
                     persistent_configuration_sha256,
                     timing=timing,
                     side=side,
+                    prefetched_files=prefetched_files,
                 ): entry.path
                 for entry in pending
             }

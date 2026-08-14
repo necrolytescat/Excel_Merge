@@ -643,6 +643,9 @@ def test_diff_materialization_reuses_persisted_snapshot_workbook_bytes(tmp_path)
             "endpoint_registry": _endpoint_records(),
         },
         "snapshot_reuse": {
+            "content_read_workers": 7,
+            "bulk_export_enabled": False,
+            "bulk_export_min_files": 9,
             "persistent_cache": {
                 "enabled": True,
                 "directory": str(tmp_path / ".cache" / "snapshot"),
@@ -660,6 +663,9 @@ def test_diff_materialization_reuses_persisted_snapshot_workbook_bytes(tmp_path)
         provider=provider,
         workbook_diff_service=RecordingDiffService(),
     )
+    assert app.state.snapshot_service.content_read_workers == 7
+    assert app.state.snapshot_service.bulk_export_enabled is False
+    assert app.state.snapshot_service.bulk_export_min_files == 9
     app.state.snapshot_service.create_snapshot_at_revisions(
         app.state.endpoint_registry,
         source_id=SOURCE_ENDPOINT_ID,

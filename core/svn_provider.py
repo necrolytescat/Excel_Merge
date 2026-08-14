@@ -10,9 +10,11 @@ Provider 层不依赖 FastAPI，后续 CLI、Web 和 Diff 编排均可复用。
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 from datetime import datetime
 import hashlib
 import os
+import tempfile
 import urllib.parse
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -66,6 +68,13 @@ class SVNProviderError(RuntimeError):
         self.code = code
         self.message = message
         self.detail = detail
+
+
+@dataclass(frozen=True)
+class ExportedFileSet:
+    files: dict[str, bytes]
+    exported_file_count: int
+    exported_bytes: int
 
 
 class SVNProvider(Protocol):
@@ -883,6 +892,81 @@ class CLISVNProvider:
         if raw is None:
             raise SVNProviderError("SVN_PATH_NOT_FOUND", f"无法读取 SVN 文件：{clean_path}")
         return raw, source
+
+    def export_files(
+        self,
+        endpoint: EndpointSpec,
+        prefix: str,
+        paths: list[str],
+    ) -> ExportedFileSet:
+        endpoint = self._validate(endpoint)
+        if (
+            not isinstance(endpoint.revision, int)
+            or isinstance(endpoint.revision, bool)
+            or endpoint.revision <= 0
+        ):
+            raise SVNProviderError("SVN_INVALID_REVISION", "export 必须使用正整数冻结 Revision")
+        clean_prefix = normalize_relative_path(prefix)
+        if not clean_prefix:
+            raise SVNProviderError("SVN_INVALID_PATH", "export 目录不能为空")
+        clean_paths = [normalize_relative_path(path) for path in paths]
+        prefix_token = clean_prefix + "/"
+        if any(not path.startswith(prefix_token) for path in clean_paths):
+            raise SVNProviderError("SVN_INVALID_PATH", "export 文件必须位于冻结目录内")
+
+        target = endpoint.url.rstrip("/") + "/" + urllib.parse.quote(
+            clean_prefix,
+            safe="/~:@-_.",
+        )
+        target = self._target(target, endpoint.revision)
+        with tempfile.TemporaryDirectory(prefix="excel-merge-svn-export-") as temporary:
+            destination = Path(temporary) / "export"
+            rc, _, stderr = svn_client._run(
+                "export",
+                "--non-interactive",
+                "--force",
+                "--ignore-externals",
+                "--quiet",
+                "-r",
+                str(endpoint.revision),
+                target,
+                str(destination),
+                timeout=self.timeout,
+            )
+            if rc != 0:
+                raise self._error_from_text(stderr, "SVN_EXPORT_FAILED")
+
+            root = destination.resolve()
+            exported_file_count = 0
+            exported_bytes = 0
+            for exported_path in destination.rglob("*"):
+                resolved = exported_path.resolve()
+                if exported_path.is_symlink() or not resolved.is_relative_to(root):
+                    raise SVNProviderError(
+                        "SVN_EXPORT_INVALID",
+                        "SVN export 包含不安全路径",
+                    )
+                if exported_path.is_file():
+                    exported_file_count += 1
+                    exported_bytes += exported_path.stat().st_size
+
+            files: dict[str, bytes] = {}
+            for path in clean_paths:
+                relative = Path(*path[len(prefix_token) :].split("/"))
+                exported_path = destination / relative
+                resolved = exported_path.resolve()
+                if (
+                    exported_path.is_symlink()
+                    or not resolved.is_relative_to(root)
+                    or not exported_path.is_file()
+                ):
+                    continue
+                files[path] = exported_path.read_bytes()
+            return ExportedFileSet(
+                files=files,
+                exported_file_count=exported_file_count,
+                exported_bytes=exported_bytes,
+            )
 
     def read_bytes(self, endpoint: EndpointSpec, path: str) -> bytes:
         return self.read_bytes_with_source(endpoint, path)[0]

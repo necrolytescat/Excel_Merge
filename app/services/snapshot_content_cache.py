@@ -410,6 +410,43 @@ class PersistentSnapshotContentCache:
             raw=raw,
         )
 
+    def may_have(
+        self,
+        identity: SnapshotFileIdentity,
+        *,
+        expected_size: int | None,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
+    ) -> bool:
+        """Cheap advisory probe used only to decide whether bulk export is useful."""
+        if not self.enabled or self._read_only:
+            return False
+        with self._locked(timing, side, "persistent.probe"):
+            def probe() -> bool:
+                record_and_path = self._valid_fact_record(
+                    identity,
+                    self._facts.get(identity.key),
+                    expected_size,
+                )
+                if record_and_path is None:
+                    return False
+                record, path = record_and_path
+                try:
+                    return (
+                        not path.is_symlink()
+                        and path.is_file()
+                        and path.stat().st_size == record["size_bytes"]
+                    )
+                except OSError:
+                    return False
+
+            if timing is None:
+                return probe()
+            with timing.phase("persistent.probe", side=side) as observation:
+                present = probe()
+                observation.result(source="possible_hit" if present else "miss")
+                return present
+
     def get_or_load(
         self,
         identity: SnapshotFileIdentity,

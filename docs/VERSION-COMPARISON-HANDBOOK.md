@@ -289,6 +289,10 @@ errors[]
 
 同一规范 SVN URL 第一次接触时允许完整读取；此后每次仍完整枚举冻结 `svn list --xml` 树，只在 repository UUID、路径和文件 last-changed Revision 均与持久事实一致时复用 HASH/字节。完全相同 Revision 在服务重启后内容读取为 0；跨 Revision 只读取新增或 last-changed Revision 变化的文件，删除文件由目标树自然排除。路径大小写歧义、元数据缺失、配置漂移、UUID 变化、缓存损坏或查询异常均安全完整回退，不能只凭分支 URL 相同复用。
 
+冷态待读取文件达到阈值时，CLI Provider 对每侧冻结 TABLE 目录执行一次 `svn export --ignore-externals -r <revision> <url>@<revision>`，只消费本次请求的 Excel 文件并在临时目录中自动回收；持久缓存可能命中的文件先通过不读 blob、不做 SHA 的只读探针排除，实际命中仍由后续完整大小和 SHA 校验决定。export 失败或缺文件时仅回退既有 `svn cat` 路径，小批量直接使用 cat；两条路径都绑定同一冻结 Revision，不改变快照、Diff、source/target 或错误隔离语义。
+
+内部配置 `snapshot_reuse.content_read_workers` 默认 12，仅控制逐文件 cat fallback；`bulk_export_enabled` 默认 true，`bulk_export_min_files` 默认 8。结构化计时中的 `provider_export` 记录 export 调用、墙钟/CPU、导出总文件数和字节，`provider_read.sources` 以 `svn_export` 或 `svn_cat` 归属每个目标文件；阶段并行时间仍不能直接相加。
+
 Diff 物化读取 Excel 工作簿时优先复用同一冻结树中已校验的可信字节，避免快照完成后再次读取 SVN；CSV 仍沿用既有冻结 Revision 读取路径。本优化不改变解析、主键、配对或 Diff 语义，端到端收益必须同时报告快照与后续物化阶段，不能用页面快照耗时替代完整链路结论。
 
 同一仓库的不同冻结 URL 还可使用只读 svn diff --summarize --xml --notice-ancestry --ignore-properties 取得两侧固定 Revision 的完整 TABLE 树差异。只有 repository UUID/root、规范 URL、冻结 Revision、TABLE 物理布局、配置指纹、两侧完整目录树和差异路径全部闭环且无大小写歧义时，未变化文件才继承 source 已有 HASH；A/M/D/R 文件和目录变化覆盖的子树一律从 target 重读。copyfrom 和 copy boundary 仅用于历史校验，不能单独证明任意两个冻结 Revision 内容相同。
@@ -361,6 +365,8 @@ py -3 -m app.tools.version_comparison_snapshot_phase_timing_acceptance --rounds 
 | AI 配置工具 | `app/tools/*ai*`、`scan_ai_field_catalog.py` | 邻接能力，不属于版本对比 Diff 主链路 |
 
 配置入口：本机运行使用被 Git 忽略的 `config/settings.json`；示例基础配置在 `config/settings.m0.example.json`。`dataset_layout` 是 Excel/CSV 结构和同侧绑定的机器可读配置。`snapshot_reuse.ttl_seconds` 和 `snapshot_reuse.max_entries` 控制页面冻结快照的进程内复用窗口；任一设为 0 可关闭复用并保留完整重建路径。
+
+冷态内容读取的 export 开关、阈值和 cat fallback 并发也位于 `snapshot_reuse`，不复用顶层通用 `max_workers`。
 
 2026-08-13 离线性能基线使用 24 个 Excel/侧、Provider `list_tree=40ms`、`read_bytes=10ms`、7 轮中位数：冷准备 85.528ms（2 次 list、48 次 read）；页面已锁定但禁用复用 44.557ms（2 次 list、0 次 read）；可信热复用 0.808ms（0 次 list、0 次 read），相对页面后的原准备阶段降低约 98.2%。三组候选均为 24 项且规范候选 JSON/指纹一致。该基线只用于比较候选准备开销，不替代真实 SVN 环境验收。
 

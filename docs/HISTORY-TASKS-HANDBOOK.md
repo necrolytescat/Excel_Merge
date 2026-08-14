@@ -245,6 +245,8 @@ rev_<revision>__<md5>.bin
 
 命中指标是进程会话指标，服务重启后归零。缓存容量来自磁盘实际受管文件。Mock Provider 下缓存显示未启用；CLI Provider 只有实际 read_bytes/read_content 才会产生命中或未命中，不得为了验收主动访问 SVN。
 
+冻结快照的批量 `svn export` 使用系统临时目录，不写入 `.cache/svn`，成功读取的目标 Excel 字节仍按既有规则进入独立的 `.cache/snapshot`。export 临时目录、持久快照缓存和全局 SVN cat 缓存的所有权互相独立，历史页的“清空全局 SVN 缓存”不得扩大到前两者。
+
 ## 11. 常见故障定位
 
 ### 11.1 历史页没有任务
@@ -348,6 +350,9 @@ BatchStore 会基于任务权威时间戳补充“创建 + 当前终态”基线
 | operations.logging.max_files | 200 | 日志文件上限 |
 | operations.logging.max_scan_bytes | 67108864 | 单次查询扫描上限 |
 | operations.allow_cache_clear | true | 是否允许全局缓存清理 |
+| snapshot_reuse.content_read_workers | 12 | 冷态 export 回退后的逐文件读取并发 |
+| snapshot_reuse.bulk_export_enabled | true | 是否允许冻结 TABLE 目录批量只读导出 |
+| snapshot_reuse.bulk_export_min_files | 8 | 触发批量导出的预计冷缺失文件阈值 |
 
 验收隔离环境变量：
 

@@ -18,6 +18,9 @@
   "snapshot_reuse": {
     "ttl_seconds": 300,
     "max_entries": 8,
+    "content_read_workers": 12,
+    "bulk_export_enabled": true,
+    "bulk_export_min_files": 8,
     "persistent_cache": {
       "enabled": true,
       "directory": ".cache/snapshot",
