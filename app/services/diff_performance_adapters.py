@@ -207,9 +207,9 @@ class TimedBatchStore(BatchStore):
         with self.performance.phase("store.sqlite.fail_preparation"):
             return super().fail_preparation(*args, **kwargs)
 
-    def claim_next_item(self):
+    def claim_next_item(self, *args, **kwargs):
         with self.performance.phase("store.sqlite.claim_item"):
-            return super().claim_next_item()
+            return super().claim_next_item(*args, **kwargs)
 
     def renew_lease(self, item_id, lease_token):
         with self.performance.phase("store.sqlite.renew_lease"):

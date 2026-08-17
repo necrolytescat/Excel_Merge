@@ -565,7 +565,29 @@ class SVNWorkbookDatasetResolver:
         entries: list[TreeEntry] = []
         if filenames:
             try:
-                entries = self.provider.list_tree(endpoint, csv_directory)
+                listed_entries = self.provider.list_tree(endpoint, csv_directory)
+                directory_prefix = csv_directory + "/"
+                for entry in listed_entries:
+                    listed_path = normalize_relative_path(entry.path)
+                    if (
+                        listed_path.casefold() == csv_directory.casefold()
+                        or listed_path.casefold().startswith(
+                            directory_prefix.casefold()
+                        )
+                    ):
+                        resolved_path = listed_path
+                    else:
+                        resolved_path = self._join(csv_directory, listed_path)
+                    entries.append(
+                        TreeEntry(
+                            path=resolved_path,
+                            kind=entry.kind,
+                            size=entry.size,
+                            revision=entry.revision,
+                            author=entry.author,
+                            date=entry.date,
+                        )
+                    )
             except SVNProviderError as exc:
                 if exc.code not in _MISSING_PATH_CODES:
                     raise self._provider_failure(exc) from exc

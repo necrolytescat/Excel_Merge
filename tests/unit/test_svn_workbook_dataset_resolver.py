@@ -13,6 +13,7 @@ import pytest
 from app.main import create_app
 from app.schemas.batch import BatchEndpointPayload
 from app.services.workbook_diff_service import DatasetLayout, WorkbookDiffService
+from core.models import TreeEntry
 from core.svn_provider import (
     MockSVNProvider,
     SVNProviderError,
@@ -697,8 +698,9 @@ def test_diff_materialization_reuses_persisted_snapshot_workbook_bytes(tmp_path)
 
 
 @pytest.mark.parametrize("missing_csv", [False, True])
+@pytest.mark.parametrize("relative_prefix_paths", [False, True])
 def test_frozen_dataset_item_stage_uses_no_svn_content_or_tree_calls(
-    tmp_path, missing_csv
+    tmp_path, missing_csv, relative_prefix_paths
 ):
     fixture = _atlas_fixture()
     if missing_csv:
@@ -713,6 +715,30 @@ def test_frozen_dataset_item_stage_uses_no_svn_content_or_tree_calls(
         def info(self, endpoint):
             self.info_calls.append((endpoint.url, endpoint.revision))
             return MockSVNProvider.info(self, endpoint)
+
+        def list_tree(self, endpoint, prefix=""):
+            entries = super().list_tree(endpoint, prefix)
+            if not relative_prefix_paths or not prefix:
+                return entries
+            normalized_prefix = normalize_relative_path(prefix)
+            prefix_token = normalized_prefix + "/"
+            return [
+                TreeEntry(
+                    path=(
+                        normalize_relative_path(entry.path)[len(prefix_token) :]
+                        if normalize_relative_path(entry.path).casefold().startswith(
+                            prefix_token.casefold()
+                        )
+                        else normalize_relative_path(entry.path)
+                    ),
+                    kind=entry.kind,
+                    size=entry.size,
+                    revision=entry.revision,
+                    author=entry.author,
+                    date=entry.date,
+                )
+                for entry in entries
+            ]
 
     provider = PersistentProvider(fixture)
     config = {
