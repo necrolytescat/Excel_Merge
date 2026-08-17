@@ -136,6 +136,45 @@ def test_run_store_recovery_and_result_round_trip(tmp_path):
     assert len(etag) == 64
 
 
+def test_fail_active_run_atomically_closes_pending_items(tmp_path):
+    _, store, plan = build_stores(tmp_path)
+    run, _ = store.create_run(
+        request_id=uuid4(),
+        request_hash="dataset-restore-failed",
+        plan=plan,
+        source_revision=100,
+        target_revisions={"target-a": 101, "target-b": 102},
+    )
+    store.claim_preparation()
+    for item in store.get_run(run.run_id).items:
+        store.update_candidate(
+            str(item.item_id),
+            status="queued",
+            candidate_status="modified",
+            source_exists=True,
+            target_exists=True,
+            source_sha256="a",
+            target_sha256="b",
+        )
+    store.finish_preparation(str(run.run_id))
+    claim = store.claim_item()
+    assert claim is not None
+    error = {
+        "code": "DIFF_PLAN_DATASET_RESTORE_FAILED",
+        "message": "无法恢复计划运行的冻结数据集",
+        "retryable": True,
+    }
+    assert store.fail_active_run(str(run.run_id), error) is True
+    assert store.fail_active_run(str(run.run_id), error) is False
+    failed = store.get_run(run.run_id)
+    assert failed.status == "failed"
+    assert all(
+        item.status == "orchestration_failed"
+        for item in failed.items
+    )
+    assert failed.errors[0].code == error["code"]
+
+
 def completed_run_with_result(tmp_path: Path):
     _, store, plan = build_stores(tmp_path)
     run, _ = store.create_run(

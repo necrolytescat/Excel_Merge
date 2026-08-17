@@ -73,7 +73,32 @@ M4 是版本比对上方的长期计划与多目标分支编排层。它复用 S
 
 四路开关默认关闭。上线必须先通过双 M2、M2+M4、公平性、崩溃恢复、迟到提交、取消和稳定 ordinal 测试，再灰度开启。
 
-## 7. 已知限制
+## 7. Frozen Dataset 性能路径
+
+M4 可通过 `diff_plan.frozen_dataset_enabled=true` 接入版本对比共用的不可变 Frozen Dataset；该开关只有在 `snapshot_reuse.frozen_dataset_enabled=true` 时生效，默认关闭，便于独立灰度。
+
+启用后，运行按以下内部阶段执行，不改变公开状态和 `m4.diff-plan-run.v1`：
+
+1. `freeze_revisions`：锁定基准及全部目标 Revision；
+2. `enumerate_dataset`：每个端点只枚举一次选中 TABLE 工作簿；
+3. `fetch_dataset/publish_dataset`：批量缓存 Excel 并原子发布 ready 树；
+4. `parse_manifests/reuse_evidence`：复用 Manifest，汇总并准备所需 TableCsv；
+5. `compare_items`：所有矩阵工作项只读本地数据；
+6. `finalize`：终态释放数据集租约。
+
+同一运行的基准分支 Excel 只下载和计算哈希一次，多目标分支共享；相同 Revision 热态运行继续引用原 blob，不重新读取 SVN 内容。同分支增量、跨分支证据、目录 export、并行 cat、明确缺失、大小写歧义和缓存损坏规则与版本对比一致。
+
+M4 活动运行按目标分支持有 Frozen Dataset 租约。服务重启优先重新获取 ready 树租约；ready 树不可用时只按运行保存的固定 Revision 重建，不读取 HEAD。准备、恢复、取消或终态都必须释放租约。单个 Excel 下载失败继续只形成对应矩阵项 `read_failed`，不得扩大为整个运行失败。
+
+验收硬门禁：
+
+- `m4-plan-item` 工作项线程的 SVN `read/list/list_children` 调用均为 0；
+- 相同 Revision 热态运行的 SVN 内容读取为 0；
+- 冷态与热态结果字节一致；
+- TableCsv 实际目录大小写与配置不同但唯一时可解析，多匹配时安全失败；
+- 阶段日志事件为 `m4.phase_timing`，内部 schema 为 `m4.diff-plan-phase-timing.v1`，不记录 URL、路径、工作簿名或凭据。
+
+## 8. 已知限制
 
 - 明细过期后不支持重新获取旧内容；需要查看明细时应创建新运行。
 - 不提供手工强制清理 API，避免扩大运维写权限；清理由服务启动和周期任务执行。

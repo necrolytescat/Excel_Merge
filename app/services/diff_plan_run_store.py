@@ -351,6 +351,44 @@ class DiffPlanRunStore:
                 connection.execute("UPDATE diff_plan_runs SET status='running',updated_at=? WHERE run_id=?", (now, run_id))
                 self._finalize(connection, run_id)
 
+    def fail_active_run(
+        self, run_id: str, error: dict[str, Any]
+    ) -> bool:
+        now = _now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT status FROM diff_plan_runs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            if row is None or row["status"] != "running":
+                return False
+            connection.execute(
+                """
+                UPDATE diff_plan_runs
+                SET status='failed',errors_json=?,finished_at=?,
+                    details_expires_at=?,updated_at=?
+                WHERE run_id=?
+                """,
+                (
+                    _canonical([error]),
+                    now,
+                    _future(self.retention_days),
+                    now,
+                    run_id,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE diff_plan_run_items
+                SET status='orchestration_failed',error_json=?,finished_at=?,
+                    updated_at=?,lease_token=NULL,lease_expires_at=NULL
+                WHERE run_id=? AND status IN ('queued','running')
+                """,
+                (_canonical(error), now, now, run_id),
+            )
+            return True
+
     def runnable_run_ids(self) -> list[str]:
         with self._connect() as connection:
             rows = connection.execute(

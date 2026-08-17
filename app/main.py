@@ -230,6 +230,10 @@ def create_app(
         phase_timing_enabled=bool(logging_config.get("enabled", True)),
     )
     diff_plan_config = config.get("diff_plan", {}) if isinstance(config, dict) else {}
+    m4_frozen_dataset_enabled = bool(
+        frozen_dataset_enabled
+        and diff_plan_config.get("frozen_dataset_enabled", False)
+    )
     configured_diff_plan_db = os.environ.get("EXCEL_MERGE_DIFF_PLAN_DB") or str(
         diff_plan_config.get("database_path", "var/m4-diff-plan/diff-plan.sqlite3")
     )
@@ -436,6 +440,15 @@ def create_app(
             cleanup_interval_seconds=float(diff_plan_config.get("cleanup_interval_seconds", 3600)),
             execution_scheduler=workbook_execution_scheduler,
             item_concurrency=workbook_concurrency,
+            dataset_preparer=(
+                getattr(
+                    app.state.workbook_dataset_resolver,
+                    "prepare_frozen_pair",
+                    None,
+                )
+                if m4_frozen_dataset_enabled
+                else None
+            ),
         )
         app.state.diff_plan_service.recent_run = m4_run_store.latest_run
 

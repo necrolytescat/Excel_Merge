@@ -4,6 +4,8 @@ from pathlib import Path
 import time
 from uuid import uuid4
 
+import pytest
+
 from app.schemas.diff_plan import (
     DiffPlanCreateRequestPayload,
     DiffPlanRunRetryRequestPayload,
@@ -13,6 +15,7 @@ from app.services.diff_plan_run_service import DiffPlanRunService
 from app.services.diff_plan_run_store import DiffPlanRunStore
 from app.services.diff_plan_store import DiffPlanStore
 from app.services.snapshot_service import SnapshotService
+from app.services.workbook_dataset_service import WorkbookCompareError
 from core.models import SvnInfo, TreeEntry
 from core.svn_provider import MockSVNProvider
 
@@ -205,4 +208,133 @@ def test_cleanup_failure_is_redacted_and_does_not_block_scheduler(tmp_path, capl
     assert "清理失败" in serialized
     assert "hunter2" not in serialized
     assert "C:\\private" not in serialized
+    service.close()
+
+
+def test_m4_excel_cache_bulk_failure_isolated_to_one_workbook(
+    tmp_path, monkeypatch
+):
+    _, _, service, plan = build_service(tmp_path)
+    run, _ = service.run_store.create_run(
+        request_id=uuid4(),
+        request_hash="cache-isolation",
+        plan=plan,
+        source_revision=100,
+        target_revisions={"target": 200},
+    )
+    run = service.run_store.get_run(run.run_id)
+    records = service._records()
+    snapshots = {
+        "source": service._endpoint_snapshot(
+            "source", 100, records
+        ),
+        "target": service._endpoint_snapshot(
+            "target", 200, records
+        ),
+    }
+    calls = []
+
+    def cache_tree(record, revision, table_path, **kwargs):
+        required = tuple(kwargs["required_paths"])
+        calls.append((record["id"], required))
+        if len(required) > 1:
+            return False
+        return not (
+            record["id"] == "target"
+            and required[0].endswith("/Changed.xlsx")
+        )
+
+    monkeypatch.setattr(
+        service.snapshot_service, "cache_frozen_tree", cache_tree
+    )
+    failures = service._cache_table_datasets(run, snapshots)
+    assert set(failures) == {("target", "changed.xlsx")}
+    assert any(
+        endpoint_id == "source" and len(required) > 1
+        for endpoint_id, required in calls
+    )
+    assert any(
+        endpoint_id == "target" and len(required) > 1
+        for endpoint_id, required in calls
+    )
+    service.close()
+
+
+def test_m4_endpoint_snapshot_rejects_case_ambiguous_workbooks(
+    tmp_path,
+):
+    provider, _, service, _ = build_service(tmp_path)
+    provider.content[
+        ("source", "Source/Table/changed.xlsx")
+    ] = b"ambiguous"
+    with pytest.raises(WorkbookCompareError) as captured:
+        service._endpoint_snapshot(
+            "source", 100, service._records()
+        )
+    assert captured.value.code == "DIFF_DATASET_CONFIG_INVALID"
+    service.close()
+
+
+def test_m4_restores_ready_dataset_lease_at_frozen_revisions(
+    tmp_path,
+):
+    provider, _, service, plan = build_service(tmp_path)
+    run, _ = service.run_store.create_run(
+        request_id=uuid4(),
+        request_hash="lease-restore",
+        plan=plan,
+        source_revision=100,
+        target_revisions={"target": 200},
+    )
+    service.run_store.claim_preparation()
+    items = service.run_store.get_run(run.run_id).items
+    for index, item in enumerate(items):
+        service.run_store.update_candidate(
+            str(item.item_id),
+            status="queued" if index == 0 else "identical",
+            candidate_status="modified" if index == 0 else "identical",
+            source_exists=True,
+            target_exists=True,
+            source_sha256="a",
+            target_sha256="b" if index == 0 else "a",
+        )
+    service.run_store.finish_preparation(str(run.run_id))
+
+    class DatasetOwner:
+        def __init__(self):
+            self.acquired = []
+            self.released = []
+
+        def prepare(self, *args, **kwargs):
+            raise AssertionError("ready trees should only reacquire leases")
+
+        def acquire_frozen_pair_lease(
+            self, source, target, *, lease_id
+        ):
+            lease = (lease_id, source.revision, target.revision)
+            self.acquired.append(lease)
+            return lease
+
+        def release_frozen_pair_lease(self, lease):
+            self.released.append(lease)
+            return True
+
+    owner = DatasetOwner()
+    service.dataset_preparer = owner.prepare
+    provider.info_calls.clear()
+    assert service._ensure_dataset_lease(str(run.run_id)) is True
+    assert owner.acquired == [
+        (f"m4:{run.run_id}:target", 100, 200)
+    ]
+    assert provider.info_calls == []
+
+    claim = service.run_store.claim_item(str(run.run_id))
+    assert service.run_store.complete_item(
+        claim["item_id"],
+        lease_token=claim["lease_token"],
+        status="changed",
+        diff_status="modified",
+    )
+    service._release_terminal_dataset_leases()
+    assert owner.released == owner.acquired
     service.close()

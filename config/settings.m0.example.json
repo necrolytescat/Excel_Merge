@@ -39,7 +39,8 @@
     "database_path": "var/m4-diff-plan/diff-plan.sqlite3",
     "detail_retention_days": 30,
     "workbook_concurrency": 2,
-    "cleanup_interval_seconds": 3600
+    "cleanup_interval_seconds": 3600,
+    "frozen_dataset_enabled": false
   },
   "workbook_execution": {
     "four_way_enabled": false,

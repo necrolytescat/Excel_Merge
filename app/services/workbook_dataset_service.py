@@ -57,6 +57,7 @@ class _FrozenSidePlan:
     endpoint: EndpointSpec
     table_directory: str
     csv_directory: str
+    provider_csv_directory: str
     entries_by_path: dict[str, TreeEntry]
     required_paths: set[str]
     missing_paths: set[str]
@@ -535,19 +536,33 @@ class SVNWorkbookDatasetResolver:
             posixpath.dirname(table_directory),
             self.csv_directory_name,
         )
+        discovered_csv_directory = self._cached_csv_directory(
+            record,
+            endpoint,
+            table_directory,
+        )
+        provider_csv_directory = (
+            discovered_csv_directory or csv_directory
+        )
         filenames: set[str] = set()
         phase_started = time.perf_counter_ns()
         for workbook_path in workbook_paths:
-            raw = self._read_workbook(
-                record,
-                endpoint,
-                table_directory,
-                workbook_path,
+            prepared, manifest = self._prepared_manifest(
+                record, endpoint, workbook_path
             )
-            manifest = self._manifest(raw) if raw is not None else None
-            self._remember_manifest(
-                record, endpoint, workbook_path, manifest
-            )
+            if not prepared:
+                raw = self._read_workbook(
+                    record,
+                    endpoint,
+                    table_directory,
+                    workbook_path,
+                )
+                manifest = (
+                    self._manifest(raw) if raw is not None else None
+                )
+                self._remember_manifest(
+                    record, endpoint, workbook_path, manifest
+                )
             if manifest is not None:
                 filenames.update(self._csv_filenames(manifest))
         if phase_sink is not None:
@@ -565,19 +580,24 @@ class SVNWorkbookDatasetResolver:
         entries: list[TreeEntry] = []
         if filenames:
             try:
-                listed_entries = self.provider.list_tree(endpoint, csv_directory)
-                directory_prefix = csv_directory + "/"
+                listed_entries = self.provider.list_tree(
+                    endpoint, provider_csv_directory
+                )
+                directory_prefix = provider_csv_directory + "/"
                 for entry in listed_entries:
                     listed_path = normalize_relative_path(entry.path)
                     if (
-                        listed_path.casefold() == csv_directory.casefold()
+                        listed_path.casefold()
+                        == provider_csv_directory.casefold()
                         or listed_path.casefold().startswith(
                             directory_prefix.casefold()
                         )
                     ):
                         resolved_path = listed_path
                     else:
-                        resolved_path = self._join(csv_directory, listed_path)
+                        resolved_path = self._join(
+                            provider_csv_directory, listed_path
+                        )
                     entries.append(
                         TreeEntry(
                             path=resolved_path,
@@ -601,8 +621,10 @@ class SVNWorkbookDatasetResolver:
             entry
             for entry in entries
             if entry.kind == "file"
-            and posixpath.dirname(normalize_relative_path(entry.path))
-            == csv_directory
+            and posixpath.dirname(
+                normalize_relative_path(entry.path)
+            ).casefold()
+            == provider_csv_directory.casefold()
         ]
         by_name: dict[str, list[TreeEntry]] = {}
         for entry in files:
@@ -647,6 +669,7 @@ class SVNWorkbookDatasetResolver:
             endpoint=endpoint,
             table_directory=table_directory,
             csv_directory=csv_directory,
+            provider_csv_directory=provider_csv_directory,
             entries_by_path=entries_by_path,
             required_paths=required,
             missing_paths=missing,
@@ -677,9 +700,9 @@ class SVNWorkbookDatasetResolver:
             target_identity = resolve_identity(target.endpoint)
             evidence = summarize(
                 source_identity,
-                source.csv_directory,
+                source.provider_csv_directory,
                 target_identity,
-                target.csv_directory,
+                target.provider_csv_directory,
             )
             if (
                 evidence.repository_uuid != source_identity.repository_uuid
@@ -691,10 +714,14 @@ class SVNWorkbookDatasetResolver:
                 != canonicalize_svn_url(target.endpoint.url)
                 or evidence.source_revision != int(source.endpoint.revision)
                 or evidence.target_revision != int(target.endpoint.revision)
-                or normalize_relative_path(evidence.source_root)
-                != source.csv_directory
-                or normalize_relative_path(evidence.target_root)
-                != target.csv_directory
+                or normalize_relative_path(
+                    evidence.source_root
+                ).casefold()
+                != source.provider_csv_directory.casefold()
+                or normalize_relative_path(
+                    evidence.target_root
+                ).casefold()
+                != target.provider_csv_directory.casefold()
             ):
                 return []
             changes: list[tuple[str, str]] = []

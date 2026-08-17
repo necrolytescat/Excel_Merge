@@ -5,7 +5,11 @@ import csv
 import hashlib
 from io import StringIO
 import json
+import logging
 from pathlib import Path
+from threading import current_thread
+import time
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 import pytest
@@ -685,7 +689,6 @@ def test_diff_materialization_reuses_persisted_snapshot_workbook_bytes(tmp_path)
             "/api/diff/workbooks/compare",
             json=_request_payload(),
         )
-
     assert response.status_code == 200
     assert response.json()["schema_version"] == "m2.diff.v1"
     assert sum(
@@ -695,6 +698,178 @@ def test_diff_materialization_reuses_persisted_snapshot_workbook_bytes(tmp_path)
     assert app.state.snapshot_service.snapshot_reuse_metrics()[
         "disk_byte_hits"
     ] >= 2
+
+
+def test_m4_frozen_dataset_item_stage_uses_no_svn_content_or_tree_calls(
+    tmp_path, caplog,
+):
+    caplog.set_level(
+        logging.INFO, logger="app.services.diff_plan_run_service"
+    )
+    class M4PersistentProvider(CountingProvider):
+        def __init__(self, fixture):
+            super().__init__(fixture)
+            self.item_read_calls = []
+            self.item_tree_calls = []
+            self.item_children_calls = []
+
+        def info(self, endpoint):
+            self.info_calls.append((endpoint.url, endpoint.revision))
+            return MockSVNProvider.info(self, endpoint)
+
+        def list_tree(self, endpoint, prefix=""):
+            if current_thread().name.startswith("m4-plan-item"):
+                self.item_tree_calls.append((endpoint, prefix))
+            return super().list_tree(endpoint, prefix)
+
+        def list_children(self, endpoint, prefix=""):
+            if current_thread().name.startswith("m4-plan-item"):
+                self.item_children_calls.append((endpoint, prefix))
+            return super().list_children(endpoint, prefix)
+
+        def read_bytes(self, endpoint, path):
+            if current_thread().name.startswith("m4-plan-item"):
+                self.item_read_calls.append(
+                    (endpoint, normalize_relative_path(path))
+                )
+            return super().read_bytes(endpoint, path)
+
+    provider = M4PersistentProvider(_atlas_fixture())
+    config = {
+        "dataset_layout": deepcopy(CONFIG["dataset_layout"]),
+        "svn": {
+            "provider": "mock",
+            "allowed_schemes": ["mock"],
+            "endpoint_registry": _endpoint_records(),
+        },
+        "snapshot_reuse": {
+            "frozen_dataset_enabled": True,
+            "cross_branch_csv_reuse_enabled": False,
+            "bulk_export_enabled": False,
+            "persistent_cache": {
+                "enabled": True,
+                "directory": str(tmp_path / "snapshot-cache"),
+            },
+        },
+        "batch_diff": {
+            "state_directory": str(tmp_path / "batch-state"),
+        },
+        "diff_plan": {
+            "database_path": str(
+                tmp_path / "m4" / "diff-plan.sqlite3"
+            ),
+            "frozen_dataset_enabled": True,
+        },
+    }
+    app = create_app(config=config, provider=provider)
+    assert app.state.diff_plan_run_service.dataset_preparer is not None
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/diff-plans",
+            json={
+                "schema_version": "m4.diff-plan-create.request.v1",
+                "request_id": str(uuid4()),
+                "name": "M4 Frozen Dataset",
+                "source_endpoint_id": SOURCE_ENDPOINT_ID,
+                "target_endpoint_ids": [TARGET_ENDPOINT_ID],
+                "workbook_paths": [WORKBOOK_NAME],
+            },
+        )
+        assert created.status_code == 201
+        started = client.post(
+            f"/api/diff-plans/{created.json()['plan_id']}/runs",
+            json={
+                "schema_version": "m4.diff-plan-run-start.request.v1",
+                "request_id": str(uuid4()),
+                "revisions": {
+                    SOURCE_ENDPOINT_ID: SOURCE_REVISION,
+                    TARGET_ENDPOINT_ID: TARGET_REVISION,
+                },
+            },
+        )
+        assert started.status_code == 202
+        run_id = started.json()["run_id"]
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            run = client.get(
+                f"/api/diff-plans/runs/{run_id}"
+            ).json()
+            if run["status"] in {
+                "completed",
+                "completed_with_failures",
+                "cancelled",
+                "failed",
+            }:
+                break
+            time.sleep(0.03)
+        else:
+            raise AssertionError("M4 Frozen Dataset run timed out")
+
+        assert run["status"] == "completed"
+        first_result = client.get(
+            "/api/diff-plans/run-results/"
+            + run["items"][0]["result_ref"]
+        ).content
+        cold_content_reads = len(provider.read_calls)
+        assert cold_content_reads > 0
+
+        warm_started = client.post(
+            f"/api/diff-plans/{created.json()['plan_id']}/runs",
+            json={
+                "schema_version": "m4.diff-plan-run-start.request.v1",
+                "request_id": str(uuid4()),
+                "revisions": {
+                    SOURCE_ENDPOINT_ID: SOURCE_REVISION,
+                    TARGET_ENDPOINT_ID: TARGET_REVISION,
+                },
+            },
+        )
+        assert warm_started.status_code == 202
+        warm_run_id = warm_started.json()["run_id"]
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            run = client.get(
+                f"/api/diff-plans/runs/{warm_run_id}"
+            ).json()
+            if run["status"] in {
+                "completed",
+                "completed_with_failures",
+                "cancelled",
+                "failed",
+            }:
+                break
+            time.sleep(0.03)
+        else:
+            raise AssertionError("M4 warm Frozen Dataset run timed out")
+        second_result = client.get(
+            "/api/diff-plans/run-results/"
+            + run["items"][0]["result_ref"]
+        ).content
+        assert second_result == first_result
+        assert len(provider.read_calls) == cold_content_reads
+
+    assert run["status"] == "completed", (
+        run,
+        app.state.snapshot_service.snapshot_reuse_metrics(),
+    )
+    assert run["items"][0]["status"] == "changed"
+    assert provider.item_read_calls == []
+    assert provider.item_tree_calls == []
+    assert provider.item_children_calls == []
+    phase_names = {
+        record.internal_metrics["phase"]
+        for record in caplog.records
+        if getattr(record, "event", None) == "m4.phase_timing"
+    }
+    assert {
+        "freeze_revisions",
+        "parse_manifests",
+        "enumerate_dataset",
+        "reuse_evidence",
+        "fetch_dataset",
+        "publish_dataset",
+        "compare_items",
+    } <= phase_names
 
 
 @pytest.mark.parametrize("missing_csv", [False, True])

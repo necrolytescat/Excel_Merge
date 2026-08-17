@@ -10,7 +10,7 @@ from pathlib import PurePosixPath
 from threading import Event, Lock, Thread
 import time
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable, Mapping, Sequence
 from uuid import UUID
 
 from app.schemas.batch import BatchEndpointPayload
@@ -30,23 +30,53 @@ from app.services.diff_plan_run_store import (
 )
 from app.services.diff_plan_store import DiffPlanError, DiffPlanStore, _hash
 from app.services.snapshot_service import SnapshotService
+from app.services.snapshot_content_cache import FrozenFileState
 from app.services.workbook_dataset_service import WorkbookCompareError
 from app.services.workbook_execution_scheduler import (
     PersistentWorkbookExecutionScheduler,
     WorkbookExecutionLease,
 )
-from core.models import EndpointSpec
+from core.models import EndpointSpec, TreeEntry
 from core.svn_provider import SVNProvider, SVNProviderError, normalize_relative_path
 
 
 logger = logging.getLogger(__name__)
 
 
+def _emit_m4_phase(
+    run_id: str,
+    phase: str,
+    wall_ns: int,
+    metrics: Mapping[str, int | str] | None = None,
+) -> None:
+    internal_metrics: dict[str, int | str] = {
+        "schema_version": "m4.diff-plan-phase-timing.v1",
+        "run_id": str(run_id),
+        "phase": str(phase),
+        "wall_ns": max(0, int(wall_ns)),
+    }
+    if metrics:
+        internal_metrics.update(metrics)
+    logger.info(
+        "M4 internal phase timing",
+        extra={
+            "event": "m4.phase_timing",
+            "internal_metrics": internal_metrics,
+        },
+    )
+
+
 @dataclass(frozen=True)
 class _EndpointSnapshot:
+    record: Mapping[str, Any]
     endpoint: EndpointSpec
     table_path: str
-    files: dict[str, str]
+    files: dict[str, TreeEntry]
+
+
+@dataclass(frozen=True)
+class _DatasetLeaseBundle:
+    leases: tuple[Any, ...]
 
 
 @dataclass
@@ -72,6 +102,7 @@ class DiffPlanRunService:
         item_concurrency: int = 2,
         heartbeat_seconds: float = 20.0,
         cleanup_interval_seconds: float = 3600,
+        dataset_preparer: Callable[..., Any] | None = None,
     ):
         self.plan_store = plan_store
         self.run_store = run_store
@@ -84,6 +115,7 @@ class DiffPlanRunService:
         self.execution_scheduler = execution_scheduler
         self.item_concurrency = max(1, int(item_concurrency))
         self.heartbeat_seconds = max(0.05, float(heartbeat_seconds))
+        self.dataset_preparer = dataset_preparer
         self._next_cleanup_at = 0.0
         self._stop = Event()
         self._start_lock = Lock()
@@ -95,6 +127,8 @@ class DiffPlanRunService:
         )
         self._preparations: dict[Future, str] = {}
         self._items: dict[Future, _RunningPlanItem] = {}
+        self._dataset_lease_lock = Lock()
+        self._dataset_leases: dict[str, _DatasetLeaseBundle] = {}
 
     def start(self) -> None:
         if self._started:
@@ -114,6 +148,7 @@ class DiffPlanRunService:
             self._scheduler.join(timeout=2)
         self._preparation_executor.shutdown(wait=True, cancel_futures=True)
         self._item_executor.shutdown(wait=True, cancel_futures=True)
+        self._release_all_dataset_leases()
 
     def _records(self) -> dict[str, dict[str, Any]]:
         return {
@@ -146,6 +181,7 @@ class DiffPlanRunService:
         if replay is not None:
             self.start()
             return replay, False
+        freeze_started = time.perf_counter_ns()
         records = self._records()
         source_revision = self._freeze(plan.source_endpoint_id, requested[plan.source_endpoint_id], records)
         target_revisions = {
@@ -159,6 +195,13 @@ class DiffPlanRunService:
             source_revision=source_revision,
             target_revisions=target_revisions,
         )
+        if created:
+            _emit_m4_phase(
+                str(run.run_id),
+                "freeze_revisions",
+                time.perf_counter_ns() - freeze_started,
+                {"endpoint_count": 1 + len(target_revisions)},
+            )
         self.start()
         return run, created
 
@@ -173,7 +216,10 @@ class DiffPlanRunService:
 
     def cancel(self, run_id: UUID | str, payload: DiffPlanRunCommandRequestPayload) -> DiffPlanRunPayload:
         self.start()
-        return self.run_store.cancel(run_id, payload.request_id)
+        run = self.run_store.cancel(run_id, payload.request_id)
+        if run.status in TERMINAL_RUN_STATUSES:
+            self._release_dataset_lease(str(run.run_id))
+        return run
 
     def retry(self, run_id: UUID | str, payload: DiffPlanRunRetryRequestPayload) -> tuple[DiffPlanRunPayload, bool]:
         parent = self.run_store.get_run(run_id)
@@ -221,26 +267,447 @@ class DiffPlanRunService:
             raise DiffPlanError("DIFF_PLAN_RESULT_NOT_FOUND", "运行明细不存在", status_code=404)
         return self.run_store.load_result(result_ref)
 
-    def _endpoint_snapshot(self, endpoint_id: str, revision: int, records: dict[str, dict[str, Any]]) -> _EndpointSnapshot:
+    def _dataset_owner(self) -> Any | None:
+        return getattr(self.dataset_preparer, "__self__", None)
+
+    def _release_lease_bundle(
+        self, bundle: _DatasetLeaseBundle | None
+    ) -> None:
+        if bundle is None:
+            return
+        release = getattr(
+            self._dataset_owner(), "release_frozen_pair_lease", None
+        )
+        if release is None:
+            logger.warning("M4 Frozen dataset lease release unavailable")
+            return
+        for lease in bundle.leases:
+            if not release(lease):
+                logger.warning("M4 Frozen dataset lease release failed")
+
+    def _register_dataset_lease(
+        self, run_id: str, bundle: _DatasetLeaseBundle
+    ) -> None:
+        with self._dataset_lease_lock:
+            previous = self._dataset_leases.get(run_id)
+            if previous is None:
+                self._dataset_leases[run_id] = bundle
+                return
+        if previous != bundle:
+            self._release_lease_bundle(bundle)
+
+    def _release_dataset_lease(self, run_id: str) -> None:
+        with self._dataset_lease_lock:
+            bundle = self._dataset_leases.pop(run_id, None)
+        if bundle is None:
+            return
+        started = time.perf_counter_ns()
+        self._release_lease_bundle(bundle)
+        _emit_m4_phase(
+            run_id,
+            "finalize",
+            time.perf_counter_ns() - started,
+            {"lease_count": len(bundle.leases)},
+        )
+
+    def _release_all_dataset_leases(self) -> None:
+        with self._dataset_lease_lock:
+            leases = list(self._dataset_leases.values())
+            self._dataset_leases.clear()
+        for bundle in leases:
+            self._release_lease_bundle(bundle)
+
+    def _release_terminal_dataset_leases(self) -> None:
+        with self._dataset_lease_lock:
+            run_ids = list(self._dataset_leases)
+        for run_id in run_ids:
+            try:
+                terminal = (
+                    self.run_store.get_run(run_id).status
+                    in TERMINAL_RUN_STATUSES
+                )
+            except DiffPlanError:
+                terminal = True
+            if terminal:
+                self._release_dataset_lease(run_id)
+
+    def _endpoint_snapshot(
+        self,
+        endpoint_id: str,
+        revision: int,
+        records: dict[str, dict[str, Any]],
+    ) -> _EndpointSnapshot:
         record = records[endpoint_id]
-        endpoint = EndpointSpec(url=str(record["url"]), revision=revision, label=str(record.get("label", endpoint_id)))
-        entries = self.provider.list_tree(endpoint)
-        table_path = normalize_relative_path(self.snapshot_service.resolve_scope_paths(record, revision, entries=entries)["TABLE"])
+        endpoint = EndpointSpec(
+            url=str(record["url"]),
+            revision=revision,
+            label=str(record.get("label", endpoint_id)),
+        )
+        configured_table = next(
+            (
+                normalize_relative_path(str(path))
+                for logical, path in dict(
+                    record.get("physical_path_filters") or {}
+                ).items()
+                if str(logical).strip().upper() == "TABLE" and path
+            ),
+            None,
+        )
+        entries: list[TreeEntry] = []
+        if configured_table is not None:
+            try:
+                listed = self.provider.list_tree(
+                    endpoint, configured_table
+                )
+            except SVNProviderError:
+                listed = []
+            configured_prefix = configured_table + "/"
+            for entry in listed:
+                listed_path = normalize_relative_path(entry.path)
+                if (
+                    listed_path.casefold()
+                    == configured_table.casefold()
+                    or listed_path.casefold().startswith(
+                        configured_prefix.casefold()
+                    )
+                ):
+                    resolved_path = listed_path
+                else:
+                    resolved_path = normalize_relative_path(
+                        f"{configured_table}/{listed_path}"
+                    )
+                entries.append(
+                    TreeEntry(
+                        path=resolved_path,
+                        kind=entry.kind,
+                        size=entry.size,
+                        revision=entry.revision,
+                        author=entry.author,
+                        date=entry.date,
+                    )
+                )
+        if entries:
+            table_path = configured_table
+        else:
+            entries = self.provider.list_tree(endpoint)
+            table_path = normalize_relative_path(
+                self.snapshot_service.resolve_scope_paths(
+                    record, revision, entries=entries
+                )["TABLE"]
+            )
         prefix = table_path.casefold() + "/"
-        files = {}
+        files: dict[str, TreeEntry] = {}
         for entry in entries:
             normalized = normalize_relative_path(entry.path)
-            if entry.kind != "file" or not normalized.casefold().startswith(prefix):
+            if (
+                entry.kind != "file"
+                or not normalized.casefold().startswith(prefix)
+            ):
                 continue
             relative = normalized[len(table_path) + 1:]
-            files.setdefault(relative.casefold(), normalized)
-        return _EndpointSnapshot(endpoint=endpoint, table_path=table_path, files=files)
+            folded = relative.casefold()
+            previous = files.get(folded)
+            if (
+                previous is not None
+                and normalize_relative_path(previous.path) != normalized
+            ):
+                raise WorkbookCompareError(
+                    "DIFF_DATASET_CONFIG_INVALID",
+                    "冻结 Revision 的 TABLE 路径大小写匹配不唯一",
+                    status_code=500,
+                )
+            files[folded] = TreeEntry(
+                path=normalized,
+                kind=entry.kind,
+                size=entry.size,
+                revision=entry.revision,
+                author=entry.author,
+                date=entry.date,
+            )
+        return _EndpointSnapshot(
+            record=record,
+            endpoint=endpoint,
+            table_path=table_path,
+            files=files,
+        )
+
+    def _cache_table_datasets(
+        self,
+        run,
+        endpoint_snapshots: Mapping[str, _EndpointSnapshot],
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        failures: dict[tuple[str, str], dict[str, Any]] = {}
+        required_by_endpoint: dict[str, set[str]] = {
+            run.source_endpoint_id: set()
+        }
+        for target_id in run.target_revisions:
+            required_by_endpoint[target_id] = set()
+        for item in run.items:
+            required_by_endpoint[run.source_endpoint_id].add(
+                item.workbook_path
+            )
+            required_by_endpoint[item.target_endpoint_id].add(
+                item.workbook_path
+            )
+
+        for endpoint_id, workbook_paths in required_by_endpoint.items():
+            snapshot = endpoint_snapshots[endpoint_id]
+            required: set[str] = set()
+            missing: set[str] = set()
+            present: list[TreeEntry] = []
+            file_specs: list[
+                tuple[str, set[str], list[TreeEntry], set[str]]
+            ] = []
+            for workbook_path in sorted(
+                workbook_paths, key=lambda item: (item.casefold(), item)
+            ):
+                entry = snapshot.files.get(workbook_path.casefold())
+                if entry is None:
+                    path = normalize_relative_path(
+                        f"{snapshot.table_path}/{workbook_path}"
+                    )
+                    required.add(path)
+                    missing.add(path)
+                    file_specs.append(
+                        (workbook_path, {path}, [], {path})
+                    )
+                else:
+                    path = normalize_relative_path(entry.path)
+                    required.add(path)
+                    present.append(entry)
+                    file_specs.append(
+                        (workbook_path, {path}, [entry], set())
+                    )
+            phase_side = (
+                "source"
+                if endpoint_id == run.source_endpoint_id
+                else "target"
+            )
+            cached = self.snapshot_service.cache_frozen_tree(
+                snapshot.record,
+                int(snapshot.endpoint.revision),
+                snapshot.table_path,
+                tree_kind="excel",
+                required_paths=required,
+                entries=present,
+                missing_paths=missing,
+                phase_side=phase_side,
+                phase_sink=lambda phase, wall_ns, metrics: _emit_m4_phase(
+                    str(run.run_id), phase, wall_ns, metrics
+                ),
+            )
+            if cached:
+                continue
+            for (
+                workbook_path,
+                file_required,
+                file_entries,
+                file_missing,
+            ) in file_specs:
+                if self.snapshot_service.cache_frozen_tree(
+                    snapshot.record,
+                    int(snapshot.endpoint.revision),
+                    snapshot.table_path,
+                    tree_kind="excel",
+                    required_paths=file_required,
+                    entries=file_entries,
+                    missing_paths=file_missing,
+                    phase_side=phase_side,
+                    phase_sink=(
+                        lambda phase, wall_ns, metrics: _emit_m4_phase(
+                            str(run.run_id), phase, wall_ns, metrics
+                        )
+                    ),
+                ):
+                    continue
+                failures[
+                    (endpoint_id, workbook_path.casefold())
+                ] = {
+                    "code": "DIFF_DATASET_READ_FAILED",
+                    "message": "无法读取冻结 Revision 的工作簿",
+                    "retryable": True,
+                }
+        return failures
+
+    def _prepare_dataset_pairs(
+        self,
+        run,
+        modified_paths: Mapping[str, Sequence[str]],
+    ) -> _DatasetLeaseBundle | None:
+        if self.dataset_preparer is None:
+            return None
+        leases: list[Any] = []
+        try:
+            for target_id, paths in modified_paths.items():
+                if not paths:
+                    continue
+                source = BatchEndpointPayload(
+                    endpoint_id=run.source_endpoint_id,
+                    revision=run.source_revision,
+                )
+                target = BatchEndpointPayload(
+                    endpoint_id=target_id,
+                    revision=run.target_revisions[target_id],
+                )
+                candidates = [
+                    SimpleNamespace(path=path, status="modified")
+                    for path in paths
+                ]
+                lease = self.dataset_preparer(
+                    source,
+                    target,
+                    candidates,
+                    lease_id=f"m4:{run.run_id}:{target_id}",
+                    phase_sink=(
+                        lambda phase, wall_ns, metrics: _emit_m4_phase(
+                            str(run.run_id), phase, wall_ns, metrics
+                        )
+                    ),
+                )
+                if lease is None:
+                    raise WorkbookCompareError(
+                        "DIFF_DATASET_READ_FAILED",
+                        "无法锁定 M4 冻结数据集",
+                        status_code=500,
+                    )
+                leases.append(lease)
+        except Exception:
+            self._release_lease_bundle(
+                _DatasetLeaseBundle(tuple(leases))
+            )
+            raise
+        return _DatasetLeaseBundle(tuple(leases)) if leases else None
+
+    @staticmethod
+    def _pending_modified_paths(run) -> dict[str, list[str]]:
+        result: dict[str, list[str]] = {
+            target_id: [] for target_id in run.target_revisions
+        }
+        for item in run.items:
+            if (
+                item.status == "queued"
+                and item.candidate_status == "modified"
+            ):
+                result[item.target_endpoint_id].append(item.workbook_path)
+        return result
+
+    def _acquire_ready_dataset_bundle(
+        self, run, modified_paths: Mapping[str, Sequence[str]]
+    ) -> _DatasetLeaseBundle | None:
+        owner = self._dataset_owner()
+        acquire = getattr(owner, "acquire_frozen_pair_lease", None)
+        if acquire is None:
+            return None
+        leases: list[Any] = []
+        try:
+            for target_id, paths in modified_paths.items():
+                if not paths:
+                    continue
+                lease = acquire(
+                    BatchEndpointPayload(
+                        endpoint_id=run.source_endpoint_id,
+                        revision=run.source_revision,
+                    ),
+                    BatchEndpointPayload(
+                        endpoint_id=target_id,
+                        revision=run.target_revisions[target_id],
+                    ),
+                    lease_id=f"m4:{run.run_id}:{target_id}",
+                )
+                if lease is None:
+                    self._release_lease_bundle(
+                        _DatasetLeaseBundle(tuple(leases))
+                    )
+                    return None
+                leases.append(lease)
+        except Exception:
+            self._release_lease_bundle(
+                _DatasetLeaseBundle(tuple(leases))
+            )
+            return None
+        return _DatasetLeaseBundle(tuple(leases)) if leases else None
+
+    def _rebuild_active_dataset(
+        self, run, modified_paths: Mapping[str, Sequence[str]]
+    ) -> _DatasetLeaseBundle | None:
+        records = self._records()
+        endpoint_snapshots = {
+            run.source_endpoint_id: self._endpoint_snapshot(
+                run.source_endpoint_id, run.source_revision, records
+            ),
+            **{
+                target: self._endpoint_snapshot(
+                    target, revision, records
+                )
+                for target, revision in run.target_revisions.items()
+            },
+        }
+        failures = self._cache_table_datasets(
+            run, endpoint_snapshots
+        )
+        if failures:
+            raise WorkbookCompareError(
+                "DIFF_DATASET_READ_FAILED",
+                "无法恢复 M4 冻结 Excel 数据集",
+                status_code=500,
+            )
+        return self._prepare_dataset_pairs(run, modified_paths)
+
+    def _ensure_dataset_lease(self, run_id: str) -> bool:
+        if self.dataset_preparer is None:
+            return True
+        with self._dataset_lease_lock:
+            if run_id in self._dataset_leases:
+                return True
+        try:
+            run = self.run_store.get_run(run_id)
+            if run.status in TERMINAL_RUN_STATUSES:
+                return False
+            modified_paths = self._pending_modified_paths(run)
+            if not any(modified_paths.values()):
+                return True
+            bundle = self._acquire_ready_dataset_bundle(
+                run, modified_paths
+            )
+            if bundle is None:
+                bundle = self._rebuild_active_dataset(
+                    run, modified_paths
+                )
+            if bundle is None:
+                raise WorkbookCompareError(
+                    "DIFF_DATASET_READ_FAILED",
+                    "无法恢复 M4 冻结数据集",
+                    status_code=500,
+                )
+            self._register_dataset_lease(run_id, bundle)
+            return True
+        except Exception as exc:
+            logger.exception(
+                "M4 Frozen dataset restore failed run_id=%s", run_id
+            )
+            code = (
+                exc.code
+                if isinstance(exc, (WorkbookCompareError, SVNProviderError))
+                else "DIFF_PLAN_DATASET_RESTORE_FAILED"
+            )
+            message = (
+                exc.message
+                if isinstance(exc, (WorkbookCompareError, SVNProviderError))
+                else "无法恢复计划运行的冻结数据集"
+            )
+            self.run_store.fail_active_run(
+                run_id,
+                {"code": code, "message": message, "retryable": True},
+            )
+            return False
 
     def _prepare(self, raw: dict[str, Any]) -> None:
         run_id = raw["run_id"]
+        dataset_bundle: _DatasetLeaseBundle | None = None
         try:
             run = self.run_store.get_run(run_id)
             records = self._records()
+            enumerate_started = time.perf_counter_ns()
             endpoint_snapshots = {
                 run.source_endpoint_id: self._endpoint_snapshot(run.source_endpoint_id, run.source_revision, records),
                 **{
@@ -248,25 +715,79 @@ class DiffPlanRunService:
                     for target, revision in run.target_revisions.items()
                 },
             }
-            hash_cache: dict[tuple[str, str], tuple[bool, str | None, dict[str, Any] | None]] = {}
+            _emit_m4_phase(
+                run_id,
+                "enumerate_dataset",
+                time.perf_counter_ns() - enumerate_started,
+                {"endpoint_count": len(endpoint_snapshots)},
+            )
+            table_failures = (
+                self._cache_table_datasets(run, endpoint_snapshots)
+                if self.dataset_preparer is not None
+                else {}
+            )
+            hash_cache: dict[
+                tuple[str, str],
+                tuple[bool, str | None, dict[str, Any] | None],
+            ] = {}
 
             def side(endpoint_id: str, workbook_path: str):
                 key = (endpoint_id, workbook_path.casefold())
                 if key in hash_cache:
                     return hash_cache[key]
                 snapshot = endpoint_snapshots[endpoint_id]
-                physical = snapshot.files.get(workbook_path.casefold())
-                if physical is None:
+                entry = snapshot.files.get(workbook_path.casefold())
+                if entry is None:
                     value = (False, None, None)
+                elif key in table_failures:
+                    value = (True, None, table_failures[key])
                 else:
                     try:
-                        content = self.provider.read_bytes(snapshot.endpoint, physical)
-                        value = (True, hashlib.sha256(content).hexdigest(), None)
+                        if self.dataset_preparer is None:
+                            content = self.provider.read_bytes(
+                                snapshot.endpoint, entry.path
+                            )
+                        else:
+                            lookup = (
+                                self.snapshot_service
+                                .lookup_cached_snapshot_file(
+                                    snapshot.record,
+                                    int(snapshot.endpoint.revision),
+                                    snapshot.table_path,
+                                    entry.path,
+                                )
+                            )
+                            if (
+                                lookup.state is not FrozenFileState.PRESENT
+                                or lookup.cached is None
+                            ):
+                                raise WorkbookCompareError(
+                                    "DIFF_DATASET_READ_FAILED",
+                                    "M4 Excel 数据集未完整发布",
+                                    status_code=500,
+                                )
+                            content = lookup.cached.raw
+                        value = (
+                            True,
+                            hashlib.sha256(content).hexdigest(),
+                            None,
+                        )
                     except SVNProviderError as exc:
-                        value = (True, None, {"code": exc.code, "message": exc.message, "retryable": True})
+                        value = (
+                            True,
+                            None,
+                            {
+                                "code": exc.code,
+                                "message": exc.message,
+                                "retryable": True,
+                            },
+                        )
                 hash_cache[key] = value
                 return value
 
+            modified_paths: dict[str, list[str]] = {
+                target_id: [] for target_id in run.target_revisions
+            }
             for item in run.items:
                 source_exists, source_hash, source_error = side(run.source_endpoint_id, item.workbook_path)
                 target_exists, target_hash, target_error = side(item.target_endpoint_id, item.workbook_path)
@@ -283,16 +804,50 @@ class DiffPlanRunService:
                     status, candidate = "identical", "identical"
                 else:
                     status, candidate = "queued", "modified"
+                    modified_paths[item.target_endpoint_id].append(
+                        item.workbook_path
+                    )
                 self.run_store.update_candidate(
                     str(item.item_id), status=status, candidate_status=candidate,
                     source_exists=source_exists, target_exists=target_exists,
                     source_sha256=source_hash, target_sha256=target_hash, error=error,
                 )
+            dataset_bundle = self._prepare_dataset_pairs(
+                run, modified_paths
+            )
+            if dataset_bundle is not None:
+                self._register_dataset_lease(run_id, dataset_bundle)
+                dataset_bundle = None
             self.run_store.finish_preparation(run_id)
+            self._release_terminal_dataset_leases()
         except Exception as exc:
+            self._release_lease_bundle(dataset_bundle)
+            self._release_dataset_lease(run_id)
             logger.exception("M4 运行准备失败 run_id=%s", run_id)
-            code = exc.code if isinstance(exc, (DiffPlanError, SVNProviderError)) else "DIFF_PLAN_PREPARATION_FAILED"
-            message = exc.message if isinstance(exc, (DiffPlanError, SVNProviderError)) else "计划运行准备失败"
+            code = (
+                exc.code
+                if isinstance(
+                    exc,
+                    (
+                        DiffPlanError,
+                        SVNProviderError,
+                        WorkbookCompareError,
+                    ),
+                )
+                else "DIFF_PLAN_PREPARATION_FAILED"
+            )
+            message = (
+                exc.message
+                if isinstance(
+                    exc,
+                    (
+                        DiffPlanError,
+                        SVNProviderError,
+                        WorkbookCompareError,
+                    ),
+                )
+                else "计划运行准备失败"
+            )
             self.run_store.finish_preparation(run_id, {"code": code, "message": message, "retryable": True})
 
     def _execute(self, claim: dict[str, Any]) -> None:
@@ -386,17 +941,26 @@ class DiffPlanRunService:
                 if running.execution_lease is not None:
                     running.execution_lease.renew()
                 running.last_heartbeat = now
+        self._release_terminal_dataset_leases()
 
     def _claim_scheduled_item(
         self,
     ) -> tuple[dict[str, Any] | None, WorkbookExecutionLease | None]:
-        if self.execution_scheduler is None:
-            return self.run_store.claim_item(), None
         run_ids = self.run_store.runnable_run_ids()
+        if self.execution_scheduler is None:
+            for run_id in run_ids:
+                if not self._ensure_dataset_lease(run_id):
+                    continue
+                claim = self.run_store.claim_item(run_id)
+                if claim is not None:
+                    return claim, None
+            return None, None
         self.execution_scheduler.sync_demands(
             "m4", [f"m4:{run_id}" for run_id in run_ids]
         )
         for run_id in run_ids:
+            if not self._ensure_dataset_lease(run_id):
+                continue
             lease = self.execution_scheduler.try_acquire(f"m4:{run_id}")
             if lease is None:
                 continue
@@ -411,9 +975,15 @@ class DiffPlanRunService:
         claim: dict[str, Any],
         execution_lease: WorkbookExecutionLease | None,
     ) -> None:
+        started = time.perf_counter_ns()
         try:
             self._execute(claim)
         finally:
+            _emit_m4_phase(
+                claim["run_id"],
+                "compare_items",
+                time.perf_counter_ns() - started,
+            )
             if execution_lease is not None:
                 execution_lease.release()
     def _cleanup_expired_results(self) -> None:
