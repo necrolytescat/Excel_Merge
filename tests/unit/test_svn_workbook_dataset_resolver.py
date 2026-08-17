@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.main import create_app
+from app.schemas.batch import BatchEndpointPayload
 from app.services.workbook_diff_service import DatasetLayout, WorkbookDiffService
 from core.svn_provider import (
     MockSVNProvider,
@@ -693,3 +694,95 @@ def test_diff_materialization_reuses_persisted_snapshot_workbook_bytes(tmp_path)
     assert app.state.snapshot_service.snapshot_reuse_metrics()[
         "disk_byte_hits"
     ] >= 2
+
+
+@pytest.mark.parametrize("missing_csv", [False, True])
+def test_frozen_dataset_item_stage_uses_no_svn_content_or_tree_calls(
+    tmp_path, missing_csv
+):
+    fixture = _atlas_fixture()
+    if missing_csv:
+        missing_path = next(
+            path for path in fixture["content"] if path.startswith("left/TaBlEcSv/")
+        )
+        fixture["content"].pop(missing_path)
+        fixture["tree"] = [
+            item for item in fixture["tree"] if item["path"] != missing_path
+        ]
+    class PersistentProvider(CountingProvider):
+        def info(self, endpoint):
+            self.info_calls.append((endpoint.url, endpoint.revision))
+            return MockSVNProvider.info(self, endpoint)
+
+    provider = PersistentProvider(fixture)
+    config = {
+        "dataset_layout": deepcopy(CONFIG["dataset_layout"]),
+        "svn": {
+            "provider": "mock",
+            "allowed_schemes": ["mock"],
+            "endpoint_registry": _endpoint_records(),
+        },
+        "snapshot_reuse": {
+            "frozen_dataset_enabled": True,
+            "cross_branch_csv_reuse_enabled": False,
+            "bulk_export_enabled": False,
+            "persistent_cache": {
+                "enabled": True,
+                "directory": str(tmp_path / "snapshot-cache"),
+            },
+        },
+        "batch_diff": {
+            "state_directory": str(tmp_path / "batch-state"),
+        },
+        "diff_plan": {
+            "database_path": str(tmp_path / "m4" / "diff-plan.sqlite3"),
+        },
+    }
+    app = create_app(config=config, provider=provider)
+    resolver = app.state.batch_diff_service.candidate_resolver
+    candidates = resolver.prepare(
+        BatchEndpointPayload(
+            endpoint_id=SOURCE_ENDPOINT_ID,
+            revision=SOURCE_REVISION,
+        ),
+        BatchEndpointPayload(
+            endpoint_id=TARGET_ENDPOINT_ID,
+            revision=TARGET_REVISION,
+        ),
+    )
+    assert [(item.path, item.status) for item in candidates] == [
+        (WORKBOOK_NAME, "modified")
+    ]
+    phase_events = []
+    app.state.workbook_dataset_resolver.prepare_frozen_pair(
+        BatchEndpointPayload(
+            endpoint_id=SOURCE_ENDPOINT_ID,
+            revision=SOURCE_REVISION,
+        ),
+        BatchEndpointPayload(
+            endpoint_id=TARGET_ENDPOINT_ID,
+            revision=TARGET_REVISION,
+        ),
+        candidates,
+        phase_sink=lambda phase, wall_ns, metrics: phase_events.append(
+            (phase, wall_ns, metrics)
+        ),
+    )
+    phase_names = {phase for phase, _, _ in phase_events}
+    assert {
+        "parse_manifests",
+        "enumerate_dataset",
+        "reuse_evidence",
+        "fetch_dataset",
+        "publish_dataset",
+    } <= phase_names
+    assert all(wall_ns >= 0 for _, wall_ns, _ in phase_events)
+
+    provider.read_calls.clear()
+    provider.list_tree_calls.clear()
+    provider.list_children_calls.clear()
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/diff/workbooks/compare",
+            json=_request_payload(),
+        )

@@ -30,6 +30,7 @@ TERMINAL_ITEM_STATUSES = {
     "both_missing", "read_failed", "business_failed", "orchestration_failed", "cancelled",
 }
 RETRYABLE_ITEM_STATUSES = {"read_failed", "business_failed", "orchestration_failed", "cancelled"}
+ITEM_LEASE_SECONDS = 60
 
 
 def _future(days: int) -> str:
@@ -109,6 +110,10 @@ class DiffPlanRunStore:
                         workbook_path TEXT NOT NULL,
                         target_endpoint_id TEXT NOT NULL,
                         status TEXT NOT NULL,
+                        lease_token TEXT,
+                        lease_expires_at TEXT,
+                        attempt_count INTEGER NOT NULL DEFAULT 0,
+                        recovery_count INTEGER NOT NULL DEFAULT 0,
                         candidate_status TEXT,
                         source_exists INTEGER,
                         target_exists INTEGER,
@@ -137,6 +142,23 @@ class DiffPlanRunStore:
                     );
                     """
                 )
+                item_columns = {
+                    str(row[1])
+                    for row in connection.execute(
+                        "PRAGMA table_info(diff_plan_run_items)"
+                    ).fetchall()
+                }
+                migrations = {
+                    "lease_token": "TEXT",
+                    "lease_expires_at": "TEXT",
+                    "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+                    "recovery_count": "INTEGER NOT NULL DEFAULT 0",
+                }
+                for column, definition in migrations.items():
+                    if column not in item_columns:
+                        connection.execute(
+                            f"ALTER TABLE diff_plan_run_items ADD COLUMN {column} {definition}"
+                        )
                 connection.commit()
             finally:
                 connection.close()
@@ -329,44 +351,170 @@ class DiffPlanRunStore:
                 connection.execute("UPDATE diff_plan_runs SET status='running',updated_at=? WHERE run_id=?", (now, run_id))
                 self._finalize(connection, run_id)
 
-    def claim_item(self) -> dict[str, Any] | None:
+    def runnable_run_ids(self) -> list[str]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT r.run_id
+                FROM diff_plan_runs r
+                JOIN diff_plan_run_items i ON i.run_id=r.run_id
+                WHERE r.status='running' AND r.cancel_requested_at IS NULL
+                  AND i.status='queued'
+                ORDER BY r.created_at, r.run_id
+                """
+            ).fetchall()
+        return [str(row["run_id"]) for row in rows]
+
+    def claim_item(self, run_id: str | None = None) -> dict[str, Any] | None:
         now = _now()
+        lease_expires = (
+            datetime.now(timezone.utc) + timedelta(seconds=ITEM_LEASE_SECONDS)
+        ).isoformat(timespec="microseconds").replace("+00:00", "Z")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                """SELECT i.*,r.source_endpoint_id,r.source_revision,r.target_revisions_json
-                   FROM diff_plan_run_items i JOIN diff_plan_runs r ON r.run_id=i.run_id
-                   WHERE i.status='queued' AND r.status='running' ORDER BY r.created_at,i.ordinal LIMIT 1"""
+                """
+                SELECT i.*,r.source_endpoint_id,r.source_revision,r.target_revisions_json
+                FROM diff_plan_run_items i
+                JOIN diff_plan_runs r ON r.run_id=i.run_id
+                WHERE i.status='queued' AND r.status='running'
+                  AND r.cancel_requested_at IS NULL
+                  AND (? IS NULL OR i.run_id=?)
+                ORDER BY r.created_at,i.ordinal
+                LIMIT 1
+                """,
+                (run_id, run_id),
             ).fetchone()
             if row is None:
                 return None
-            updated = connection.execute("UPDATE diff_plan_run_items SET status='running',started_at=?,updated_at=? WHERE item_id=? AND status='queued'", (now, now, row["item_id"]))
-            return dict(row) if updated.rowcount else None
+            token = secrets.token_urlsafe(24)
+            updated = connection.execute(
+                """
+                UPDATE diff_plan_run_items
+                SET status='running', lease_token=?, lease_expires_at=?,
+                    attempt_count=attempt_count+1,
+                    started_at=COALESCE(started_at, ?), updated_at=?
+                WHERE item_id=? AND status='queued'
+                """,
+                (token, lease_expires, now, now, row["item_id"]),
+            )
+            if not updated.rowcount:
+                return None
+            result = dict(row)
+            result["lease_token"] = token
+            result["lease_expires_at"] = lease_expires
+            return result
 
-    def complete_item(self, item_id: str, *, status: str, diff_status: str | None = None,
-                      diff_error_count: int = 0, result: dict[str, Any] | None = None,
-                      error: dict[str, Any] | None = None) -> bool:
+    def renew_lease(self, item_id: str, lease_token: str) -> bool:
+        now = _now()
+        lease_expires = (
+            datetime.now(timezone.utc) + timedelta(seconds=ITEM_LEASE_SECONDS)
+        ).isoformat(timespec="microseconds").replace("+00:00", "Z")
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE diff_plan_run_items
+                SET lease_expires_at=?, updated_at=?
+                WHERE item_id=? AND status='running' AND lease_token=?
+                """,
+                (lease_expires, now, item_id, lease_token),
+            )
+            return bool(updated.rowcount)
+    def complete_item(
+        self,
+        item_id: str,
+        *,
+        lease_token: str,
+        status: str,
+        diff_status: str | None = None,
+        diff_error_count: int = 0,
+        result: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> bool:
         now = _now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT i.*,r.cancel_requested_at FROM diff_plan_run_items i JOIN diff_plan_runs r ON r.run_id=i.run_id WHERE i.item_id=?",
-                (item_id,),
+                """
+                SELECT i.*,r.cancel_requested_at
+                FROM diff_plan_run_items i
+                JOIN diff_plan_runs r ON r.run_id=i.run_id
+                WHERE i.item_id=? AND i.status='running' AND i.lease_token=?
+                """,
+                (item_id, lease_token),
             ).fetchone()
-            if row is None or row["status"] != "running":
+            if row is None:
                 return False
             actual = "cancelled" if row["cancel_requested_at"] else status
-            connection.execute(
-                """UPDATE diff_plan_run_items SET status=?,diff_status=?,diff_error_count=?,result_ref=?,result_path=?,
-                   error_json=?,finished_at=?,updated_at=? WHERE item_id=?""",
-                (actual, diff_status if actual != "cancelled" else None, diff_error_count if actual != "cancelled" else 0,
-                 result.get("result_ref") if result and actual != "cancelled" else None,
-                 result.get("result_path") if result and actual != "cancelled" else None,
-                 _canonical(error) if error and actual != "cancelled" else None, now, now, item_id),
+            updated = connection.execute(
+                """
+                UPDATE diff_plan_run_items
+                SET status=?,diff_status=?,diff_error_count=?,result_ref=?,result_path=?,
+                    error_json=?,finished_at=?,updated_at=?,lease_token=NULL,
+                    lease_expires_at=NULL
+                WHERE item_id=? AND status='running' AND lease_token=?
+                """,
+                (
+                    actual,
+                    diff_status if actual != "cancelled" else None,
+                    diff_error_count if actual != "cancelled" else 0,
+                    result.get("result_ref") if result and actual != "cancelled" else None,
+                    result.get("result_path") if result and actual != "cancelled" else None,
+                    _canonical(error) if error and actual != "cancelled" else None,
+                    now,
+                    now,
+                    item_id,
+                    lease_token,
+                ),
             )
+            if not updated.rowcount:
+                return False
             self._finalize(connection, row["run_id"])
             return actual == status
 
+    def recover_expired_leases(self) -> None:
+        now = _now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            expired = connection.execute(
+                """
+                SELECT item_id,run_id,recovery_count
+                FROM diff_plan_run_items
+                WHERE status='running'
+                  AND (lease_expires_at IS NULL OR lease_expires_at<=?)
+                """,
+                (now,),
+            ).fetchall()
+            touched_runs: set[str] = set()
+            for row in expired:
+                touched_runs.add(str(row["run_id"]))
+                if int(row["recovery_count"] or 0) < 1:
+                    connection.execute(
+                        """
+                        UPDATE diff_plan_run_items
+                        SET status='queued',lease_token=NULL,lease_expires_at=NULL,
+                            recovery_count=recovery_count+1,updated_at=?
+                        WHERE item_id=? AND status='running'
+                        """,
+                        (now, row["item_id"]),
+                    )
+                else:
+                    error = _canonical({
+                        "code": "DIFF_PLAN_ITEM_RECOVERY_EXHAUSTED",
+                        "message": "单工作簿执行恢复次数已用尽",
+                        "retryable": True,
+                    })
+                    connection.execute(
+                        """
+                        UPDATE diff_plan_run_items
+                        SET status='orchestration_failed',error_json=?,finished_at=?,
+                            updated_at=?,lease_token=NULL,lease_expires_at=NULL
+                        WHERE item_id=? AND status='running'
+                        """,
+                        (error, now, now, row["item_id"]),
+                    )
+            for run_id in touched_runs:
+                self._finalize(connection, run_id)
     def _finalize(self, connection: sqlite3.Connection, run_id: str) -> None:
         run = connection.execute("SELECT * FROM diff_plan_runs WHERE run_id=?", (run_id,)).fetchone()
         pending = connection.execute("SELECT COUNT(*) FROM diff_plan_run_items WHERE run_id=? AND status NOT IN (%s)" % ",".join("?" * len(TERMINAL_ITEM_STATUSES)), (run_id, *TERMINAL_ITEM_STATUSES)).fetchone()[0]
@@ -495,13 +643,26 @@ class DiffPlanRunStore:
         now = _now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            connection.execute("UPDATE diff_plan_runs SET status='queued',updated_at=? WHERE status='preparing'", (now,))
-            connection.execute("UPDATE diff_plan_run_items SET status='queued',started_at=NULL,updated_at=? WHERE status='running'", (now,))
-            connection.execute("UPDATE diff_plan_runs SET status='running',updated_at=? WHERE status='running'", (now,))
-            cancelling = connection.execute("SELECT run_id FROM diff_plan_runs WHERE status='cancelling'").fetchall()
+            connection.execute(
+                "UPDATE diff_plan_runs SET status='queued',updated_at=? WHERE status='preparing'",
+                (now,),
+            )
+            cancelling = connection.execute(
+                "SELECT run_id FROM diff_plan_runs WHERE status='cancelling'"
+            ).fetchall()
             for row in cancelling:
-                connection.execute("UPDATE diff_plan_run_items SET status='cancelled',finished_at=?,updated_at=? WHERE run_id=? AND status IN ('queued','running')", (now, now, row["run_id"]))
+                connection.execute(
+                    """
+                    UPDATE diff_plan_run_items
+                    SET status='cancelled',finished_at=?,updated_at=?
+                    WHERE run_id=? AND status='queued'
+                    """,
+                    (now, now, row["run_id"]),
+                )
                 self._finalize(connection, row["run_id"])
-            active = connection.execute("SELECT run_id FROM diff_plan_runs WHERE status='running'").fetchall()
+            active = connection.execute(
+                "SELECT run_id FROM diff_plan_runs WHERE status='running'"
+            ).fetchall()
             for row in active:
                 self._finalize(connection, row["run_id"])
+        self.recover_expired_leases()

@@ -31,6 +31,10 @@ from app.services.diff_plan_run_store import (
 from app.services.diff_plan_store import DiffPlanError, DiffPlanStore, _hash
 from app.services.snapshot_service import SnapshotService
 from app.services.workbook_dataset_service import WorkbookCompareError
+from app.services.workbook_execution_scheduler import (
+    PersistentWorkbookExecutionScheduler,
+    WorkbookExecutionLease,
+)
 from core.models import EndpointSpec
 from core.svn_provider import SVNProvider, SVNProviderError, normalize_relative_path
 
@@ -45,6 +49,14 @@ class _EndpointSnapshot:
     files: dict[str, str]
 
 
+@dataclass
+class _RunningPlanItem:
+    item_id: str
+    lease_token: str
+    execution_lease: WorkbookExecutionLease | None
+    last_heartbeat: float
+
+
 class DiffPlanRunService:
     def __init__(
         self,
@@ -56,6 +68,9 @@ class DiffPlanRunService:
         endpoint_registry,
         workbook_runner: DefaultBatchWorkbookRunner,
         poll_interval_seconds: float = 0.1,
+        execution_scheduler: PersistentWorkbookExecutionScheduler | None = None,
+        item_concurrency: int = 2,
+        heartbeat_seconds: float = 20.0,
         cleanup_interval_seconds: float = 3600,
     ):
         self.plan_store = plan_store
@@ -66,15 +81,20 @@ class DiffPlanRunService:
         self.workbook_runner = workbook_runner
         self.poll_interval_seconds = max(0.02, float(poll_interval_seconds))
         self.cleanup_interval_seconds = max(60, float(cleanup_interval_seconds))
+        self.execution_scheduler = execution_scheduler
+        self.item_concurrency = max(1, int(item_concurrency))
+        self.heartbeat_seconds = max(0.05, float(heartbeat_seconds))
         self._next_cleanup_at = 0.0
         self._stop = Event()
         self._start_lock = Lock()
         self._started = False
         self._scheduler: Thread | None = None
         self._preparation_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="m4-plan-prepare")
-        self._item_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="m4-plan-item")
+        self._item_executor = ThreadPoolExecutor(
+            max_workers=self.item_concurrency, thread_name_prefix="m4-plan-item"
+        )
         self._preparations: dict[Future, str] = {}
-        self._items: dict[Future, str] = {}
+        self._items: dict[Future, _RunningPlanItem] = {}
 
     def start(self) -> None:
         if self._started:
@@ -277,12 +297,21 @@ class DiffPlanRunService:
 
     def _execute(self, claim: dict[str, Any]) -> None:
         item_id = claim["item_id"]
+        lease_token = claim["lease_token"]
         result_path = None
         try:
             revisions = json.loads(claim["target_revisions_json"])
-            source = BatchEndpointPayload(endpoint_id=claim["source_endpoint_id"], revision=claim["source_revision"])
-            target = BatchEndpointPayload(endpoint_id=claim["target_endpoint_id"], revision=revisions[claim["target_endpoint_id"]])
-            content = self.workbook_runner.run(source, target, claim["workbook_path"])
+            source = BatchEndpointPayload(
+                endpoint_id=claim["source_endpoint_id"],
+                revision=claim["source_revision"],
+            )
+            target = BatchEndpointPayload(
+                endpoint_id=claim["target_endpoint_id"],
+                revision=revisions[claim["target_endpoint_id"]],
+            )
+            content = self.workbook_runner.run(
+                source, target, claim["workbook_path"]
+            )
             parsed = DiffResultPayload.model_validate_json(content)
             result = self.run_store.write_result(claim["run_id"], item_id, content)
             result_path = result["result_path"]
@@ -293,8 +322,12 @@ class DiffPlanRunService:
             else:
                 status = "business_failed"
             committed = self.run_store.complete_item(
-                item_id, status=status, diff_status=parsed.workbook.status,
-                diff_error_count=parsed.summary.error_count, result=result,
+                item_id,
+                lease_token=lease_token,
+                status=status,
+                diff_status=parsed.workbook.status,
+                diff_error_count=parsed.summary.error_count,
+                result=result,
                 error=None if status != "business_failed" else {
                     "code": "M2_DIFF_" + parsed.workbook.status.upper(),
                     "message": "工作簿包含业务解析错误，详细原因已保留",
@@ -304,14 +337,29 @@ class DiffPlanRunService:
             if not committed:
                 self.run_store.remove_result(result_path)
         except WorkbookCompareError as exc:
-            self.run_store.complete_item(item_id, status="read_failed", error={"code": exc.code, "message": exc.message, "retryable": True})
+            self.run_store.complete_item(
+                item_id,
+                lease_token=lease_token,
+                status="read_failed",
+                error={
+                    "code": exc.code,
+                    "message": exc.message,
+                    "retryable": True,
+                },
+            )
         except Exception:
             logger.exception("M4 单工作簿执行失败 item_id=%s", item_id)
             self.run_store.remove_result(result_path)
-            self.run_store.complete_item(item_id, status="orchestration_failed", error={
-                "code": "DIFF_PLAN_ITEM_UNEXPECTED", "message": "单工作簿运行编排失败", "retryable": True,
-            })
-
+            self.run_store.complete_item(
+                item_id,
+                lease_token=lease_token,
+                status="orchestration_failed",
+                error={
+                    "code": "DIFF_PLAN_ITEM_UNEXPECTED",
+                    "message": "单工作簿运行编排失败",
+                    "retryable": True,
+                },
+            )
     def _harvest(self) -> None:
         for future, run_id in list(self._preparations.items()):
             if future.done():
@@ -320,14 +368,54 @@ class DiffPlanRunService:
                     future.result()
                 except Exception:
                     logger.exception("M4 准备 Worker 异常 run_id=%s", run_id)
-        for future, item_id in list(self._items.items()):
+        now = time.monotonic()
+        for future, running in list(self._items.items()):
             if future.done():
                 self._items.pop(future, None)
                 try:
                     future.result()
                 except Exception:
-                    logger.exception("M4 执行 Worker 异常 item_id=%s", item_id)
+                    logger.exception(
+                        "M4 执行 Worker 异常 item_id=%s", running.item_id
+                    )
+                continue
+            if now - running.last_heartbeat >= self.heartbeat_seconds:
+                self.run_store.renew_lease(
+                    running.item_id, running.lease_token
+                )
+                if running.execution_lease is not None:
+                    running.execution_lease.renew()
+                running.last_heartbeat = now
 
+    def _claim_scheduled_item(
+        self,
+    ) -> tuple[dict[str, Any] | None, WorkbookExecutionLease | None]:
+        if self.execution_scheduler is None:
+            return self.run_store.claim_item(), None
+        run_ids = self.run_store.runnable_run_ids()
+        self.execution_scheduler.sync_demands(
+            "m4", [f"m4:{run_id}" for run_id in run_ids]
+        )
+        for run_id in run_ids:
+            lease = self.execution_scheduler.try_acquire(f"m4:{run_id}")
+            if lease is None:
+                continue
+            claim = self.run_store.claim_item(run_id)
+            if claim is not None:
+                return claim, lease
+            lease.release()
+        return None, None
+
+    def _execute_in_slot(
+        self,
+        claim: dict[str, Any],
+        execution_lease: WorkbookExecutionLease | None,
+    ) -> None:
+        try:
+            self._execute(claim)
+        finally:
+            if execution_lease is not None:
+                execution_lease.release()
     def _cleanup_expired_results(self) -> None:
         self._next_cleanup_at = time.monotonic() + self.cleanup_interval_seconds
         try:
@@ -356,12 +444,22 @@ class DiffPlanRunService:
                     if raw:
                         future = self._preparation_executor.submit(self._prepare, raw)
                         self._preparations[future] = raw["run_id"]
-                while len(self._items) < 2:
-                    claim = self.run_store.claim_item()
+                self.run_store.recover_expired_leases()
+                while len(self._items) < self.item_concurrency:
+                    claim, execution_lease = self._claim_scheduled_item()
                     if not claim:
                         break
-                    future = self._item_executor.submit(self._execute, claim)
-                    self._items[future] = claim["item_id"]
+                    future = self._item_executor.submit(
+                        self._execute_in_slot,
+                        claim,
+                        execution_lease,
+                    )
+                    self._items[future] = _RunningPlanItem(
+                        item_id=claim["item_id"],
+                        lease_token=claim["lease_token"],
+                        execution_lease=execution_lease,
+                        last_heartbeat=time.monotonic(),
+                    )
             except Exception:
                 logger.exception("M4 调度循环异常")
             self._stop.wait(self.poll_interval_seconds)

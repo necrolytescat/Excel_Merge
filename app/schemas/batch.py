@@ -195,8 +195,8 @@ class BatchCandidateSourcePayload(StrictBatchPayload):
 
 
 class BatchExecutionPolicyPayload(StrictBatchPayload):
-    global_concurrency: Literal[2] = 2
-    per_task_concurrency: Literal[1] = 1
+    global_concurrency: int = Field(default=2, ge=1, le=64, strict=True)
+    per_task_concurrency: int = Field(default=1, ge=1, le=64, strict=True)
     item_timeout_seconds: Literal[600] = 600
     automatic_retry_attempts: Literal[0] = 0
     max_recovery_attempts: Literal[1] = 1

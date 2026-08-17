@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import timedelta
 import hashlib
 import json
+import logging
 from pathlib import Path
 from threading import Event, Lock
 import time
@@ -36,6 +37,10 @@ from app.services.batch_diff_service import (
 )
 from app.services.batch_store import BatchDiffError, BatchStore, isoformat, utc_now
 from app.services.snapshot_service import SnapshotService
+from app.services.workbook_execution_gate import WorkbookExecutionGate
+from app.services.workbook_execution_scheduler import (
+    PersistentWorkbookExecutionScheduler,
+)
 from core.svn_provider import MockSVNProvider
 
 
@@ -131,6 +136,30 @@ class StaticResolver:
     def prepare(self, source, target):
         self.prepare_calls.append((source, target))
         return list(self.candidates)
+
+
+class LeaseResolver(StaticResolver):
+    def __init__(self, candidates, *, restore_succeeds=True):
+        super().__init__(candidates)
+        self.restore_succeeds = restore_succeeds
+        self.restore_calls = []
+        self.released = []
+
+    def prepare_for_task(self, task_id, source, target, *, fresh=False):
+        self.prepare_calls.append((source, target, fresh))
+        return list(self.candidates), {"lease_id": f"m2:{task_id}"}
+
+    def restore_dataset_lease(
+        self, task_id, source, target, candidates
+    ):
+        self.restore_calls.append((task_id, source, target, list(candidates)))
+        if not self.restore_succeeds:
+            return None
+        return {"lease_id": f"m2:{task_id}"}
+
+    def release_dataset_lease(self, lease):
+        self.released.append(lease)
+        return True
 
 
 class MappingRunner:
@@ -616,6 +645,165 @@ def test_expired_lease_recovers_once_then_fails_and_limits_are_shared(tmp_path):
     assert exhausted.orchestration_error.code == "BATCH_ITEM_RECOVERY_EXHAUSTED"
 
 
+
+def test_task_dataset_lease_is_held_until_running_item_finishes(
+    tmp_path, caplog
+):
+    caplog.set_level(
+        logging.INFO,
+        logger="app.services.batch_diff_service",
+    )
+    resolver = LeaseResolver([candidate("Lease.xlsm", "modified")])
+    runner = BlockingRunner()
+    batch_service = service(tmp_path, resolver, runner)
+    try:
+        initial, _ = batch_service.create_task(create_payload())
+        assert runner.started.wait(timeout=5)
+        assert str(initial.task_id) in batch_service._dataset_leases
+        assert resolver.released == []
+
+        runner.release.set()
+        task = wait_for_task(batch_service, initial.task_id)
+        deadline = time.monotonic() + 2
+        while not resolver.released and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert task.status == "completed"
+        assert resolver.released == [
+            {"lease_id": f"m2:{initial.task_id}"}
+        ]
+        assert str(initial.task_id) not in batch_service._dataset_leases
+        phases = {
+            record.internal_metrics["phase"]
+            for record in caplog.records
+            if getattr(record, "event", None) == "batch.phase_timing"
+        }
+        assert {"compare_items", "finalize"} <= phases
+    finally:
+        runner.release.set()
+        batch_service.close()
+
+
+def test_restart_restores_dataset_lease_before_claiming_item(tmp_path):
+    state_directory = tmp_path / "restore-state"
+    store = BatchStore(state_directory)
+    task_id, _ = store.create_task(
+        request_id=uuid4(),
+        request_hash=uuid4().hex,
+        source=SOURCE,
+        target=TARGET,
+    )
+    store.claim_preparation()
+    store.complete_preparation(
+        task_id,
+        [(candidate("Restore.xlsm", "modified"), None, None)],
+    )
+
+    blocked_resolver = LeaseResolver([], restore_succeeds=False)
+    blocked_runner = MappingRunner(
+        {"Restore.xlsm": WorkbookStatus.MODIFIED}
+    )
+    blocked_service = BatchDiffService(
+        BatchStore(state_directory),
+        blocked_resolver,
+        blocked_runner,
+        poll_interval_seconds=0.02,
+    )
+    blocked_service.start()
+    time.sleep(0.15)
+    assert blocked_resolver.restore_calls
+    assert blocked_runner.calls == []
+    assert blocked_service.get_task(task_id).items[0].status == "queued"
+    blocked_service.close()
+
+    restored_resolver = LeaseResolver([])
+    restored_runner = MappingRunner(
+        {"Restore.xlsm": WorkbookStatus.MODIFIED}
+    )
+    restored_service = BatchDiffService(
+        BatchStore(state_directory),
+        restored_resolver,
+        restored_runner,
+        poll_interval_seconds=0.02,
+    )
+    try:
+        restored_service.start()
+        task = wait_for_task(restored_service, task_id)
+        deadline = time.monotonic() + 2
+        while not restored_resolver.released and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert task.status == "completed"
+        assert len(restored_resolver.restore_calls) == 1
+        assert restored_runner.calls
+        assert restored_resolver.released == [
+            {"lease_id": f"m2:{task_id}"}
+        ]
+    finally:
+        restored_service.close()
+
+
+def test_duplicate_logical_dataset_lease_is_not_released(tmp_path):
+    resolver = LeaseResolver([])
+    batch_service = service(tmp_path, resolver, MappingRunner({}))
+    first = {"lease_id": "m2:duplicate"}
+    duplicate = {"lease_id": "m2:duplicate"}
+    batch_service._register_dataset_lease("duplicate", first)
+    batch_service._register_dataset_lease("duplicate", duplicate)
+    assert resolver.released == []
+    batch_service.close()
+    assert resolver.released == [first]
+
+
+def test_four_way_service_reports_actual_execution_policy(tmp_path):
+    scheduler = PersistentWorkbookExecutionScheduler(
+        tmp_path / "execution.sqlite3",
+        WorkbookExecutionGate(4),
+        global_limit=4,
+        per_flow_limit=4,
+    )
+    batch_service = BatchDiffService(
+        BatchStore(tmp_path / "policy-state"),
+        StaticResolver([]),
+        MappingRunner({}),
+        execution_scheduler=scheduler,
+        item_concurrency=4,
+    )
+    try:
+        task, _ = batch_service.create_task(create_payload())
+        assert task.execution_policy.global_concurrency == 4
+        assert task.execution_policy.per_task_concurrency == 4
+    finally:
+        batch_service.close()
+
+
+def test_one_m2_task_can_claim_four_items_when_four_way_is_enabled(tmp_path):
+    store = BatchStore(tmp_path / "state")
+    task_id, _ = store.create_task(
+        request_id=uuid4(),
+        request_hash=uuid4().hex,
+        source=SOURCE,
+        target=TARGET,
+    )
+    store.claim_preparation()
+    store.complete_preparation(
+        task_id,
+        [
+            (candidate(f"{index}.xlsm", "modified"), None, None)
+            for index in range(5)
+        ],
+    )
+
+    claims = [
+        store.claim_next_item(
+            task_id=task_id,
+            global_limit=4,
+            per_task_limit=4,
+        )
+        for _ in range(4)
+    ]
+    assert all(claim is not None and claim["task_id"] == task_id for claim in claims)
+    assert store.claim_next_item(
+        task_id=task_id, global_limit=4, per_task_limit=4
+    ) is None
 def test_restart_persists_results_and_cleanup_leaves_tombstones(tmp_path):
     state_dir = tmp_path / "state"
     resolver = StaticResolver([candidate("Persist.xlsm", "modified")])

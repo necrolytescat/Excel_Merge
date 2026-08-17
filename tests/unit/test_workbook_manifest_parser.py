@@ -172,6 +172,94 @@ def test_manifest_parser_falls_back_to_ooxml(monkeypatch):
     ]
 
 
+def test_manifest_parser_prefers_ooxml_when_enabled(monkeypatch):
+    calls = []
+    expected = manifest_parser.WorkbookManifest(entries=(), parser="ooxml")
+    monkeypatch.setattr(
+        manifest_parser,
+        "_parse_with_ooxml",
+        lambda raw, **options: calls.append("ooxml") or expected,
+    )
+    monkeypatch.setattr(
+        manifest_parser,
+        "_parse_with_openpyxl",
+        lambda raw, **options: calls.append("openpyxl"),
+    )
+
+    actual = manifest_parser.parse_workbook_manifest(b"fixture", ooxml_first=True)
+
+    assert actual is expected
+    assert calls == ["ooxml"]
+
+
+def test_manifest_parser_ooxml_first_falls_back_to_openpyxl(monkeypatch):
+    calls = []
+    expected = manifest_parser.WorkbookManifest(entries=(), parser="openpyxl")
+
+    def fail_ooxml(raw, **options):
+        calls.append("ooxml")
+        raise ValueError("fixture")
+
+    monkeypatch.setattr(manifest_parser, "_parse_with_ooxml", fail_ooxml)
+    monkeypatch.setattr(
+        manifest_parser,
+        "_parse_with_openpyxl",
+        lambda raw, **options: calls.append("openpyxl") or expected,
+    )
+
+    actual = manifest_parser.parse_workbook_manifest(b"fixture", ooxml_first=True)
+
+    assert actual is expected
+    assert calls == ["ooxml", "openpyxl"]
+
+
+def test_manifest_parser_ooxml_business_error_uses_openpyxl_result(monkeypatch):
+    expected = manifest_parser.WorkbookManifest(entries=(), parser="openpyxl")
+
+    def fail_ooxml(raw, **options):
+        raise M2ProcessingError(
+            "M2_MANIFEST_FIELD_MISSING",
+            "manifest_parse",
+            "fixture",
+        )
+
+    monkeypatch.setattr(manifest_parser, "_parse_with_ooxml", fail_ooxml)
+    monkeypatch.setattr(
+        manifest_parser,
+        "_parse_with_openpyxl",
+        lambda raw, **options: expected,
+    )
+
+    actual = manifest_parser.parse_workbook_manifest(b"fixture", ooxml_first=True)
+
+    assert actual is expected
+
+
+def test_manifest_parser_ooxml_first_preserves_openpyxl_business_error(monkeypatch):
+    monkeypatch.setattr(
+        manifest_parser,
+        "_parse_with_ooxml",
+        lambda raw, **options: (_ for _ in ()).throw(ValueError("fixture")),
+    )
+    monkeypatch.setattr(
+        manifest_parser,
+        "_parse_with_openpyxl",
+        lambda raw, **options: (_ for _ in ()).throw(
+            M2ProcessingError(
+                "M2_MANIFEST_FIELD_MISSING",
+                "manifest_parse",
+                "authoritative",
+            )
+        ),
+    )
+
+    with pytest.raises(M2ProcessingError) as captured:
+        manifest_parser.parse_workbook_manifest(b"fixture", ooxml_first=True)
+
+    assert captured.value.code == "M2_MANIFEST_FIELD_MISSING"
+    assert captured.value.message == "authoritative"
+
+
 @pytest.mark.parametrize("table_ref", ["A1:C2", "1:2"])
 def test_manifest_ooxml_fallback_infers_missing_table_boundaries(table_ref):
     raw = _table_manifest_workbook(

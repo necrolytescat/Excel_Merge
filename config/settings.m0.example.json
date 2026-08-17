@@ -15,12 +15,18 @@
   "batch_diff": {
     "event_retention_days": 90
   },
+  "manifest_parser": {
+    "ooxml_first_enabled": true
+  },
   "snapshot_reuse": {
     "ttl_seconds": 300,
     "max_entries": 8,
     "content_read_workers": 12,
     "bulk_export_enabled": true,
     "bulk_export_min_files": 8,
+    "bulk_export_min_ratio": 0.5,
+    "frozen_dataset_enabled": false,
+    "cross_branch_csv_reuse_enabled": false,
     "persistent_cache": {
       "enabled": true,
       "directory": ".cache/snapshot",
@@ -34,6 +40,13 @@
     "detail_retention_days": 30,
     "workbook_concurrency": 2,
     "cleanup_interval_seconds": 3600
+  },
+  "workbook_execution": {
+    "four_way_enabled": false,
+    "global_slots": 4,
+    "per_task_slots": 4,
+    "lease_seconds": 60,
+    "database_path": "var/workbook-execution/execution.sqlite3"
   },
   "operations": {
     "allow_cache_clear": true,

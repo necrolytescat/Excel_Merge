@@ -11,10 +11,16 @@ class WorkbookExecutionGate:
         self.limit = max(1, int(limit))
         self._semaphore = BoundedSemaphore(self.limit)
 
+    def try_acquire(self) -> bool:
+        return self._semaphore.acquire(blocking=False)
+
+    def release(self) -> None:
+        self._semaphore.release()
+
     @contextmanager
     def acquire(self) -> Iterator[None]:
         self._semaphore.acquire()
         try:
             yield
         finally:
-            self._semaphore.release()
+            self.release()

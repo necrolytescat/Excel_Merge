@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import Enum
 import hashlib
 import json
 import os
@@ -15,7 +16,7 @@ from uuid import uuid4
 
 from app.services.snapshot_phase_timing import SnapshotPhaseTiming
 
-INDEX_SCHEMA_VERSION = 1
+INDEX_SCHEMA_VERSION = 2
 INDEX_FILENAME = "index.v1.json"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -50,6 +51,47 @@ class CachedSnapshotBytes:
     raw: bytes
 
 
+class FrozenFileState(str, Enum):
+    PRESENT = "present"
+    MISSING = "missing"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class FrozenFileLookup:
+    state: FrozenFileState
+    cached: CachedSnapshotBytes | None = None
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class SnapshotTreeIdentity:
+    repository_uuid: str
+    canonical_url: str
+    revision: int
+    table_path: str
+    configuration_sha256: str
+
+    def payload(self) -> dict[str, str | int]:
+        return {
+            "repository_uuid": self.repository_uuid,
+            "canonical_url": self.canonical_url,
+            "revision": self.revision,
+            "table_path": self.table_path,
+            "configuration_sha256": self.configuration_sha256,
+        }
+
+    @property
+    def key(self) -> str:
+        return _hash_json(self.payload())
+
+
+@dataclass(frozen=True)
+class SnapshotTreeLease:
+    lease_id: str
+    tree_keys: tuple[str, ...]
+
+
 @dataclass
 class _CacheFlight:
     event: threading.Event
@@ -65,6 +107,19 @@ def _hash_json(value: object) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
+
+
+def _normalize_tree_path(value: str) -> str:
+    normalized = str(value).replace("\\", "/").strip("/")
+    parts = [part for part in normalized.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise ValueError("invalid frozen tree path")
+    return "/".join(parts)
+
+
+def _paths_sha256(paths: Iterable[str]) -> str:
+    normalized = sorted(paths, key=lambda item: (item.casefold(), item))
+    return _hash_json(normalized)
 
 
 class PersistentSnapshotContentCache:
@@ -90,6 +145,8 @@ class PersistentSnapshotContentCache:
         self._flights: dict[str, _CacheFlight] = {}
         self._facts: dict[str, dict] = {}
         self._trees: dict[str, dict] = {}
+        self._leases: dict[str, tuple[str, ...]] = {}
+        self._pinned_tree_counts: dict[str, int] = {}
         self._startup_fallback: str | None = None
         self._read_only = False
         self._counters: dict[str, int] = {
@@ -103,6 +160,9 @@ class PersistentSnapshotContentCache:
             "persistent_corruptions": 0,
             "persistent_write_failures": 0,
             "persistent_temp_cleanups": 0,
+            "persistent_aliases": 0,
+            "persistent_capacity_deferred": 0,
+            "persistent_complete_trees": 0,
         }
         if not self.enabled:
             return
@@ -145,14 +205,36 @@ class PersistentSnapshotContentCache:
                 self._read_only = True
                 self._startup_fallback = "index_version_newer"
                 return
-            if version != INDEX_SCHEMA_VERSION:
+            if version not in {1, INDEX_SCHEMA_VERSION}:
                 raise ValueError("unsupported snapshot cache index version")
             facts = raw.get("facts")
             trees = raw.get("trees")
             if not isinstance(facts, dict) or not isinstance(trees, dict):
                 raise ValueError("invalid snapshot cache index")
             self._facts = facts
-            self._trees = trees
+            if version == 1:
+                migrated: dict[str, dict] = {}
+                for key, value in trees.items():
+                    if not isinstance(value, dict):
+                        continue
+                    files = value.get("files")
+                    if not isinstance(files, dict):
+                        files = {}
+                    required = sorted(
+                        (str(path) for path in files),
+                        key=lambda item: (item.casefold(), item),
+                    )
+                    migrated[key] = {
+                        **value,
+                        "tree_kind": "legacy",
+                        "complete": False,
+                        "required_paths": required,
+                        "required_paths_sha256": _paths_sha256(required),
+                        "missing_paths": [],
+                    }
+                self._trees = migrated
+            else:
+                self._trees = trees
         except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
             self._facts = {}
             self._trees = {}
@@ -548,6 +630,330 @@ class PersistentSnapshotContentCache:
                 self._flights.pop(identity.key, None)
                 flight.event.set()
 
+    def alias_verified_fact(
+        self,
+        source_identity: SnapshotFileIdentity,
+        target_identity: SnapshotFileIdentity,
+        *,
+        expected_size: int | None = None,
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
+    ) -> CachedSnapshotBytes | None:
+        if not self.enabled or self._read_only:
+            return None
+        with self._locked(timing, side, "persistent.alias"):
+            existing = self._lookup_locked(
+                target_identity, expected_size, timing, side
+            )
+            if existing is not None:
+                return existing
+            source = self._lookup_locked(
+                source_identity, expected_size, timing, side
+            )
+            if source is None:
+                return None
+            now = self._wall_clock_ns()
+            self._facts[target_identity.key] = {
+                "identity": target_identity.payload(),
+                "content_sha256": source.content_sha256,
+                "size_bytes": source.size_bytes,
+                "last_access_ns": now,
+            }
+            self._counters["persistent_aliases"] += 1
+            return CachedSnapshotBytes(
+                fact_key=target_identity.key,
+                content_sha256=source.content_sha256,
+                size_bytes=source.size_bytes,
+                raw=source.raw,
+            )
+
+    @staticmethod
+    def _normalized_paths(values: Iterable[str]) -> set[str]:
+        result: dict[str, str] = {}
+        for value in values:
+            path = _normalize_tree_path(value)
+            folded = path.casefold()
+            previous = result.get(folded)
+            if previous is not None and previous != path:
+                raise ValueError("frozen tree paths are ambiguous")
+            result[folded] = path
+        return set(result.values())
+
+    def commit_complete_tree(
+        self,
+        identity: SnapshotTreeIdentity,
+        *,
+        tree_kind: str,
+        required_paths: Iterable[str],
+        files: Iterable[tuple[str, str]],
+        missing_paths: Iterable[str] = (),
+        timing: SnapshotPhaseTiming | None = None,
+        side: str | None = None,
+    ) -> bool:
+        if not self.enabled or self._read_only:
+            return False
+        if tree_kind not in {"excel", "tablecsv"}:
+            return False
+        try:
+            required = self._normalized_paths(required_paths)
+            missing = self._normalized_paths(missing_paths)
+            file_map: dict[str, str] = {}
+            folded_files: dict[str, str] = {}
+            for raw_path, fact_key in files:
+                path = _normalize_tree_path(raw_path)
+                folded = path.casefold()
+                previous = folded_files.get(folded)
+                if previous is not None and previous != path:
+                    raise ValueError("frozen tree files are ambiguous")
+                if path in file_map and file_map[path] != fact_key:
+                    raise ValueError("frozen tree file has conflicting facts")
+                folded_files[folded] = path
+                file_map[path] = str(fact_key)
+            if set(file_map) & missing:
+                raise ValueError("present and missing paths overlap")
+            if required != set(file_map) | missing:
+                raise ValueError("required paths are not completely partitioned")
+        except (TypeError, ValueError):
+            return False
+
+        now = self._wall_clock_ns()
+        key = identity.key
+        with self._locked(timing, side, "index.complete"):
+            for path, fact_key in file_map.items():
+                fact = self._facts.get(fact_key)
+                if not isinstance(fact, dict):
+                    return False
+                payload = fact.get("identity")
+                if not isinstance(payload, dict):
+                    return False
+                try:
+                    fact_path = _normalize_tree_path(str(payload["relative_path"]))
+                except (KeyError, ValueError):
+                    return False
+                if fact_path != path:
+                    return False
+                record_and_path = self._valid_fact_record(
+                    SnapshotFileIdentity(**payload), fact, None
+                )
+                if record_and_path is None:
+                    return False
+            previous = self._trees.get(key)
+            if isinstance(previous, dict) and bool(previous.get("complete")):
+                if (
+                    previous.get("identity") != identity.payload()
+                    or previous.get("tree_kind") != tree_kind
+                ):
+                    return False
+                previous_files = previous.get("files")
+                previous_missing = previous.get("missing_paths")
+                previous_required = previous.get("required_paths")
+                if not (
+                    isinstance(previous_files, dict)
+                    and isinstance(previous_missing, list)
+                    and isinstance(previous_required, list)
+                ):
+                    return False
+                if any(
+                    path in previous_missing
+                    or (
+                        path in previous_files
+                        and previous_files[path] != fact_key
+                    )
+                    for path, fact_key in file_map.items()
+                ):
+                    return False
+                if any(path in previous_files for path in missing):
+                    return False
+                try:
+                    previous_file_map = {
+                        str(path): str(fact_key)
+                        for path, fact_key in previous_files.items()
+                    }
+                    combined_file_paths = self._normalized_paths(
+                        [*previous_file_map, *file_map]
+                    )
+                    required = self._normalized_paths(
+                        [*previous_required, *required]
+                    )
+                    missing = self._normalized_paths(
+                        [*previous_missing, *missing]
+                    )
+                except (TypeError, ValueError):
+                    return False
+                if (
+                    {path.casefold() for path in combined_file_paths}
+                    & {path.casefold() for path in missing}
+                ):
+                    return False
+                if required != combined_file_paths | missing:
+                    return False
+                file_map = {**previous_file_map, **file_map}
+            self._trees[key] = {
+                "identity": identity.payload(),
+                "tree_kind": tree_kind,
+                "complete": True,
+                "required_paths": sorted(
+                    required, key=lambda item: (item.casefold(), item)
+                ),
+                "required_paths_sha256": _paths_sha256(required),
+                "files": dict(
+                    sorted(
+                        file_map.items(),
+                        key=lambda item: (item[0].casefold(), item[0]),
+                    )
+                ),
+                "missing_paths": sorted(
+                    missing, key=lambda item: (item.casefold(), item)
+                ),
+                "last_access_ns": now,
+            }
+            self._pinned_tree_counts[key] = (
+                self._pinned_tree_counts.get(key, 0) + 1
+            )
+            try:
+                self._prune_locked()
+                self._persist_index_locked(timing=timing, side=side)
+            except Exception:
+                if previous is None:
+                    self._trees.pop(key, None)
+                else:
+                    self._trees[key] = previous
+                self._counters["persistent_write_failures"] += 1
+                return False
+            finally:
+                remaining = self._pinned_tree_counts.get(key, 1) - 1
+                if remaining > 0:
+                    self._pinned_tree_counts[key] = remaining
+                else:
+                    self._pinned_tree_counts.pop(key, None)
+            self._counters["persistent_complete_trees"] += 1
+            return True
+
+    def lookup_tree_file(
+        self,
+        identity: SnapshotTreeIdentity,
+        *,
+        relative_path: str,
+    ) -> FrozenFileLookup:
+        if not self.enabled or self._read_only:
+            return FrozenFileLookup(
+                FrozenFileState.UNAVAILABLE, reason="cache_disabled"
+            )
+        try:
+            path = _normalize_tree_path(relative_path)
+        except ValueError:
+            return FrozenFileLookup(
+                FrozenFileState.UNAVAILABLE, reason="invalid_path"
+            )
+        with self._lock:
+            tree = self._trees.get(identity.key)
+            if not isinstance(tree, dict):
+                return FrozenFileLookup(
+                    FrozenFileState.UNAVAILABLE, reason="tree_unavailable"
+                )
+            files = tree.get("files")
+            if not isinstance(files, dict):
+                return FrozenFileLookup(
+                    FrozenFileState.UNAVAILABLE, reason="tree_invalid"
+                )
+            required = tree.get("required_paths")
+            missing = tree.get("missing_paths")
+            if not isinstance(required, list) or not isinstance(missing, list):
+                return FrozenFileLookup(
+                    FrozenFileState.UNAVAILABLE, reason="tree_invalid"
+                )
+            if path not in files and path not in missing:
+                matches = {
+                    candidate
+                    for candidate in [*files, *missing]
+                    if str(candidate).casefold() == path.casefold()
+                }
+                if len(matches) > 1:
+                    return FrozenFileLookup(
+                        FrozenFileState.UNAVAILABLE, reason="path_ambiguous"
+                    )
+                if len(matches) == 1:
+                    path = matches.pop()
+            fact_key = files.get(path)
+            if isinstance(fact_key, str):
+                fact = self._facts.get(fact_key)
+                payload = fact.get("identity") if isinstance(fact, dict) else None
+                if isinstance(payload, dict):
+                    try:
+                        file_identity = SnapshotFileIdentity(**payload)
+                    except TypeError:
+                        file_identity = None
+                    if file_identity is not None:
+                        cached = self._lookup_locked(
+                            file_identity, None, None, None
+                        )
+                        if cached is not None and cached.fact_key == fact_key:
+                            tree["last_access_ns"] = self._wall_clock_ns()
+                            return FrozenFileLookup(
+                                FrozenFileState.PRESENT, cached=cached
+                            )
+                return FrozenFileLookup(
+                    FrozenFileState.UNAVAILABLE, reason="fact_unavailable"
+                )
+            if not bool(tree.get("complete")):
+                return FrozenFileLookup(
+                    FrozenFileState.UNAVAILABLE, reason="tree_incomplete"
+                )
+            if path in required and path in missing:
+                tree["last_access_ns"] = self._wall_clock_ns()
+                return FrozenFileLookup(FrozenFileState.MISSING)
+            return FrozenFileLookup(
+                FrozenFileState.UNAVAILABLE, reason="path_not_required"
+            )
+
+    def acquire_tree_lease(
+        self,
+        identities: Iterable[SnapshotTreeIdentity],
+        *,
+        lease_id: str | None = None,
+    ) -> SnapshotTreeLease | None:
+        keys = tuple(dict.fromkeys(identity.key for identity in identities))
+        if not keys or not self.enabled or self._read_only:
+            return None
+        resolved_lease_id = lease_id or uuid4().hex
+        with self._lock:
+            existing = self._leases.get(resolved_lease_id)
+            if existing is not None:
+                return (
+                    SnapshotTreeLease(resolved_lease_id, existing)
+                    if existing == keys
+                    else None
+                )
+            for key in keys:
+                tree = self._trees.get(key)
+                if not isinstance(tree, dict) or not bool(tree.get("complete")):
+                    return None
+            self._leases[resolved_lease_id] = keys
+            for key in keys:
+                self._pinned_tree_counts[key] = (
+                    self._pinned_tree_counts.get(key, 0) + 1
+                )
+            return SnapshotTreeLease(resolved_lease_id, keys)
+
+    def release_tree_lease(self, lease: SnapshotTreeLease) -> bool:
+        with self._lock:
+            keys = self._leases.pop(lease.lease_id, None)
+            if keys is None:
+                return True
+            for key in keys:
+                remaining = self._pinned_tree_counts.get(key, 1) - 1
+                if remaining > 0:
+                    self._pinned_tree_counts[key] = remaining
+                else:
+                    self._pinned_tree_counts.pop(key, None)
+            try:
+                self._prune_locked()
+                self._persist_index_locked(timing=None, side=None)
+            except Exception:
+                self._counters["persistent_write_failures"] += 1
+                return False
+            return True
+
     @staticmethod
     def tree_key(
         *,
@@ -557,15 +963,13 @@ class PersistentSnapshotContentCache:
         table_path: str,
         configuration_sha256: str,
     ) -> str:
-        return _hash_json(
-            {
-                "repository_uuid": repository_uuid,
-                "canonical_url": canonical_url,
-                "revision": revision,
-                "table_path": table_path,
-                "configuration_sha256": configuration_sha256,
-            }
-        )
+        return SnapshotTreeIdentity(
+            repository_uuid=repository_uuid,
+            canonical_url=canonical_url,
+            revision=revision,
+            table_path=table_path,
+            configuration_sha256=configuration_sha256,
+        ).key
 
     def commit_tree(
         self,
@@ -614,6 +1018,11 @@ class PersistentSnapshotContentCache:
                         "table_path": table_path,
                         "configuration_sha256": configuration_sha256,
                     },
+                    "tree_kind": "legacy",
+                    "complete": False,
+                    "required_paths": sorted(file_map),
+                    "required_paths_sha256": _paths_sha256(file_map),
+                    "missing_paths": [],
                     "files": file_map,
                     "last_access_ns": now,
                 }
@@ -638,38 +1047,21 @@ class PersistentSnapshotContentCache:
         configuration_sha256: str,
         relative_path: str,
     ) -> bytes | None:
-        if not self.enabled or self._read_only:
-            return None
-        key = self.tree_key(
-            repository_uuid=repository_uuid,
-            canonical_url=canonical_url,
-            revision=revision,
-            table_path=table_path,
-            configuration_sha256=configuration_sha256,
+        lookup = self.lookup_tree_file(
+            SnapshotTreeIdentity(
+                repository_uuid=repository_uuid,
+                canonical_url=canonical_url,
+                revision=revision,
+                table_path=table_path,
+                configuration_sha256=configuration_sha256,
+            ),
+            relative_path=relative_path,
         )
-        with self._lock:
-            tree = self._trees.get(key)
-            if not isinstance(tree, dict):
-                return None
-            files = tree.get("files")
-            if not isinstance(files, dict):
-                return None
-            fact_key = files.get(relative_path)
-            fact = self._facts.get(fact_key) if isinstance(fact_key, str) else None
-            if not isinstance(fact, dict):
-                return None
-            identity_payload = fact.get("identity")
-            if not isinstance(identity_payload, dict):
-                return None
-            try:
-                identity = SnapshotFileIdentity(**identity_payload)
-            except TypeError:
-                return None
-            cached = self._lookup_locked(identity, None, None, None)
-            if cached is None or cached.fact_key != fact_key:
-                return None
-            tree["last_access_ns"] = self._wall_clock_ns()
-            return cached.raw
+        return (
+            lookup.cached.raw
+            if lookup.state is FrozenFileState.PRESENT and lookup.cached
+            else None
+        )
 
     def _persist_index_locked(
         self,
@@ -704,13 +1096,32 @@ class PersistentSnapshotContentCache:
         )
 
     def _prune_locked(self) -> None:
+        pinned_trees = {
+            key
+            for key, count in self._pinned_tree_counts.items()
+            if count > 0
+        }
         if self.max_tree_entries and len(self._trees) > self.max_tree_entries:
             ordered_trees = sorted(
-                self._trees.items(),
+                (
+                    item
+                    for item in self._trees.items()
+                    if item[0] not in pinned_trees
+                ),
                 key=lambda item: int(item[1].get("last_access_ns", 0)),
             )
-            for key, _ in ordered_trees[: len(self._trees) - self.max_tree_entries]:
+            excess = len(self._trees) - self.max_tree_entries
+            for key, _ in ordered_trees[:excess]:
                 self._trees.pop(key, None)
+
+        pinned_facts: set[str] = set()
+        for key in pinned_trees:
+            tree = self._trees.get(key)
+            files = tree.get("files") if isinstance(tree, dict) else None
+            if isinstance(files, dict):
+                pinned_facts.update(
+                    value for value in files.values() if isinstance(value, str)
+                )
 
         def blob_usage() -> tuple[int, dict[str, int]]:
             blobs: dict[str, int] = {}
@@ -725,17 +1136,28 @@ class PersistentSnapshotContentCache:
 
         total_bytes, _ = blob_usage()
         ordered_facts = sorted(
-            self._facts.items(),
+            (
+                item
+                for item in self._facts.items()
+                if item[0] not in pinned_facts
+            ),
             key=lambda item: int(item[1].get("last_access_ns", 0)),
         )
         while ordered_facts and (
-            len(self._facts) > self.max_file_entries or total_bytes > self.max_bytes
+            len(self._facts) > self.max_file_entries
+            or total_bytes > self.max_bytes
         ):
             fact_key, _ = ordered_facts.pop(0)
             self._facts.pop(fact_key, None)
             self._drop_fact_references_locked(fact_key)
             self._counters["persistent_evictions"] += 1
             total_bytes, _ = blob_usage()
+        if (
+            (self.max_tree_entries and len(self._trees) > self.max_tree_entries)
+            or len(self._facts) > self.max_file_entries
+            or total_bytes > self.max_bytes
+        ):
+            self._counters["persistent_capacity_deferred"] += 1
         self._remove_unreferenced_files_locked()
 
     def _remove_unreferenced_files_locked(self) -> None:
@@ -800,4 +1222,6 @@ class PersistentSnapshotContentCache:
                 "persistent_entries": len(self._facts),
                 "persistent_trees": len(self._trees),
                 "persistent_inflight": len(self._flights),
+                "persistent_leases": len(self._leases),
+                "persistent_pinned_trees": len(self._pinned_tree_counts),
             }

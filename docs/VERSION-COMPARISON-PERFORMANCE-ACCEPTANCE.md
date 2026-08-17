@@ -107,3 +107,36 @@ Replay 报告 schema 为 `m2.version-comparison-performance.v1`：
 - 报告不包含 SVN URL、Revision 或工作簿名；
 - `git diff --check` 通过；
 - 任何收益结论都区分 Replay 本地计算和正式 SVN I/O，不用离线结果替代正式链路证据。
+
+## 7. 2026-08-17 首次运行提速增量验收
+
+### 已实现
+
+- OOXML Manifest 首选，openpyxl 回退，并保留双解析一致性门禁。
+- 缓存 v2：内容寻址 blob、完整树、`PRESENT/MISSING/UNAVAILABLE`、原子 ready、single-flight、任务租约与 pinned LRU。
+- 固定 Revision 的 Excel/CSV Frozen Dataset；同分支按 last-changed Revision 增量复用，跨分支由完整 SVN 差异证据控制。
+- 大批量 export、小批量 12 路 cat、export 漏项仅回退缺失文件。
+- ready 后工作簿阶段完全本地读取；Manifest 复用；SVN 内容调用门禁为 0。
+- M2/M4 共享 SQLite 公平四路调度、lease token、防迟到提交和一次恢复。
+- 八阶段内部耗时事件与三个独立灰度开关。
+
+### 五轮 Replay
+
+报告：`.cache/codex-p5-manifest-reuse.json`。
+
+- 5/5 轮均为 55 matched / 0 mismatched。
+- 集合 SHA-256 均为 `d9b9fd7f3c02ef6fc47081d03c7d670ee4bddfbb55ad2a45e10a95bf7e4fda0f`。
+- `all_rounds_passed=true`，`unique_result_set_sha256=1`。
+- legacy equivalent P50：7.890093s。
+- Manifest reused P50：6.799458s。
+- P50 加速：1.167x；节省 1.124231s。
+- 峰值工作集：722,731,008 bytes。
+- 报告确认未写 SVN、批量数据库或黄金夹具。
+
+全仓自动化测试：`721 passed`。
+
+### 真实环境门禁
+
+原完整首次对比基线为 218.569s，其中快照 41.945s、55 个工作簿 176.422s；目标分别为首次完整链路不超过 109s、相同 Revision 重跑不超过 43.7s。
+
+未经用户明确授权，本轮没有访问真实 SVN，也没有启动正式版本对比任务，因此两个真实环境目标尚不能宣称达成。正式发布仍按代码保持关闭 -> Replay/Mock -> 单次授权真实任务 -> 同分支增量 -> 跨分支复用 -> 四路并发 -> 默认开启推进。

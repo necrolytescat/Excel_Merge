@@ -106,13 +106,31 @@ def test_run_store_recovery_and_result_round_trip(tmp_path):
     store.finish_preparation(str(run.run_id))
     claim = store.claim_item()
     assert claim["status"] == "queued"
+    stale_token = claim["lease_token"]
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute(
+            "UPDATE diff_plan_run_items SET lease_expires_at='2000-01-01T00:00:00Z' WHERE item_id=?",
+            (claim["item_id"],),
+        )
     store.recover()
     assert store.get_run(run.run_id).items[0].status == "queued"
 
     claim = store.claim_item()
+    assert not store.complete_item(
+        claim["item_id"],
+        lease_token=stale_token,
+        status="changed",
+    )
+
     content = b'{"schema_version":"m2.diff.v1"}'
     result = store.write_result(str(run.run_id), claim["item_id"], content)
-    assert store.complete_item(claim["item_id"], status="changed", diff_status="modified", result=result)
+    assert store.complete_item(
+        claim["item_id"],
+        lease_token=claim["lease_token"],
+        status="changed",
+        diff_status="modified",
+        result=result,
+    )
     loaded, etag = store.load_result(result["result_ref"])
     assert loaded == content
     assert len(etag) == 64
@@ -137,7 +155,13 @@ def completed_run_with_result(tmp_path: Path):
     claim = store.claim_item()
     content = b'{"schema_version":"m2.diff.v1"}'
     result = store.write_result(str(run.run_id), claim["item_id"], content)
-    assert store.complete_item(claim["item_id"], status="changed", diff_status="modified", result=result)
+    assert store.complete_item(
+        claim["item_id"],
+        lease_token=claim["lease_token"],
+        status="changed",
+        diff_status="modified",
+        result=result,
+    )
     return store, store.get_run(run.run_id), result, content
 
 

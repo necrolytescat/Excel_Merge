@@ -25,14 +25,18 @@ def test_acceptance_report_aggregates_rounds_without_external_writes(
                 "reused_equivalent_seconds": 6.0,
                 "saved_seconds": 4.0,
                 "speedup": 1.667,
-                "result_set_sha256": "b" * 64,
+                "matched_count": 2,
+                "mismatched_count": 0,
+                "result_set_sha256": tool.EXPECTED_RESULT_SET_SHA256,
             },
             {
                 "legacy_equivalent_seconds": 12.0,
                 "reused_equivalent_seconds": 7.0,
                 "saved_seconds": 5.0,
                 "speedup": 1.714,
-                "result_set_sha256": "b" * 64,
+                "matched_count": 2,
+                "mismatched_count": 0,
+                "result_set_sha256": tool.EXPECTED_RESULT_SET_SHA256,
             },
         ]
     )
@@ -41,6 +45,10 @@ def test_acceptance_report_aggregates_rounds_without_external_writes(
     report = tool.run_acceptance(Path(fixture_path), rounds=2)
 
     assert report["summary"] == {
+        "requested_rounds": 2,
+        "completed_rounds": 2,
+        "expected_result_set_sha256": tool.EXPECTED_RESULT_SET_SHA256,
+        "all_rounds_passed": True,
         "legacy_equivalent_p50_seconds": 11.0,
         "reused_equivalent_p50_seconds": 6.5,
         "saved_p50_seconds": 4.5,

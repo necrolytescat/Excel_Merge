@@ -56,6 +56,7 @@ from app.services.diff_plan_store import DiffPlanError, DiffPlanStore
 from app.services.diff_plan_run_store import DiffPlanRunStore
 from app.services.diff_plan_run_service import DiffPlanRunService
 from app.services.workbook_execution_gate import WorkbookExecutionGate
+from app.services.workbook_execution_scheduler import PersistentWorkbookExecutionScheduler
 from app.services.offline_fixture import OfflineFixtureError, OfflineFixtureService
 from app.services.operations_service import (
     OperationalLogService,
@@ -133,6 +134,20 @@ def create_app(
         if isinstance(config.get("snapshot_reuse", {}), dict)
         else {}
     )
+    manifest_parser_config = (
+        config.get("manifest_parser", {})
+        if isinstance(config.get("manifest_parser", {}), dict)
+        else {}
+    )
+    ooxml_manifest_first = bool(
+        manifest_parser_config.get("ooxml_first_enabled", True)
+    )
+    frozen_dataset_enabled = bool(
+        snapshot_reuse_config.get("frozen_dataset_enabled", False)
+    )
+    cross_branch_csv_reuse_enabled = bool(
+        snapshot_reuse_config.get("cross_branch_csv_reuse_enabled", False)
+    )
     persistent_cache_config = (
         snapshot_reuse_config.get("persistent_cache", {})
         if isinstance(snapshot_reuse_config.get("persistent_cache", {}), dict)
@@ -195,11 +210,21 @@ def create_app(
         bulk_export_min_files=int(
             snapshot_reuse_config.get("bulk_export_min_files", 8)
         ),
+        bulk_export_min_ratio=float(
+            snapshot_reuse_config.get("bulk_export_min_ratio", 0.5)
+        ),
         preview_limit=preview_limit,
         reuse_ttl_seconds=float(snapshot_reuse_config.get("ttl_seconds", 300)),
         reuse_max_entries=int(snapshot_reuse_config.get("max_entries", 8)),
         reuse_configuration={
             "dataset_layout": config.get("dataset_layout"),
+            "manifest_parser": {
+                "ooxml_first_enabled": ooxml_manifest_first,
+            },
+            "frozen_dataset": {
+                "enabled": frozen_dataset_enabled,
+                "cross_branch_csv_reuse_enabled": cross_branch_csv_reuse_enabled,
+            },
         },
         persistent_content_cache=snapshot_content_cache,
         phase_timing_enabled=bool(logging_config.get("enabled", True)),
@@ -267,7 +292,10 @@ def create_app(
     )
     dataset_layout = config.get("dataset_layout") if isinstance(config, dict) else None
     app.state.workbook_diff_service = workbook_diff_service or (
-        WorkbookDiffService(DatasetLayout.from_config(dataset_layout))
+        WorkbookDiffService(
+            DatasetLayout.from_config(dataset_layout),
+            ooxml_first=ooxml_manifest_first,
+        )
         if isinstance(dataset_layout, dict)
         else None
     )
@@ -280,13 +308,56 @@ def create_app(
             dataset_layout,
             allowed_schemes=allowed_schemes,
             snapshot_content_reader=app.state.snapshot_service.read_cached_snapshot_bytes,
+            snapshot_content_lookup=(
+                app.state.snapshot_service.lookup_cached_snapshot_file
+                if frozen_dataset_enabled
+                else None
+            ),
+            snapshot_service=app.state.snapshot_service if frozen_dataset_enabled else None,
+            cross_branch_csv_reuse_enabled=cross_branch_csv_reuse_enabled,
+            ooxml_first=ooxml_manifest_first,
         )
     else:
         app.state.workbook_dataset_resolver = UnavailableWorkbookDatasetResolver()
 
-    workbook_execution_gate = WorkbookExecutionGate(
-        int(diff_plan_config.get("workbook_concurrency", 2))
+    workbook_execution_config = (
+        config.get("workbook_execution", {})
+        if isinstance(config.get("workbook_execution", {}), dict)
+        else {}
     )
+    four_way_concurrency_enabled = bool(
+        workbook_execution_config.get("four_way_enabled", False)
+    )
+    workbook_concurrency = (
+        int(workbook_execution_config.get("global_slots", 4))
+        if four_way_concurrency_enabled
+        else int(diff_plan_config.get("workbook_concurrency", 2))
+    )
+    workbook_execution_gate = WorkbookExecutionGate(workbook_concurrency)
+    workbook_execution_scheduler = None
+    if four_way_concurrency_enabled:
+        execution_database = Path(
+            str(
+                workbook_execution_config.get(
+                    "database_path",
+                    "var/workbook-execution/execution.sqlite3",
+                )
+            )
+        )
+        if not execution_database.is_absolute():
+            execution_database = PROJECT_ROOT / execution_database
+        workbook_execution_scheduler = PersistentWorkbookExecutionScheduler(
+            execution_database,
+            workbook_execution_gate,
+            global_limit=workbook_concurrency,
+            per_flow_limit=int(
+                workbook_execution_config.get("per_task_slots", 4)
+            ),
+            lease_seconds=float(
+                workbook_execution_config.get("lease_seconds", 60)
+            ),
+        )
+    app.state.workbook_execution_scheduler = workbook_execution_scheduler
 
     if batch_diff_service is not None:
         app.state.batch_diff_service = batch_diff_service
@@ -312,11 +383,16 @@ def create_app(
         candidate_resolver = SnapshotBatchCandidateResolver(
             app.state.snapshot_service,
             lambda: getattr(app.state, "endpoint_registry", []),
+            dataset_preparer=(
+                getattr(app.state.workbook_dataset_resolver, "prepare_frozen_pair", None)
+                if frozen_dataset_enabled
+                else None
+            ),
         )
         workbook_runner = DefaultBatchWorkbookRunner(
             app.state.workbook_dataset_resolver,
             app.state.workbook_diff_service,
-            workbook_execution_gate,
+            None if workbook_execution_scheduler is not None else workbook_execution_gate,
         )
         app.state.batch_diff_service = BatchDiffService(
             BatchStore(
@@ -327,6 +403,8 @@ def create_app(
             ),
             candidate_resolver,
             workbook_runner,
+            execution_scheduler=workbook_execution_scheduler,
+            item_concurrency=workbook_concurrency,
         )
     else:
         app.state.batch_diff_service = None
@@ -341,7 +419,7 @@ def create_app(
         m4_runner = DefaultBatchWorkbookRunner(
             app.state.workbook_dataset_resolver,
             app.state.workbook_diff_service,
-            workbook_execution_gate,
+            None if workbook_execution_scheduler is not None else workbook_execution_gate,
         )
         m4_run_store = DiffPlanRunStore(
             diff_plan_database,
@@ -356,6 +434,8 @@ def create_app(
             endpoint_registry=lambda: getattr(app.state, "endpoint_registry", []),
             workbook_runner=m4_runner,
             cleanup_interval_seconds=float(diff_plan_config.get("cleanup_interval_seconds", 3600)),
+            execution_scheduler=workbook_execution_scheduler,
+            item_concurrency=workbook_concurrency,
         )
         app.state.diff_plan_service.recent_run = m4_run_store.latest_run
 
@@ -415,6 +495,11 @@ def create_app(
         if service is not None:
             service.close()
 
+    def close_workbook_execution_scheduler() -> None:
+        scheduler = getattr(app.state, "workbook_execution_scheduler", None)
+        if scheduler is not None:
+            scheduler.close()
+
     def start_diff_plan_run_service() -> None:
         service = getattr(app.state, "diff_plan_run_service", None)
         if service is not None and hasattr(service, "start"):
@@ -443,6 +528,7 @@ def create_app(
     app.add_event_handler("startup", start_diff_plan_run_service)
     app.add_event_handler("shutdown", close_batch_service)
     app.add_event_handler("shutdown", close_diff_plan_run_service)
+    app.add_event_handler("shutdown", close_workbook_execution_scheduler)
     app.add_event_handler("shutdown", close_operations_logging)
     app.add_event_handler("shutdown", close_monitor_web_service)
 

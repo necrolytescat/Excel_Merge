@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
@@ -15,6 +16,10 @@ from app.services.workbook_diff_service import DatasetLayout, WorkbookDiffServic
 from app.tools.version_comparison_performance import (
     DEFAULT_FIXTURE,
     _peak_working_set_bytes,
+)
+
+EXPECTED_RESULT_SET_SHA256 = (
+    "d9b9fd7f3c02ef6fc47081d03c7d670ee4bddfbb55ad2a45e10a95bf7e4fda0f"
 )
 
 
@@ -112,7 +117,18 @@ def run_acceptance(fixture_path: Path, *, rounds: int = 5) -> dict[str, Any]:
     raw = fixture_path.read_bytes()
     fixture = load_offline_fixture(raw)
     layout = DatasetLayout.from_config(fixture.manifest.dataset_layout)
-    runs = [_run_round(fixture, layout) for _ in range(rounds)]
+    runs = []
+    for _ in range(rounds):
+        runs.append(_run_round(fixture, layout))
+        # Materialization creates cyclic parser objects; release them before
+        # starting the next round to keep the Windows working set bounded.
+        gc.collect()
+    all_rounds_passed = all(
+        run["matched_count"] == len(fixture.golden_results)
+        and run["mismatched_count"] == 0
+        and run["result_set_sha256"] == EXPECTED_RESULT_SET_SHA256
+        for run in runs
+    )
     return {
         "schema_version": "m2.version-comparison-manifest-reuse-acceptance.v1",
         "fixture": {
@@ -122,6 +138,10 @@ def run_acceptance(fixture_path: Path, *, rounds: int = 5) -> dict[str, Any]:
         },
         "rounds": runs,
         "summary": {
+            "requested_rounds": rounds,
+            "completed_rounds": len(runs),
+            "expected_result_set_sha256": EXPECTED_RESULT_SET_SHA256,
+            "all_rounds_passed": all_rounds_passed,
             "legacy_equivalent_p50_seconds": round(
                 statistics.median(run["legacy_equivalent_seconds"] for run in runs),
                 6,
@@ -166,13 +186,20 @@ def main(argv: list[str] | None = None) -> int:
         args.output.write_text(content, encoding="utf-8")
     print(content, end="")
     expected_calls = report["fixture"]["golden_result_count"] * 2
-    return 0 if all(
-        run["matched_count"] == report["fixture"]["golden_result_count"]
-        and run["mismatched_count"] == 0
-        and run["resolver_manifest_calls"] == expected_calls
-        and run["legacy_diff_manifest_calls"] == expected_calls
-        and run["reused_diff_manifest_calls"] == 0
-        for run in report["rounds"]
+    return 0 if (
+        report["summary"]["requested_rounds"] == args.rounds
+        and report["summary"]["completed_rounds"] == args.rounds
+        and report["summary"]["unique_result_set_sha256"] == 1
+        and report["summary"]["all_rounds_passed"]
+        and all(
+            run["matched_count"] == report["fixture"]["golden_result_count"]
+            and run["mismatched_count"] == 0
+            and run["result_set_sha256"] == EXPECTED_RESULT_SET_SHA256
+            and run["resolver_manifest_calls"] == expected_calls
+            and run["legacy_diff_manifest_calls"] == expected_calls
+            and run["reused_diff_manifest_calls"] == 0
+            for run in report["rounds"]
+        )
     ) else 1
 
 

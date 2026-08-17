@@ -75,8 +75,9 @@ def _empty_summary(*, error_count: int = 0) -> WorkbookSummaryPayload:
 class WorkbookDiffService:
     supports_preparsed_manifests = True
 
-    def __init__(self, layout: DatasetLayout):
+    def __init__(self, layout: DatasetLayout, *, ooxml_first: bool = True):
         self.layout = layout
+        self.ooxml_first = bool(ooxml_first)
 
     def _manifest(self, raw: bytes) -> WorkbookManifest:
         return parse_workbook_manifest(
@@ -85,6 +86,7 @@ class WorkbookDiffService:
             sheet_field=self.layout.manifest_sheet_field,
             csv_name_field=self.layout.manifest_csv_name_field,
             export_flag_field=self.layout.manifest_export_flag_field,
+            ooxml_first=self.ooxml_first,
         )
 
     def _csv_name(self, entry: ManifestEntry) -> str:

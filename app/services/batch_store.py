@@ -18,6 +18,7 @@ from uuid import UUID, uuid4
 
 from app.schemas.batch import (
     BatchCandidatePayload,
+    BatchExecutionPolicyPayload,
     BatchEndpointPayload,
     BatchItemPayload,
     BatchOrchestrationErrorPayload,
@@ -90,6 +91,18 @@ class BatchStore:
         self.event_retention_days = max(1, int(event_retention_days))
         self._initialize_lock = threading.Lock()
         self._initialized = False
+        self.execution_policy = BatchExecutionPolicyPayload()
+
+    def configure_execution_policy(
+        self,
+        *,
+        global_concurrency: int,
+        per_task_concurrency: int,
+    ) -> None:
+        self.execution_policy = BatchExecutionPolicyPayload(
+            global_concurrency=global_concurrency,
+            per_task_concurrency=per_task_concurrency,
+        )
 
     def initialize(self) -> None:
         if self._initialized:
@@ -562,6 +575,7 @@ class BatchStore:
                         "status": task["candidate_status"],
                         "manifest_sha256": task["manifest_sha256"],
                     },
+                    "execution_policy": self.execution_policy.model_dump(),
                     "progress": self._progress(task, items),
                     "items": [self._item_payload(item) for item in items],
                     "errors": json.loads(task["errors_json"]),
@@ -995,7 +1009,27 @@ class BatchStore:
                 details={"status": "failed"},
             )
 
-    def claim_next_item(self) -> dict[str, Any] | None:
+    def runnable_task_ids(self) -> list[str]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT t.task_id
+                FROM tasks t
+                JOIN items i ON i.task_id=t.task_id
+                WHERE t.status='running' AND t.cancel_requested_at IS NULL
+                  AND i.status='queued'
+                ORDER BY t.created_at, t.task_id
+                """
+            ).fetchall()
+        return [str(row["task_id"]) for row in rows]
+
+    def claim_next_item(
+        self,
+        *,
+        task_id: str | None = None,
+        global_limit: int = 2,
+        per_task_limit: int = 1,
+    ) -> dict[str, Any] | None:
         now_value = utc_now()
         now = isoformat(now_value)
         lease_expires = isoformat(now_value + timedelta(seconds=LEASE_SECONDS))
@@ -1005,7 +1039,7 @@ class BatchStore:
                 "SELECT COUNT(*) FROM items WHERE status='running' AND lease_expires_at>?",
                 (now,),
             ).fetchone()[0]
-            if live_running >= 2:
+            if live_running >= max(1, int(global_limit)):
                 return None
             row = connection.execute(
                 """
@@ -1015,13 +1049,17 @@ class BatchStore:
                 JOIN tasks t ON t.task_id=i.task_id
                 WHERE i.status='queued' AND t.status='running'
                   AND t.cancel_requested_at IS NULL
-                  AND NOT EXISTS (
-                    SELECT 1 FROM items active
-                    WHERE active.task_id=i.task_id AND active.status='running'
-                  )
+                  AND (? IS NULL OR i.task_id=?)
+                  AND (
+                    SELECT COUNT(*) FROM items active
+                    WHERE active.task_id=i.task_id
+                      AND active.status='running'
+                      AND active.lease_expires_at>?
+                  ) < ?
                 ORDER BY t.created_at, i.ordinal
                 LIMIT 1
-                """
+                """,
+                (task_id, task_id, now, max(1, int(per_task_limit))),
             ).fetchone()
             if row is None:
                 return None

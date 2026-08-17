@@ -192,7 +192,7 @@ P3 运维 API：GET /api/operations/logs、GET /api/operations/svn-cache、POST 
 
 ### 6.2 Excel 清单
 
-`core/workbook_manifest_parser.py` 优先使用 openpyxl 只读解析，失败时对 OOXML 做最小兜底。业务身份是 `sheetName`，`tbxName` 只定位 CSV。`main`、配置公式、业务 Sheet 单元格、样式、宏和公式不参与业务值比较。
+`core/workbook_manifest_parser.py` 默认按 `OOXML -> openpyxl fallback` 解析。OOXML 只读取 `main` 清单所需 XML，不加载整本工作簿、样式或公式缓存；仅在格式不支持或解析失败时回退 openpyxl。灰度验收会同时运行两种解析器，结果不一致直接判定门禁失败，不能以更快结果覆盖业务语义。业务身份是 `sheetName`，`tbxName` 只定位 CSV。`main`、配置公式、业务 Sheet 单元格、样式、宏和公式不参与业务值比较。
 
 二进制 `.xls` 可进入快照候选，但当前清单解析器没有旧版 BIFF 解析器；无法解析时会形成结构化失败结果，不得静默当作无差异。
 
@@ -293,10 +293,28 @@ errors[]
 
 内部配置 `snapshot_reuse.content_read_workers` 默认 12，仅控制逐文件 cat fallback；`bulk_export_enabled` 默认 true，`bulk_export_min_files` 默认 8。结构化计时中的 `provider_export` 记录 export 调用、墙钟/CPU、导出总文件数和字节，`provider_read.sources` 以 `svn_export` 或 `svn_cat` 归属每个目标文件；阶段并行时间仍不能直接相加。
 
-Diff 物化读取 Excel 工作簿时优先复用同一冻结树中已校验的可信字节，避免快照完成后再次读取 SVN；CSV 仍沿用既有冻结 Revision 读取路径。本优化不改变解析、主键、配对或 Diff 语义，端到端收益必须同时报告快照与后续物化阶段，不能用页面快照耗时替代完整链路结论。
+启用完整冻结数据集后，Diff 物化阶段优先从同一 ready 树读取已校验的 Excel、预解析 Manifest 和 CSV；工作簿 Item 阶段禁止 SVN 内容读取。旧任务或旧缓存仅在三态结果为 `UNAVAILABLE` 时回退旧 Resolver，并且仍严格读取任务保存的 Revision。CSV 缺失、Manifest 错误和解析错误继续形成原业务结果，不升级为任务级失败。端到端收益必须同时报告准备、物化和结果保存，不能用页面快照耗时替代完整链路结论。
 
 同一仓库的不同冻结 URL 还可使用只读 svn diff --summarize --xml --notice-ancestry --ignore-properties 取得两侧固定 Revision 的完整 TABLE 树差异。只有 repository UUID/root、规范 URL、冻结 Revision、TABLE 物理布局、配置指纹、两侧完整目录树和差异路径全部闭环且无大小写歧义时，未变化文件才继承 source 已有 HASH；A/M/D/R 文件和目录变化覆盖的子树一律从 target 重读。copyfrom 和 copy boundary 仅用于历史校验，不能单独证明任意两个冻结 Revision 内容相同。
 命令不支持、stderr 警告、认证或权限过滤、历史截断、XML/路径异常、未知状态或证据缺项都会停止跨分支继承；该目录差异证据本身不持久化。回退后仍可按各 URL 的可信持久文件事实命中，否则完整读取内容；公共快照、m2.diff.v1、m2.batch.v1 和 source/target 语义不变。
+
+#### 完整冻结数据集与任务租约
+
+启用 `snapshot_reuse.frozen_dataset_enabled` 后，批量准备会在返回 ready 前把左右两侧所需 Excel、Manifest 和 TableCsv 汇总为不可变本地数据集。缓存 v2 对每棵树记录文件类型、required 集合、已存在文件、明确缺失文件和完整标记；读取只有 `PRESENT / MISSING / UNAVAILABLE` 三态。required 全部被存在或明确缺失覆盖后才原子发布，半成品、损坏 blob、磁盘不足或取消都不能成为 ready。
+
+Excel 与 CSV 共用内容寻址 blob。同一分支新 Revision 依据 repository UUID、规范 URL、路径和 last-changed Revision 引用旧 blob，只下载新增或变化文件；跨分支还必须通过固定 URL/Revision、布局、完整目录树、大小写和 `svn diff --summarize` 证据闭环。缺失文件不少于 8 且占该侧 required 至少 50% 时优先目录 export，否则使用 12 路 cat；export 失败或漏文件只回退缺失项。进入工作簿阶段后，Excel、Manifest 和 CSV 都从 Frozen Dataset 读取，SVN 内容调用必须为 0。
+
+每个活动 M2 任务对 source/target 的 Excel 与 CSV 四棵树持有同一任务租约。租约期间容量限制是软上限，LRU 只淘汰未 pin 数据；终态、删除、服务关闭或恢复收敛后释放。服务重启从 BatchStore 的活跃任务恢复租约；ready 树失效时只允许按任务保存的原 Revision 重建，不读取 HEAD。
+
+内部批量计时事件为 `batch.phase_timing`，schema 为 `m2.batch-phase-timing.v1`，固定阶段为 `freeze_revisions / parse_manifests / enumerate_dataset / reuse_evidence / fetch_dataset / publish_dataset / compare_items / finalize`。它不改变公开 `preparing/running/cancelling` 状态；日志只写 task id、阶段、耗时和计数，不写 URL、路径、工作簿名或凭据。
+
+三个发布开关分别为：
+
+- `snapshot_reuse.frozen_dataset_enabled`：完整冻结数据集；
+- `snapshot_reuse.cross_branch_csv_reuse_enabled`：跨分支 CSV 证据复用；
+- `workbook_execution.four_way_enabled`：M2/M4 共享持久化四路调度。
+
+示例配置均默认关闭。发布顺序必须是代码合入但关闭 -> Replay/Mock -> 单次授权真实任务 -> 同分支增量 -> 跨分支复用 -> 四路并发 -> 默认开启。旧 Resolver 与缓存 v1 兼容路径至少保留一个发布周期。新索引仍使用文件名 `index.v1.json`，内部 `schema_version=2`；旧程序遇到新版本会安全只读禁用缓存，结果不变但性能回到冷态。
 
 固定 Mock 延迟验收使用 55 个基础文件、`list_tree=5ms`、`read_bytes=10ms`，每个场景独立运行 5 次并取墙钟中位数：
 
@@ -320,6 +338,8 @@ py -3 -m app.tools.version_comparison_snapshot_phase_timing_acceptance --rounds 
 ```
 
 `m2.batch-management.v1` 定义在 `docs/contracts/m2.batch-management.v1.md`。结构化事件独立于批量任务 JSON，默认保留 90 天；终态任务可从历史任务页手动删除。删除仅影响该任务正式结果，不级联重试任务，不触碰原始日志、全局 SVN 缓存或 Replay 夹具。
+
+实现范围、五轮离线 Replay 和待授权真实 SVN 门禁见 `docs/VERSION-COMPARISON-PERFORMANCE-ACCEPTANCE.md`。
 
 ## 8. Replay 与当前夹具
 

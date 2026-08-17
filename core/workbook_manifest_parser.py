@@ -510,27 +510,41 @@ def parse_workbook_manifest(
     sheet_field: str = "sheetName",
     csv_name_field: str = "tbxName",
     export_flag_field: str = "isExport",
+    ooxml_first: bool = False,
 ) -> WorkbookManifest:
-    """优先使用 openpyxl；样式等问题导致加载失败时只读 OOXML 兜底。"""
+    """只读解析 main 清单，并按调用方选择的顺序安全回退。"""
+    options = {
+        "sheet_name": sheet_name,
+        "sheet_field": sheet_field,
+        "csv_name_field": csv_name_field,
+        "export_flag_field": export_flag_field,
+    }
+    if ooxml_first:
+        try:
+            return _parse_with_ooxml(raw, **options)
+        except Exception as ooxml_error:
+            try:
+                return _parse_with_openpyxl(raw, **options)
+            except M2ProcessingError:
+                # openpyxl 是既有权威路径；业务错误保持原契约。
+                raise
+            except Exception as openpyxl_error:
+                if isinstance(ooxml_error, M2ProcessingError):
+                    raise ooxml_error
+                raise M2ProcessingError(
+                    "M2_WORKBOOK_PARSE_FAILED",
+                    "workbook_parse",
+                    "工作簿无法通过 openpyxl 或 OOXML 解析",
+                    sheet_name=sheet_name,
+                    details={"parsers": ["openpyxl", "ooxml"]},
+                ) from openpyxl_error
     try:
-        return _parse_with_openpyxl(
-            raw,
-            sheet_name=sheet_name,
-            sheet_field=sheet_field,
-            csv_name_field=csv_name_field,
-            export_flag_field=export_flag_field,
-        )
+        return _parse_with_openpyxl(raw, **options)
     except M2ProcessingError:
         raise
     except Exception:
         try:
-            return _parse_with_ooxml(
-                raw,
-                sheet_name=sheet_name,
-                sheet_field=sheet_field,
-                csv_name_field=csv_name_field,
-                export_flag_field=export_flag_field,
-            )
+            return _parse_with_ooxml(raw, **options)
         except M2ProcessingError:
             raise
         except (BadZipFile, KeyError, ET.ParseError, IndexError, ValueError) as exc:

@@ -42,9 +42,36 @@ from app.services.workbook_dataset_service import (
 )
 from app.services.workbook_diff_service import WorkbookDiffService
 from app.services.workbook_execution_gate import WorkbookExecutionGate
+from app.services.workbook_execution_scheduler import (
+    PersistentWorkbookExecutionScheduler,
+    WorkbookExecutionLease,
+)
 
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_batch_phase(
+    task_id: str,
+    phase: str,
+    wall_ns: int,
+    metrics: Mapping[str, int | str] | None = None,
+) -> None:
+    internal_metrics: dict[str, int | str] = {
+        "schema_version": "m2.batch-phase-timing.v1",
+        "task_id": str(task_id),
+        "phase": str(phase),
+        "wall_ns": max(0, int(wall_ns)),
+    }
+    if metrics:
+        internal_metrics.update(metrics)
+    logger.info(
+        "M2 internal phase timing",
+        extra={
+            "event": "batch.phase_timing",
+            "internal_metrics": internal_metrics,
+        },
+    )
 
 
 class BatchCandidateResolver(Protocol):
@@ -71,9 +98,12 @@ class SnapshotBatchCandidateResolver:
         self,
         snapshot_service: SnapshotService,
         endpoint_registry: Callable[[], Sequence[Mapping[str, Any]]],
+        *,
+        dataset_preparer: Callable[..., Any] | None = None,
     ):
         self.snapshot_service = snapshot_service
         self.endpoint_registry = endpoint_registry
+        self.dataset_preparer = dataset_preparer
 
     def validate_endpoints(
         self,
@@ -186,7 +216,8 @@ class SnapshotBatchCandidateResolver:
         source: BatchEndpointPayload,
         target: BatchEndpointPayload,
     ) -> list[BatchCandidatePayload]:
-        return self._prepare(source, target, reuse=True)
+        candidates, _ = self._prepare(source, target, reuse=True)
+        return candidates
 
     def prepare_fresh(
         self,
@@ -194,7 +225,58 @@ class SnapshotBatchCandidateResolver:
         target: BatchEndpointPayload,
     ) -> list[BatchCandidatePayload]:
         """Retries revalidate SVN facts instead of replaying the page cache."""
-        return self._prepare(source, target, reuse=False)
+        candidates, _ = self._prepare(source, target, reuse=False)
+        return candidates
+
+    def prepare_for_task(
+        self,
+        task_id: str,
+        source: BatchEndpointPayload,
+        target: BatchEndpointPayload,
+        *,
+        fresh: bool = False,
+    ) -> tuple[list[BatchCandidatePayload], Any | None]:
+        return self._prepare(
+            source,
+            target,
+            reuse=not fresh,
+            lease_id=f"m2:{task_id}",
+            task_id=task_id,
+        )
+
+    def requires_dataset_lease(self) -> bool:
+        return self.dataset_preparer is not None
+
+    def restore_dataset_lease(
+        self,
+        task_id: str,
+        source: BatchEndpointPayload,
+        target: BatchEndpointPayload,
+        candidates: Sequence[BatchCandidatePayload],
+    ) -> Any | None:
+        if self.dataset_preparer is None:
+            return None
+        owner = getattr(self.dataset_preparer, "__self__", None)
+        acquire = getattr(owner, "acquire_frozen_pair_lease", None)
+        if acquire is not None:
+            lease = acquire(source, target, lease_id=f"m2:{task_id}")
+            if lease is not None:
+                return lease
+        _, lease = self._prepare(
+            source,
+            target,
+            reuse=True,
+            lease_id=f"m2:{task_id}",
+            task_id=task_id,
+        )
+        return lease
+
+    def release_dataset_lease(self, lease: Any) -> bool:
+        if self.dataset_preparer is None:
+            return lease is None
+        owner = getattr(self.dataset_preparer, "__self__", None)
+        release = getattr(owner, "release_frozen_pair_lease", None)
+        return bool(release is not None and release(lease))
 
     def _prepare(
         self,
@@ -202,15 +284,25 @@ class SnapshotBatchCandidateResolver:
         target: BatchEndpointPayload,
         *,
         reuse: bool,
-    ) -> list[BatchCandidatePayload]:
+        lease_id: str | None = None,
+        task_id: str | None = None,
+    ) -> tuple[list[BatchCandidatePayload], Any | None]:
+        phase_started = time.perf_counter_ns()
         records = list(self.endpoint_registry())
         self._validate_endpoint_records(source, target, records)
+        if task_id is not None:
+            _emit_batch_phase(
+                task_id,
+                "freeze_revisions",
+                time.perf_counter_ns() - phase_started,
+            )
         snapshot_arguments = {
             "source_id": source.endpoint_id,
             "source_revision": source.revision,
             "target_id": target.endpoint_id,
             "target_revision": target.revision,
         }
+        phase_started = time.perf_counter_ns()
         snapshot = (
             self.snapshot_service.create_snapshot_at_revisions(
                 records,
@@ -223,6 +315,16 @@ class SnapshotBatchCandidateResolver:
                 reuse=False,
             )
         )
+        if task_id is not None:
+            _emit_batch_phase(
+                task_id,
+                "enumerate_dataset",
+                time.perf_counter_ns() - phase_started,
+                {
+                    "source_file_count": len(snapshot.source.files),
+                    "target_file_count": len(snapshot.target.files),
+                },
+            )
         source_table = snapshot.source.physical_path_filters["TABLE"]
         target_table = snapshot.target.physical_path_filters["TABLE"]
         source_files = {
@@ -242,7 +344,25 @@ class SnapshotBatchCandidateResolver:
             )
             if candidate is not None:
                 candidates.append(candidate)
-        return candidates
+        dataset_lease = None
+        if self.dataset_preparer is not None:
+            prepare_kwargs: dict[str, Any] = {"lease_id": lease_id}
+            if task_id is not None:
+                def phase_sink(
+                    phase: str,
+                    wall_ns: int,
+                    metrics: Mapping[str, int | str] | None = None,
+                ) -> None:
+                    _emit_batch_phase(task_id, phase, wall_ns, metrics)
+
+                prepare_kwargs["phase_sink"] = phase_sink
+            dataset_lease = self.dataset_preparer(
+                source,
+                target,
+                candidates,
+                **prepare_kwargs,
+            )
+        return candidates, dataset_lease
 
 
 class DefaultBatchWorkbookRunner:
@@ -295,12 +415,25 @@ class DefaultBatchWorkbookRunner:
 
 
 @dataclass
+class _PreparedTask:
+    items: list[
+        tuple[
+            BatchCandidatePayload,
+            str | None,
+            BatchOrchestrationErrorPayload | None,
+        ]
+    ]
+    dataset_lease: Any | None = None
+
+
+@dataclass
 class _RunningItem:
     item_id: str
     lease_token: str
     started_monotonic: float
     last_heartbeat: float
     timed_out: bool = False
+    execution_lease: WorkbookExecutionLease | None = None
 
 
 class BatchDiffService:
@@ -314,6 +447,8 @@ class BatchDiffService:
         item_timeout_seconds: float = 600,
         heartbeat_seconds: float = 20,
         cleanup_interval_seconds: float = 21600,
+        execution_scheduler: PersistentWorkbookExecutionScheduler | None = None,
+        item_concurrency: int = 2,
     ):
         self.store = store
         self.candidate_resolver = candidate_resolver
@@ -322,6 +457,19 @@ class BatchDiffService:
         self.item_timeout_seconds = max(0.1, float(item_timeout_seconds))
         self.heartbeat_seconds = max(0.05, float(heartbeat_seconds))
         self.cleanup_interval_seconds = max(1, float(cleanup_interval_seconds))
+        self.execution_scheduler = execution_scheduler
+        self.item_concurrency = max(1, int(item_concurrency))
+        self.store.configure_execution_policy(
+            global_concurrency=self.item_concurrency,
+            per_task_concurrency=(
+                min(
+                    self.item_concurrency,
+                    self.execution_scheduler.per_flow_limit,
+                )
+                if self.execution_scheduler is not None
+                else 1
+            ),
+        )
         self._stop_event = Event()
         self._start_lock = Lock()
         self._started = False
@@ -331,11 +479,13 @@ class BatchDiffService:
             thread_name_prefix="m2-batch-prepare",
         )
         self._item_executor = ThreadPoolExecutor(
-            max_workers=2,
+            max_workers=self.item_concurrency,
             thread_name_prefix="m2-batch-item",
         )
         self._preparation_futures: dict[Future, str] = {}
         self._item_futures: dict[Future, _RunningItem] = {}
+        self._dataset_lease_lock = Lock()
+        self._dataset_leases: dict[str, Any] = {}
 
     def start(self) -> None:
         if self._started:
@@ -359,6 +509,7 @@ class BatchDiffService:
             self._scheduler.join(timeout=2)
         self._preparation_executor.shutdown(wait=True, cancel_futures=True)
         self._item_executor.shutdown(wait=True, cancel_futures=True)
+        self._release_all_dataset_leases()
 
     def create_task(
         self,
@@ -467,11 +618,13 @@ class BatchDiffService:
         reason: str | None,
     ) -> BatchTaskDeleteResultPayload:
         self.start()
-        return self.store.delete_task(
+        result = self.store.delete_task(
             task_id=str(task_id),
             request_id=request_id,
             reason=reason,
         )
+        self._release_dataset_lease(str(task_id))
+        return result
 
     @staticmethod
     def _default_retryable(item) -> bool:
@@ -560,13 +713,7 @@ class BatchDiffService:
     def _prepare_task(
         self,
         task: dict[str, Any],
-    ) -> list[
-        tuple[
-            BatchCandidatePayload,
-            str | None,
-            BatchOrchestrationErrorPayload | None,
-        ]
-    ]:
+    ) -> _PreparedTask:
         source = BatchEndpointPayload(
             endpoint_id=task["source_endpoint_id"],
             revision=task["source_revision"],
@@ -575,14 +722,36 @@ class BatchDiffService:
             endpoint_id=task["target_endpoint_id"],
             revision=task["target_revision"],
         )
-        fresh_preparer = getattr(self.candidate_resolver, "prepare_fresh", None)
-        candidates = (
-            fresh_preparer(source, target)
-            if task["candidate_scope"] == "retry_subset" and fresh_preparer is not None
-            else self.candidate_resolver.prepare(source, target)
+        fresh = task["candidate_scope"] == "retry_subset"
+        task_preparer = getattr(
+            self.candidate_resolver,
+            "prepare_for_task",
+            None,
         )
+        if task_preparer is not None:
+            candidates, dataset_lease = task_preparer(
+                task["task_id"],
+                source,
+                target,
+                fresh=fresh,
+            )
+        else:
+            fresh_preparer = getattr(
+                self.candidate_resolver,
+                "prepare_fresh",
+                None,
+            )
+            candidates = (
+                fresh_preparer(source, target)
+                if fresh and fresh_preparer is not None
+                else self.candidate_resolver.prepare(source, target)
+            )
+            dataset_lease = None
         if task["candidate_scope"] == "all":
-            return [(candidate, None, None) for candidate in candidates]
+            return _PreparedTask(
+                [(candidate, None, None) for candidate in candidates],
+                dataset_lease,
+            )
         by_path = {candidate.path: candidate for candidate in candidates}
         prepared = []
         for selected in task.get("retry_selection") or []:
@@ -596,7 +765,7 @@ class BatchDiffService:
                     retryable=True,
                 )
             prepared.append((candidate, selected["retry_of_item_id"], initial_error))
-        return prepared
+        return _PreparedTask(prepared, dataset_lease)
 
     def _execute_item(self, claim: dict[str, Any]) -> None:
         item_id = claim["item_id"]
@@ -665,14 +834,115 @@ class BatchDiffService:
                 retryable=True,
             )
 
+    def _release_lease_object(self, lease: Any | None) -> None:
+        if lease is None:
+            return
+        release = getattr(
+            self.candidate_resolver,
+            "release_dataset_lease",
+            None,
+        )
+        if release is None or not release(lease):
+            logger.warning("Frozen dataset lease release failed")
+
+    def _register_dataset_lease(self, task_id: str, lease: Any) -> None:
+        with self._dataset_lease_lock:
+            previous = self._dataset_leases.get(task_id)
+            if previous is None:
+                self._dataset_leases[task_id] = lease
+                return
+        if previous == lease:
+            return
+        self._release_lease_object(lease)
+
+    def _release_dataset_lease(self, task_id: str) -> None:
+        with self._dataset_lease_lock:
+            lease = self._dataset_leases.pop(task_id, None)
+        self._release_lease_object(lease)
+
+    def _release_all_dataset_leases(self) -> None:
+        with self._dataset_lease_lock:
+            leases = list(self._dataset_leases.values())
+            self._dataset_leases.clear()
+        for lease in leases:
+            self._release_lease_object(lease)
+
+    def _release_terminal_dataset_leases(self) -> None:
+        with self._dataset_lease_lock:
+            task_ids = list(self._dataset_leases)
+        for task_id in task_ids:
+            try:
+                terminal = (
+                    self.store.get_task(task_id).status
+                    in TERMINAL_TASK_STATUSES
+                )
+            except BatchDiffError:
+                terminal = True
+            if terminal:
+                phase_started = time.perf_counter_ns()
+                self._release_dataset_lease(task_id)
+                _emit_batch_phase(
+                    task_id,
+                    "finalize",
+                    time.perf_counter_ns() - phase_started,
+                )
+
+    def _ensure_dataset_lease(self, task_id: str) -> bool:
+        with self._dataset_lease_lock:
+            if task_id in self._dataset_leases:
+                return True
+        requires = getattr(
+            self.candidate_resolver,
+            "requires_dataset_lease",
+            None,
+        )
+        if requires is not None and not requires():
+            return True
+        restore = getattr(
+            self.candidate_resolver,
+            "restore_dataset_lease",
+            None,
+        )
+        if restore is None:
+            return True
+        try:
+            task = self.store.get_task(task_id)
+            if task.status in TERMINAL_TASK_STATUSES:
+                return False
+            lease = restore(
+                task_id,
+                task.source,
+                task.target,
+                [item.candidate for item in task.items],
+            )
+        except Exception:
+            logger.exception(
+                "Frozen dataset lease restore failed task_id=%s",
+                task_id,
+            )
+            return False
+        if lease is None:
+            return False
+        self._register_dataset_lease(task_id, lease)
+        return True
+
     def _harvest_preparations(self) -> None:
         for future, task_id in list(self._preparation_futures.items()):
             if not future.done():
                 continue
             del self._preparation_futures[future]
+            prepared = None
             try:
-                self.store.complete_preparation(task_id, future.result())
+                prepared = future.result()
+                self.store.complete_preparation(task_id, prepared.items)
+                if prepared.dataset_lease is not None:
+                    self._register_dataset_lease(
+                        task_id,
+                        prepared.dataset_lease,
+                    )
             except BatchDiffError as exc:
+                if prepared is not None:
+                    self._release_lease_object(prepared.dataset_lease)
                 self.store.fail_preparation(
                     task_id,
                     code=exc.code,
@@ -680,6 +950,8 @@ class BatchDiffService:
                     retryable=exc.status_code >= 500,
                 )
             except Exception:
+                if prepared is not None:
+                    self._release_lease_object(prepared.dataset_lease)
                 logger.exception("批量候选准备失败 task_id=%s", task_id)
                 self.store.fail_preparation(
                     task_id,
@@ -708,10 +980,64 @@ class BatchDiffService:
                     message=f"单工作簿处理超过 {int(self.item_timeout_seconds)} 秒",
                     retryable=True,
                 )
+            if now - running.last_heartbeat >= self.heartbeat_seconds:
+                if not running.timed_out:
+                    self.store.renew_lease(running.item_id, running.lease_token)
+                if running.execution_lease is not None:
+                    running.execution_lease.renew()
+                running.last_heartbeat = now
+
+    def _claim_scheduled_item(
+        self,
+    ) -> tuple[dict[str, Any] | None, WorkbookExecutionLease | None]:
+        task_ids = self.store.runnable_task_ids()
+        if self.execution_scheduler is None:
+            for task_id in task_ids:
+                if not self._ensure_dataset_lease(task_id):
+                    continue
+                claim = self.store.claim_next_item(
+                    task_id=task_id,
+                    global_limit=self.item_concurrency,
+                    per_task_limit=1,
+                )
+                if claim is not None:
+                    return claim, None
+            return None, None
+        self.execution_scheduler.sync_demands(
+            "m2", [f"m2:{task_id}" for task_id in task_ids]
+        )
+        for task_id in task_ids:
+            if not self._ensure_dataset_lease(task_id):
                 continue
-            if not running.timed_out and now - running.last_heartbeat >= self.heartbeat_seconds:
-                if self.store.renew_lease(running.item_id, running.lease_token):
-                    running.last_heartbeat = now
+            lease = self.execution_scheduler.try_acquire(f"m2:{task_id}")
+            if lease is None:
+                continue
+            claim = self.store.claim_next_item(
+                task_id=task_id,
+                global_limit=self.item_concurrency,
+                per_task_limit=self.item_concurrency,
+            )
+            if claim is not None:
+                return claim, lease
+            lease.release()
+        return None, None
+
+    def _execute_item_in_slot(
+        self,
+        claim: dict[str, Any],
+        execution_lease: WorkbookExecutionLease | None,
+    ) -> None:
+        phase_started = time.perf_counter_ns()
+        try:
+            self._execute_item(claim)
+        finally:
+            _emit_batch_phase(
+                claim["task_id"],
+                "compare_items",
+                time.perf_counter_ns() - phase_started,
+            )
+            if execution_lease is not None:
+                execution_lease.release()
 
     def _scheduler_loop(self) -> None:
         last_cleanup = time.monotonic()
@@ -719,23 +1045,29 @@ class BatchDiffService:
             try:
                 self._harvest_preparations()
                 self._harvest_items()
+                self._release_terminal_dataset_leases()
                 self.store.recover_expired_leases()
                 if not self._preparation_futures:
                     task = self.store.claim_preparation()
                     if task is not None:
                         future = self._preparation_executor.submit(self._prepare_task, task)
                         self._preparation_futures[future] = task["task_id"]
-                while len(self._item_futures) < 2:
-                    claim = self.store.claim_next_item()
+                while len(self._item_futures) < self.item_concurrency:
+                    claim, execution_lease = self._claim_scheduled_item()
                     if claim is None:
                         break
-                    future = self._item_executor.submit(self._execute_item, claim)
+                    future = self._item_executor.submit(
+                        self._execute_item_in_slot,
+                        claim,
+                        execution_lease,
+                    )
                     current = time.monotonic()
                     self._item_futures[future] = _RunningItem(
                         item_id=claim["item_id"],
                         lease_token=claim["lease_token"],
                         started_monotonic=current,
                         last_heartbeat=current,
+                        execution_lease=execution_lease,
                     )
                 if time.monotonic() - last_cleanup >= self.cleanup_interval_seconds:
                     self.store.cleanup_expired()
