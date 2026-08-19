@@ -5,8 +5,9 @@ import json
 import logging
 from datetime import datetime
 from uuid import UUID
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from app.schemas.batch import (
@@ -19,8 +20,10 @@ from app.schemas.batch import (
     BatchTaskPayload,
     TaskStatus,
 )
+from app.schemas.diff_export import DiffExportRequestPayload
 from app.services.batch_diff_service import BatchDiffService
 from app.services.batch_store import BatchDiffError
+from app.services.diff_export_service import DiffExportError, DiffExportService
 
 
 router = APIRouter(prefix="/diff", tags=["diff"])
@@ -33,6 +36,17 @@ def get_batch_service(request: Request) -> BatchDiffService:
         raise BatchDiffError(
             "BATCH_SERVICE_UNAVAILABLE",
             "批量 Diff 服务尚未配置",
+            status_code=500,
+        )
+    return service
+
+
+def get_diff_export_service(request: Request) -> DiffExportService:
+    service = getattr(request.app.state, "diff_export_service", None)
+    if service is None:
+        raise DiffExportError(
+            "DIFF_EXPORT_SERVICE_UNAVAILABLE",
+            "diff export service is not configured",
             status_code=500,
         )
     return service
@@ -215,4 +229,24 @@ def get_batch_result(
         content=content,
         media_type="application/json",
         headers={"ETag": sha256},
+    )
+
+@router.post("/batch-results/{result_ref}/export")
+def export_batch_result(
+    result_ref: str,
+    payload: DiffExportRequestPayload = Body(...),
+    service: DiffExportService = Depends(get_diff_export_service),
+) -> Response:
+    artifact = service.export(result_ref, payload)
+    return Response(
+        content=artifact.content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                "attachment; filename=diff-export.xlsx; "
+                + "filename*=UTF-8''"
+                + quote(artifact.filename)
+            ),
+            "X-Diff-Export-Schema": "m2.export.v1",
+        },
     )

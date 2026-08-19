@@ -110,6 +110,12 @@
                 <p id="workbench-caption">从左侧选择工作簿查看结果状态。</p>
               </div>
               <div class="workbench-heading-actions">
+                <fieldset class="export-target-switch" id="export-target-switch" disabled>
+                  <legend>目标结构</legend>
+                  <label><input type="radio" name="export-target-layout" value="source"><span>左侧</span></label>
+                  <label><input type="radio" name="export-target-layout" value="target"><span>右侧</span></label>
+                </fieldset>
+                <button id="export-workbook" type="button" class="primary" disabled>导出当前工作簿</button>
                 <div class="field-view-switch" id="field-view-switch" role="group" aria-label="字段显示范围">
                   <button class="field-view-button is-selected" id="show-diff-fields" type="button" aria-pressed="true" disabled>显示差异</button>
                   <button class="field-view-button" id="show-original-fields" type="button" aria-pressed="false" disabled>显示原表</button>
@@ -147,7 +153,16 @@
 
           <div class="workbench-grid">
             <div class="diff-main-pane">
-              <div class="diff-toolbar"><div><strong>行与字段差异</strong><small>按业务主键组织</small></div><span class="table-status" id="diff-state-badge">未执行</span></div>
+              <div class="diff-toolbar">
+                <div><strong>行与字段差异</strong><small>按业务主键组织</small></div>
+                <div class="diff-export-bulk-actions" role="group" aria-label="当前 Sheet 批量导出选择">
+                  <button type="button" class="secondary" id="export-select-source" disabled>全部取左侧</button>
+                  <button type="button" class="secondary" id="export-select-target" disabled>全部取右侧</button>
+                  <button type="button" class="secondary" id="export-clear-sheet" disabled>清空选择</button>
+                  <span class="table-status" id="diff-export-selection-summary">未选择</span>
+                </div>
+                <span class="table-status" id="diff-state-badge">未执行</span>
+              </div>
               <div class="diff-partial-warning hidden" id="diff-partial-warning" role="alert"><strong>部分 Sheet 处理失败，可用结果已保留</strong><ul id="diff-partial-errors"></ul></div>
               <div class="diff-state-view is-active" data-state="diff_unavailable"><div class="state-illustration" aria-hidden="true">—</div><h3>尚未执行语义 Diff</h3><p id="diff-unavailable-detail">已保留快照和工作簿上下文，可执行当前 modified 工作簿。</p></div>
               <div class="diff-state-view" data-state="diff_loading"><div class="state-spinner" aria-hidden="true"></div><h3>正在比对当前工作簿</h3><p id="diff-loading-detail">等待工作簿结果。</p></div>

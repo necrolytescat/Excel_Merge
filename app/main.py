@@ -51,6 +51,7 @@ from app.services.batch_diff_service import (
     SnapshotBatchCandidateResolver,
 )
 from app.services.batch_store import BatchDiffError, BatchStore
+from app.services.diff_export_service import DiffExportError, DiffExportService
 from app.services.diff_plan_service import DiffPlanService, DiffPlanWorkbookCatalogService
 from app.services.diff_plan_store import DiffPlanError, DiffPlanStore
 from app.services.diff_plan_run_store import DiffPlanRunStore
@@ -412,6 +413,12 @@ def create_app(
         )
     else:
         app.state.batch_diff_service = None
+
+    app.state.diff_export_service = (
+        DiffExportService(app.state.batch_diff_service.load_result)
+        if app.state.batch_diff_service is not None
+        else None
+    )
 
     app.state.diff_plan_run_service = diff_plan_run_service
     if app.state.diff_plan_run_service is None and (
@@ -797,6 +804,23 @@ def create_app(
             content={"error": {"code": exc.code, "message": exc.message}},
         )
 
+
+    @app.exception_handler(DiffExportError)
+    async def diff_export_error_handler(_: Request, exc: DiffExportError):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "details": {
+                        "schema_version": "m2.export-validation.v1",
+                        "issues": [issue.model_dump(mode="json") for issue in exc.issues],
+                    },
+                }
+            },
+        )
+
     @app.exception_handler(DiffPlanError)
     async def diff_plan_error_handler(_: Request, exc: DiffPlanError):
         return JSONResponse(
@@ -852,6 +876,20 @@ def create_app(
                     "error": {
                         "code": "MONITOR_INVALID_REQUEST",
                         "message": "版本监控请求无效",
+                    }
+                },
+            )
+        if request.url.path.startswith("/api/diff/batch-results/") and request.url.path.endswith("/export"):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "code": "DIFF_EXPORT_INVALID_REQUEST",
+                        "message": "差异导出请求无效",
+                        "details": {
+                            "schema_version": "m2.export-validation.v1",
+                            "issues": [],
+                        },
                     }
                 },
             )

@@ -1217,3 +1217,64 @@
     border-bottom: 0;
   }
 }
+
+
+.export-target-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color, #d9dee8);
+  border-radius: 8px;
+  background: #fff;
+}
+.export-target-switch legend {
+  padding: 0 4px;
+  font-size: 11px;
+  color: #64748b;
+}
+.export-target-switch label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+}
+.diff-export-bulk-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.diff-export-bulk-actions button {
+  min-height: 28px;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.diff-export-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+  font-size: 10px;
+  color: #64748b;
+}
+.diff-export-choice input {
+  margin: 0;
+  accent-color: #2563eb;
+}
+.diff-export-choice.is-delete input {
+  accent-color: #b91c1c;
+}
+.diff-row-number.has-export-choice {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.sheet-export-summary {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  color: #64748b;
+}
