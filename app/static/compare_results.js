@@ -29,10 +29,218 @@
     confirmedPaths: new Set(),
     reviewScope: "",
     selectedDiffCell: null,
+    exportDrafts: new Map(),
     busy: false,
   };
   const $ = (id) => document.getElementById(id);
   let activeSheetView = null;
+
+  function exportDraftFor(path = state.selectedPath) {
+    if (!path) return null;
+    let draft = state.exportDrafts.get(path);
+    if (!draft) {
+      draft = { targetLayout: "", decisions: new Map() };
+      state.exportDrafts.set(path, draft);
+    }
+    return draft;
+  }
+
+  function exportDecisionFor(sheetId, key, path = state.selectedPath) {
+    const draft = exportDraftFor(path);
+    return draft?.decisions.get(sheetId)?.get(String(key)) || null;
+  }
+
+  function exportSelectionCounts(path = state.selectedPath, sheetId = null) {
+    const draft = exportDraftFor(path);
+    if (!draft) return { write: 0, delete: 0, total: 0 };
+    const maps = sheetId
+      ? [draft.decisions.get(sheetId)].filter(Boolean)
+      : [...draft.decisions.values()];
+    const decisions = maps.flatMap((map) => [...map.values()]);
+    return {
+      write: decisions.filter((item) => item.action === "write").length,
+      delete: decisions.filter((item) => item.action === "delete").length,
+      total: decisions.length,
+    };
+  }
+
+  function renderExportSelectionSummary() {
+    const summary = $("diff-export-selection-summary");
+    if (!summary) return;
+    const counts = exportSelectionCounts(state.selectedPath, state.selectedSheet?.id);
+    summary.textContent = counts.total
+      ? "当前 Sheet：写入 " + counts.write + " · 删除" + counts.delete
+      : "当前 Sheet：未选择";
+  }
+
+  function syncExportControls(result = state.results.get(state.selectedPath)) {
+    const draft = exportDraftFor(state.selectedPath);
+    const ready = Boolean(
+      result
+      && result.resultRef
+      && result.resultLoaded
+      && state.context?.mode === "formal"
+      && result.sheets?.length,
+    );
+    const targetSwitch = $("export-target-switch");
+    if (targetSwitch) targetSwitch.disabled = !ready;
+    document.querySelectorAll('input[name="export-target-layout"]').forEach((input) => {
+      input.checked = Boolean(draft?.targetLayout && input.value === draft.targetLayout);
+      input.disabled = !ready;
+    });
+    const sheetReady = Boolean(ready && draft?.targetLayout && state.selectedSheet);
+    ["export-select-source", "export-select-target", "export-clear-sheet"].forEach((id) => {
+      const button = $(id);
+      if (button) button.disabled = !sheetReady;
+    });
+    const exportButton = $("export-workbook");
+    if (exportButton) {
+      exportButton.disabled = !ready || !draft?.targetLayout || !exportSelectionCounts().total;
+    }
+    renderExportSelectionSummary();
+  }
+
+  function refreshExportView() {
+    const result = state.results.get(state.selectedPath);
+    if (!result || !state.selectedSheet) {
+      syncExportControls(result);
+      return;
+    }
+    renderSheetNavigation(result, state.selectedSheet.id);
+    if (activeSheetView) scheduleDiffWindow(activeSheetView, true);
+    syncExportControls(result);
+  }
+
+  function setExportRowDecision(row, action, side = null) {
+    const result = state.results.get(state.selectedPath);
+    const sheet = state.selectedSheet;
+    const draft = exportDraftFor();
+    if (!result || !sheet || !draft?.targetLayout) return;
+    if (action === "delete" && (row.status !== "target_only" || !row.targetValues)) return;
+    if (action === "write" && (!side || !row[side + "Values"])) return;
+    let decisions = draft.decisions.get(sheet.id);
+    if (!decisions) {
+      decisions = new Map();
+      draft.decisions.set(sheet.id, decisions);
+    }
+    const key = String(row.key);
+    const current = decisions.get(key);
+    const same = current && current.action === action && current.valueSide === side;
+    if (same) decisions.delete(key);
+    else decisions.set(key, { action, ...(side ? { valueSide: side } : {}) });
+    if (!decisions.size) draft.decisions.delete(sheet.id);
+    refreshExportView();
+  }
+
+  function setExportTargetLayout(value) {
+    const draft = exportDraftFor();
+    if (!draft || !["source", "target"].includes(value)) return;
+    if (draft.targetLayout && draft.targetLayout !== value && exportSelectionCounts().total) {
+      const accepted = window.confirm("切换目标结构会清空当前工作簿所有 Sheet 的导出选择，是否继续？");
+      if (!accepted) {
+        syncExportControls();
+        return;
+      }
+      draft.decisions.clear();
+    }
+    draft.targetLayout = value;
+    refreshExportView();
+  }
+
+  function applyBulkExportSide(side) {
+    const sheet = state.selectedSheet;
+    const draft = exportDraftFor();
+    if (!sheet || !draft?.targetLayout) return;
+    let decisions = draft.decisions.get(sheet.id);
+    if (!decisions) {
+      decisions = new Map();
+      draft.decisions.set(sheet.id, decisions);
+    }
+    (sheet.rows || []).forEach((row) => {
+      const normalized = normalizeSheetRow(row, sheet.primaryKey || "Id");
+      if (normalized[side + "Values"]) decisions.set(String(normalized.key), { action: "write", valueSide: side });
+    });
+    refreshExportView();
+  }
+
+  function clearCurrentSheetExport() {
+    const sheet = state.selectedSheet;
+    const draft = exportDraftFor();
+    if (!sheet || !draft) return;
+    draft.decisions.delete(sheet.id);
+    refreshExportView();
+  }
+
+  function exportRequestSheets(result, draft) {
+    return (result.sheets || []).map((sheet) => {
+      const decisions = draft.decisions.get(sheet.id);
+      if (!decisions?.size) return null;
+      const ordered = [];
+      (sheet.rows || []).forEach((row) => {
+        const decision = decisions.get(String(row.key));
+        if (!decision) return;
+        ordered.push({ key: String(row.key), ...decision });
+      });
+      return ordered.length ? { sheet_name: sheet.id, decisions: ordered } : null;
+    }).filter(Boolean);
+  }
+
+  async function exportCurrentWorkbook() {
+    const result = state.results.get(state.selectedPath);
+    const draft = exportDraftFor();
+    if (!result?.resultRef || !draft?.targetLayout) return;
+    const sheets = exportRequestSheets(result, draft);
+    if (!sheets.length) {
+      $("result-action-message").textContent = "请至少选择一个 Sheet 的写入或删除行。";
+      return;
+    }
+    const button = $("export-workbook");
+    if (button) button.disabled = true;
+    $("result-action-message").textContent = "正在生成差异导出 Excel。";
+    try {
+      const response = await fetch(
+        "/api/diff/batch-results/" + encodeURIComponent(result.resultRef) + "/export",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            schema_version: "m2.export.v1",
+            target_layout: draft.targetLayout,
+            sheets,
+          }),
+        },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw payload;
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = (result.workbook?.name || fileName(result.candidate.path)).replace(/\.(?:xlsx|xlsm|xls)$/i, "") + "-差异导出.xlsx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      const counts = exportSelectionCounts();
+      $("result-action-message").textContent = "差异导出已生成：写入 " + counts.write + " 行，删" + counts.delete + " 行。复制写入数据时请从 B 列开始。";
+    } catch (error) {
+      const details = error?.error?.details;
+      const issues = details?.issues || [];
+      const message = issues.length
+        ? issues.map((issue) => [issue.sheet_name, issue.key, issue.field, issue.message].filter(Boolean).join(" · ")).join("；")
+        : (error?.error?.message || "差异导出失败。");
+      $("result-action-message").textContent = message;
+      const firstIssue = issues.find((issue) => issue.sheet_name);
+      if (firstIssue && result.sheets?.some((sheet) => sheet.id === firstIssue.sheet_name)) {
+        renderSheet(result, firstIssue.sheet_name);
+      }
+    } finally {
+      syncExportControls(result);
+    }
+  }
+
 
   async function request(path, options = {}) {
     const response = await fetch(path, {
@@ -555,12 +763,18 @@
     rowElement.style.top = (rowIndex * DIFF_ROW_HEIGHT) + "px";
     rowElement.style.gridTemplateColumns = view.gridTemplate;
     const rowNumber = document.createElement("div");
-    rowNumber.className = "diff-row-number";
+    rowNumber.className = "diff-row-number has-export-choice";
     rowNumber.setAttribute("role", "rowheader");
-    rowNumber.textContent = row[side + "RowNumber"] || "";
     rowNumber.title = row[side + "RowNumber"]
       ? sideLabel(side) + "第 " + row[side + "RowNumber"] + " 行"
       : sideLabel(side) + "无对应行";
+    rowNumber.appendChild(createExportChoice(view, row, side));
+    if (side === "target" && row.status === "target_only") {
+      rowNumber.appendChild(createExportChoice(view, row, side, "delete"));
+    }
+    const rowNumberText = document.createElement("span");
+    rowNumberText.textContent = row[side + "RowNumber"] || "";
+    rowNumber.appendChild(rowNumberText);
     rowElement.appendChild(rowNumber);
     rowElement.appendChild(createGridCell(view, row, rowIndex, side, view.columns.primaryKey, 0));
     view.columns.fields.forEach((field, index) => {
@@ -940,6 +1154,7 @@
     }
     state.selectedSheet = sheet;
     renderSheetNavigation(result, sheet.id);
+    syncExportControls(result);
     if (!sheet.rows.length) {
       if (sheet.status === "failed") {
         setPairedDiffEmpty("该 Sheet 执行失败；结构化错误保留在当前工作簿状态中。");
@@ -1243,6 +1458,7 @@
       path = result.candidate.path;
     }
     state.selectedPath = path;
+    exportDraftFor(path);
     globalThis.M4DiffPlanRuntime?.onWorkbookSelected?.(path);
     destroySheetView();
     state.selectedSheet = null;
@@ -1539,6 +1755,13 @@
     }
   }
   $("compare-current-workbook").addEventListener("click", compareCurrentWorkbook);
+  document.querySelectorAll('input[name="export-target-layout"]').forEach((input) => {
+    input.addEventListener("change", () => setExportTargetLayout(input.value));
+  });
+  $("export-select-source")?.addEventListener("click", () => applyBulkExportSide("source"));
+  $("export-select-target")?.addEventListener("click", () => applyBulkExportSide("target"));
+  $("export-clear-sheet")?.addEventListener("click", clearCurrentSheetExport);
+  $("export-workbook")?.addEventListener("click", exportCurrentWorkbook);
   $("show-diff-fields").addEventListener("click", () => setFieldViewMode("diff"));
   $("show-original-fields").addEventListener("click", () => setFieldViewMode("original"));
   $("show-modified-sheets").addEventListener("click", () => setSheetFilterMode(false));
