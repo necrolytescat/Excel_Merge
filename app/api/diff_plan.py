@@ -4,10 +4,12 @@ from __future__ import annotations
 import hashlib
 import json
 from uuid import UUID
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse
 
+from app.schemas.diff_export import DiffExportRequestPayload
 from app.schemas.diff_plan import (
     DiffPlanCommandRequestPayload,
     DiffPlanCreateRequestPayload,
@@ -20,6 +22,7 @@ from app.schemas.diff_plan import (
 from app.services.diff_plan_service import DiffPlanService
 from app.services.diff_plan_run_service import DiffPlanRunService
 from app.services.diff_plan_store import DiffPlanError
+from app.services.diff_export_service import DiffExportService
 
 
 router = APIRouter(prefix="/diff-plans", tags=["diff-plans"])
@@ -170,3 +173,24 @@ def run_result(
     if request.headers.get("if-none-match", "").strip('"') == etag:
         return Response(status_code=304, headers={"ETag": etag})
     return Response(content=content, media_type="application/json", headers={"ETag": etag})
+
+
+@router.post("/run-results/{result_ref}/export")
+def export_run_result(
+    result_ref: str,
+    payload: DiffExportRequestPayload = Body(...),
+    service: DiffPlanRunService = Depends(get_run_service),
+) -> Response:
+    artifact = DiffExportService(service.load_result).export(result_ref, payload)
+    return Response(
+        content=artifact.content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                "attachment; filename=diff-export.xlsx; "
+                + "filename*=UTF-8''"
+                + quote(artifact.filename)
+            ),
+            "X-Diff-Export-Schema": "m2.export.v1",
+        },
+    )

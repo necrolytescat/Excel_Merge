@@ -25,6 +25,7 @@ M4 是版本比对上方的长期计划与多目标分支编排层。它复用 S
 - 计划详情中的完整 M4 运行历史。
 - 30 天明细物理清理、启动恢复、每小时低频扫描和稳定 410 过期语义；
 - M4 数据目录与全局 SVN 缓存清理严格隔离。
+- 单目标分支、单工作簿明细复用版本对比导出模式和 `m2.export.v1`，固定以该目标分支作为右侧 TARGET；
 
 ## 2. 关键边界
 
@@ -37,6 +38,7 @@ M4 是版本比对上方的长期计划与多目标分支编排层。它复用 S
 - `var/m4-diff-plan/` 是运行数据，不进入 Git。
 - 默认路径下 M2 与 M4 继续通过 `WorkbookExecutionGate` 共用进程级上限；启用 `workbook_execution.four_way_enabled` 后改由共享 SQLite 持久 slot + 进程 Gate 双重协调。
 - M4 运行结果只引用原始 `m2.diff.v1`，前端继续使用 `M2DiffMapper` 和 `ExcelDiffResultsBridge`。
+- M4 导出只读取对应 `result_ref` 的持久化明细并复用 `DiffExportService`，不重新访问 SVN、不复制导出服务或另建数据契约。
 - `diff_plan.detail_retention_days` 默认 30；`diff_plan.cleanup_interval_seconds` 默认 3600 秒且最小 60 秒。
 - 应用启动立即执行恢复和到期清理，随后按周期扫描；单文件删除失败不会阻断调度，下轮继续重试。
 - 到期清理只清空内部 `result_path` 并删除 gzip；`result_ref`、矩阵摘要、冻结 Revision、统计和重试关系长期保留。

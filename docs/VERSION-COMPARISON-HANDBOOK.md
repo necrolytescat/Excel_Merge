@@ -97,6 +97,7 @@ Demo 不是正式数据源，也不是主要验收入口。共享模板或渲染
 | `app/templates/compare_results.html` | 正式、Demo、Replay 共用结果页结构 |
 | `app/static/m2_diff_mapper.js` | 严格校验 `m2.diff.v1` 并映射为唯一前端视图模型 |
 | `app/static/compare_results.js` | 工作簿/Sheet/行字段渲染、筛选、确认态、虚拟滚动和交互 |
+| `app/static/compare_results_export.js` | 正式结果页导出模式、工作簿目标结构、主键唯一决策、当前可见行批量操作、跨 Sheet 汇总与导出请求 |
 | `app/static/compare_results_batch.js` | 轮询批量任务、刷新工作簿状态、并发读取摘要、按需读取明细 |
 | `app/static/offline_replay.js` | 夹具上传、黄金/当前模式、全部或单项重算 |
 | `app/static/compare_readability.css` | 输入页可读性样式 |
@@ -413,6 +414,7 @@ py -3 -m app.tools.version_comparison_snapshot_phase_timing_acceptance --rounds 
 ```powershell
 node --check app/static/compare.js
 node --check app/static/compare_results.js
+node --check app/static/compare_results_export.js
 node --check app/static/compare_results_batch.js
 node --check app/static/m2_diff_mapper.js
 node --check app/static/offline_replay.js

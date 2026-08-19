@@ -106,6 +106,7 @@ def test_formal_results_page_calls_m2_diff_api_without_demo_fixture_dependency()
 
     page = api.get("/compare/results")
     script = api.get("/static/compare_results.js")
+    export_script = api.get("/static/compare_results_export.js")
     mapper = api.get("/static/m2_diff_mapper.js")
     batch_script = api.get("/static/compare_results_batch.js")
     readability = api.get("/static/compare_results_readability.css")
@@ -116,10 +117,12 @@ def test_formal_results_page_calls_m2_diff_api_without_demo_fixture_dependency()
     assert '<span>版本比对</span><span class="nav-current">M2</span>' in page.text
     assert "m2_diff_mapper.js?v=1.1.0" in page.text
     assert "app.css?v=0.3.3" in page.text
-    assert "compare_results_readability.css?v=2.1.5" in page.text
+    assert "compare_results_readability.css?v=2.2.2" in page.text
     assert "compare_results_batch.css?v=1.1.2" in page.text
-    assert "compare_results.js?v=2.3.0" in page.text
+    assert "compare_results.js?v=2.3.2" in page.text
+    assert "compare_results_export.js?v=1.2.0" in page.text
     assert "compare_results_batch.js?v=1.4.0" in page.text
+    assert export_script.status_code == 200
     assert 'class="result-overview-grid"' in page.text
     assert 'id="batch-task-panel"' in page.text
     assert 'id="result-heading-panel"' in page.text
@@ -404,12 +407,12 @@ def test_compare_demo_is_separate_and_development_only():
     assert "Excel Diff 流程示例" in demo_response.text
     assert results_response.status_code == 200
     assert 'class="results-readable-page"' in results_response.text
-    assert "compare_results_readability.css?v=2.1.5" in results_response.text
+    assert "compare_results_readability.css?v=2.2.2" in results_response.text
     assert "差异结果" in results_response.text
     assert demo_results_response.status_code == 200
     assert 'data-demo-mode="true"' in demo_results_response.text
     assert 'class="results-readable-page"' in demo_results_response.text
-    assert "compare_results_readability.css?v=2.1.5" in demo_results_response.text
+    assert "compare_results_readability.css?v=2.2.2" in demo_results_response.text
     assert "示例差异结果" in demo_results_response.text
 
     assert replay_response.status_code == 200

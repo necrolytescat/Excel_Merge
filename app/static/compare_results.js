@@ -545,7 +545,6 @@
     });
     return button;
   }
-
   function createSideRow(view, row, rowIndex, side) {
     const rowElement = document.createElement("div");
     rowElement.className = "diff-grid-row is-" + row.status;
@@ -571,6 +570,13 @@
   }
 
   function createStatusRow(view, row, rowIndex) {
+    const exportDecision = globalThis.ExcelDiffExportRuntime?.createDecisionRow?.(
+      view,
+      row,
+      rowIndex,
+      DIFF_ROW_HEIGHT,
+    );
+    if (exportDecision) return exportDecision;
     const navigable = row.status === "modified" && row.changedFields.size > 0;
     const status = document.createElement(navigable ? "button" : "div");
     if (navigable) {
@@ -709,7 +715,8 @@
 
   function createSheetView(sheet, restoredView = null) {
     const primaryKey = sheet.primaryKey || "Id";
-    const rows = (sheet.rows || []).map((row) => normalizeSheetRow(row, primaryKey));
+    const allRows = (sheet.rows || []).map((row) => normalizeSheetRow(row, primaryKey));
+    const rows = allRows;
     const columns = sheetColumnModel(sheet, rows, state.fieldViewMode);
     const gridTemplate = diffGridTemplate(columns.fields.length);
     const canvasWidth = 52 + 144 + (columns.fields.length * 160);
@@ -717,6 +724,7 @@
     const view = {
       sheet,
       rows,
+      allRows,
       columns,
       gridTemplate,
       sourceScroll: $("diff-source-scroll"),
@@ -777,6 +785,7 @@
     };
     activeSheetView = view;
     syncFieldViewControls(true);
+    globalThis.ExcelDiffExportRuntime?.onSheetViewChanged?.(view);
     resetDetail();
     const restoredSelection = restoredView?.selection;
     const restoredRowIndex = Number(restoredSelection?.rowIndex);
@@ -911,6 +920,7 @@
           meta.append(separator, deleted);
         }
       }
+      globalThis.ExcelDiffExportRuntime?.appendSheetSummary?.(meta, sheet);
       button.append(name, meta);
       button.addEventListener("click", () => renderSheet(result, sheet.id));
       navigation.appendChild(button);
@@ -1289,6 +1299,7 @@
       renderSheet(result, result.sheets[0]?.id);
       $("diff-state-badge").textContent = resultFieldCount(result) + " 个修改字段";
     }
+    globalThis.ExcelDiffExportRuntime?.onWorkbookChanged?.(result);
     $("result-action-message").textContent = "";
     if (result.resultRef && !result.resultLoaded) {
       void globalThis.ExcelDiffBatchRuntime?.loadResult(result);
@@ -1450,6 +1461,27 @@
     applyWorkbookVisibilityFilter();
   }
 
+  function rerenderActiveDiffWindow() {
+    if (activeSheetView) scheduleDiffWindow(activeSheetView, true);
+  }
+
+  function rerenderSelectedSheet() {
+    const result = state.results.get(state.selectedPath);
+    if (result && state.selectedSheet) renderSheet(result, state.selectedSheet.id);
+  }
+
+  function focusDiffRow(key) {
+    if (!activeSheetView) return false;
+    const rowIndex = activeSheetView.rows.findIndex((row) => String(row.key) === String(key));
+    if (rowIndex < 0) return false;
+    const top = DIFF_HEADER_HEIGHT + (rowIndex * DIFF_ROW_HEIGHT);
+    activeSheetView.sourceScroll.scrollTop = top;
+    activeSheetView.targetScroll.scrollTop = top;
+    activeSheetView.statusScroll.scrollTop = top;
+    scheduleDiffWindow(activeSheetView, true);
+    return true;
+  }
+
   function loadContext() {
     if (document.body.dataset.m4RunId) {
       showMissingContext();
@@ -1533,6 +1565,19 @@
     renderTaskContext,
     showMissingContext,
     setDiffState,
+    normalizeSheetRow,
+    renderSheet,
+    rerenderActiveDiffWindow,
+    rerenderSelectedSheet,
+    rerenderSheetNavigation: () => {
+      const result = state.results.get(state.selectedPath);
+      if (result && state.selectedSheet) renderSheetNavigation(result, state.selectedSheet.id);
+    },
+    getActiveSheetView: () => activeSheetView,
+    focusDiffRow,
+    setResultActionMessage: (message) => {
+      $("result-action-message").textContent = message;
+    },
   });
   loadContext();
 })();
