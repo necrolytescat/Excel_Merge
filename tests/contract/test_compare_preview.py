@@ -119,7 +119,7 @@ def test_formal_results_page_calls_m2_diff_api_without_demo_fixture_dependency()
     assert "app.css?v=0.3.3" in page.text
     assert "compare_results_readability.css?v=2.2.2" in page.text
     assert "compare_results_batch.css?v=1.1.2" in page.text
-    assert "compare_results.js?v=2.3.2" in page.text
+    assert "compare_results.js?v=2.3.3" in page.text
     assert "compare_results_export.js?v=1.2.0" in page.text
     assert "compare_results_batch.js?v=1.4.0" in page.text
     assert export_script.status_code == 200
@@ -212,6 +212,8 @@ def test_formal_results_page_calls_m2_diff_api_without_demo_fixture_dependency()
     assert "target_display_name" in script.text
     assert 'row.status === "source_only" || row.status === "target_only"' in script.text
     assert "function createSideRow(view, row, rowIndex, side)" in script.text
+    assert "createExportChoice" not in script.text
+    assert "ExcelDiffExportRuntime?.createDecisionRow" in script.text
     assert "function modifiedFieldTargets(view, row)" in script.text
     assert "function centerDiffField(view, rowIndex, fieldIndex)" in script.text
     assert "function navigateModifiedField(view, row, rowIndex)" in script.text

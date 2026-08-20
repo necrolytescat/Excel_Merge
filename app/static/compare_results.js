@@ -763,15 +763,11 @@
     rowElement.style.top = (rowIndex * DIFF_ROW_HEIGHT) + "px";
     rowElement.style.gridTemplateColumns = view.gridTemplate;
     const rowNumber = document.createElement("div");
-    rowNumber.className = "diff-row-number has-export-choice";
+    rowNumber.className = "diff-row-number";
     rowNumber.setAttribute("role", "rowheader");
     rowNumber.title = row[side + "RowNumber"]
       ? sideLabel(side) + "第 " + row[side + "RowNumber"] + " 行"
       : sideLabel(side) + "无对应行";
-    rowNumber.appendChild(createExportChoice(view, row, side));
-    if (side === "target" && row.status === "target_only") {
-      rowNumber.appendChild(createExportChoice(view, row, side, "delete"));
-    }
     const rowNumberText = document.createElement("span");
     rowNumberText.textContent = row[side + "RowNumber"] || "";
     rowNumber.appendChild(rowNumberText);
